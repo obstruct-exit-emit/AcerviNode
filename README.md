@@ -77,6 +77,11 @@ the storage layer.
   detail view (full metadata, file list, retry status), and a Settings tab to
   add/change your TorBox key without touching `config.yaml` — takes effect
   immediately, no restart
+- The Settings tab also surfaces AcerviNode's own configuration (port, data/download
+  dirs, log level, import settings) and its own API key — copyable straight from
+  the UI instead of digging through server logs or `config.yaml`, with a
+  one-click regenerate that applies immediately across the native API and both
+  compat shims
 
 **🗄️ Storage**
 

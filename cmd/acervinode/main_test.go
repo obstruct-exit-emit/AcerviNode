@@ -62,7 +62,7 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 		t.Fatal("TorBoxConfigured() = false, want true (key was set via env)")
 	}
 
-	handler := buildHandler(cfg, db, torrentDyn, usenetDyn, settings)
+	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
 
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -152,7 +152,7 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 		t.Fatal("TorBoxConfigured() = true, want false (no key set)")
 	}
 
-	handler := buildHandler(cfg, db, torrentDyn, usenetDyn, settings)
+	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

@@ -27,20 +27,45 @@ type deleter interface {
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
 }
 
-// Settings lets the API read and change provider configuration live,
-// without a restart — see internal/debrid's Dynamic*Provider types, which
-// is what makes an in-place swap possible, and settings.go for the HTTP
-// surface built on this interface. Narrowly scoped to TorBox, the only
-// provider that exists today; generalize when a second one is added (see
-// docs/providers.md).
+// GeneralInfo is AcerviNode's own runtime configuration, as reported to the
+// settings UI — everything except provider credentials (see Settings /
+// TorBoxConfigured for those). Includes APIKey itself: unlike a provider
+// secret, this is the key the caller already had to present to reach this
+// endpoint, so returning it back is how the UI (and a human copying it into
+// Sonarr/Radarr) can see it without digging through server logs or
+// config.yaml.
+type GeneralInfo struct {
+	APIKey                string `json:"api_key"`
+	Port                  int    `json:"port"`
+	DataDir               string `json:"data_dir"`
+	DownloadDir           string `json:"download_dir"`
+	LogLevel              string `json:"log_level"`
+	ImportIntervalSeconds int    `json:"import_interval_seconds"`
+	ImportMaxRetries      int    `json:"import_max_retries"`
+}
+
+// Settings lets the API read and change configuration live, without a
+// restart — see internal/debrid's Dynamic*Provider types, which is what
+// makes an in-place provider swap possible, and settings.go for the HTTP
+// surface built on this interface. Provider methods are narrowly scoped to
+// TorBox, the only provider that exists today; generalize when a second one
+// is added (see docs/providers.md).
 type Settings interface {
 	TorBoxConfigured() bool
 	SetTorBoxAPIKey(ctx context.Context, apiKey string) error
+	// APIKey returns AcerviNode's own current API key — the live source of
+	// truth every authenticated route (native API and both compat shims)
+	// checks against, so a regenerated key takes effect everywhere at once.
+	APIKey() string
+	// RegenerateAPIKey replaces the current API key with a fresh random one,
+	// applies it immediately, and persists it to config.yaml.
+	RegenerateAPIKey(ctx context.Context) (string, error)
+	// General reports the rest of AcerviNode's current configuration.
+	General() GeneralInfo
 }
 
 // Server is AcerviNode's native API.
 type Server struct {
-	apiKey          string
 	version         string
 	db              *database.DB
 	torrentProvider deleter // nil if no torrent-capable provider is configured
@@ -50,10 +75,13 @@ type Server struct {
 }
 
 // NewServer builds the native API server. version is a free-form build
-// identifier. torrentProvider/usenetProvider may be nil.
-func NewServer(apiKey, version string, db *database.DB, torrentProvider deleter, usenetProvider deleter, settings Settings) *Server {
+// identifier. torrentProvider/usenetProvider may be nil. Auth checks
+// settings.APIKey() live on every request rather than a value captured at
+// construction, so a regenerated key takes effect immediately — see
+// requireAuth.
+func NewServer(version string, db *database.DB, torrentProvider deleter, usenetProvider deleter, settings Settings) *Server {
 	s := &Server{
-		apiKey: apiKey, version: version, db: db,
+		version: version, db: db,
 		torrentProvider: torrentProvider, usenetProvider: usenetProvider,
 		settings: settings,
 	}
@@ -77,6 +105,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
+	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAuth(s.handleGetGeneralSettings))
+	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAuth(s.handleRegenerateAPIKey))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

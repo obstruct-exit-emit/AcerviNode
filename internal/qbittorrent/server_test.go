@@ -42,6 +42,12 @@ func postMultipart(t *testing.T, client *http.Client, targetURL string, fields m
 
 const testMagnet = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=Some.Release.Name"
 
+// staticAPIKey satisfies apiKeySource for tests that don't need a live,
+// changeable key.
+type staticAPIKey string
+
+func (k staticAPIKey) APIKey() string { return string(k) }
+
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
 	db, err := database.Open(":memory:")
@@ -50,7 +56,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, "test-api-key")
+	srv := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 

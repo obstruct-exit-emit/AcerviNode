@@ -13,9 +13,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stays `database.Kind` (matches `reflect.Kind`'s naming, avoids clashing with
   Go's `type` keyword). Frontend (`Download.protocol`) and the downloads table's
   column header updated to match.
+- `internal/api`, `internal/qbittorrent`, and `internal/sabnzbd` no longer
+  capture a static copy of `cfg.APIKey` at startup — every auth check now
+  reads it live from a shared `Settings.APIKey()`/`apiKeySource`, which is what
+  makes regenerating the key (see below) apply everywhere immediately.
 
 ### Added
 
+- `internal/api`: `GET /api/v1/settings/general` (AcerviNode's own port, data
+  dir, download dir, log level, import settings, and its own `api_key` in
+  plaintext) and `POST /api/v1/settings/api-key/regenerate` (replaces the key,
+  applies immediately across the native API and both compat shims, persists to
+  `config.yaml`). Web UI: the Settings tab's new "General" card shows all of
+  this, with copy/reveal on the API key and a "Regenerate API key" button;
+  regenerating keeps the UI's own session in sync automatically
 - `internal/importer`: fetch failures now back off exponentially
   (`retry_count`/`next_retry_at` on the `downloads` row, base
   `import_interval_seconds`, capped at one hour) and give up after

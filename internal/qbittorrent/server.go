@@ -11,6 +11,14 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
+// apiKeySource is the minimal interface needed to check a login attempt's
+// password against the live AcerviNode API key — matching cmd/acervinode's
+// liveSettings, whose APIKey() reflects a key regenerated through the
+// settings API with no restart needed (see internal/api.Settings).
+type apiKeySource interface {
+	APIKey() string
+}
+
 // Server is an http.Handler implementing the qBittorrent Web API surface
 // AcerviNode needs. It talks to a debrid.TorrentProvider for everything
 // download-related and to the shared downloads table for everything local
@@ -21,7 +29,7 @@ type Server struct {
 	// apiKey is the password accepted by /api/v2/auth/login — any username is
 	// accepted, matching how the SABnzbd shim treats its own apikey param as
 	// the single shared secret (see docs/configuration.md).
-	apiKey string
+	apiKey apiKeySource
 
 	mux        *http.ServeMux
 	sessions   *sessionStore
@@ -29,7 +37,7 @@ type Server struct {
 }
 
 // NewServer builds a qBittorrent-compat Server backed by provider and db.
-func NewServer(provider debrid.TorrentProvider, db *database.DB, apiKey string) *Server {
+func NewServer(provider debrid.TorrentProvider, db *database.DB, apiKey apiKeySource) *Server {
 	s := &Server{
 		provider:   provider,
 		db:         db,

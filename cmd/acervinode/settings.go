@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/acervinode/acervinode/internal/api"
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/debrid"
 )
@@ -41,4 +42,48 @@ func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 		return fmt.Errorf("persist config: %w", err)
 	}
 	return nil
+}
+
+// APIKey returns AcerviNode's own current API key. This is what every
+// authenticated route (native API and both compat shims) checks a request
+// against instead of a value captured at startup — see their apiKeySource
+// interfaces — so RegenerateAPIKey takes effect everywhere at once.
+func (s *liveSettings) APIKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.APIKey
+}
+
+// RegenerateAPIKey replaces the current API key with a fresh random one,
+// applies it immediately, and persists it to config.yaml — the same
+// live-swap-then-save pattern as SetTorBoxAPIKey.
+func (s *liveSettings) RegenerateAPIKey(_ context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key, err := config.NewAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("generate api key: %w", err)
+	}
+	s.cfg.APIKey = key
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return "", fmt.Errorf("persist config: %w", err)
+	}
+	return key, nil
+}
+
+// General reports the rest of AcerviNode's current configuration for the
+// settings UI — see api.GeneralInfo.
+func (s *liveSettings) General() api.GeneralInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return api.GeneralInfo{
+		APIKey:                s.cfg.APIKey,
+		Port:                  s.cfg.Port,
+		DataDir:               s.cfg.DataDir,
+		DownloadDir:           s.cfg.DownloadDir,
+		LogLevel:              s.cfg.LogLevel,
+		ImportIntervalSeconds: s.cfg.ImportIntervalSeconds,
+		ImportMaxRetries:      s.cfg.ImportMaxRetries,
+	}
 }

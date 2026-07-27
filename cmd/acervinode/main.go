@@ -70,7 +70,7 @@ func run(ctx context.Context) error {
 	// explicitly once you've picked it, so it survives restarts.
 	slog.Info("api key for the native API and both compat shims", "api_key", cfg.APIKey)
 
-	handler := buildHandler(cfg, db, torrentDyn, usenetDyn, settings)
+	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
 
 	// Completed Download Handling: fetches provider_completed downloads to
 	// local disk so *arr apps' import step has real files to find. Shares
@@ -112,12 +112,12 @@ func run(ctx context.Context) error {
 // later through the settings API), rather than the routes not existing at
 // all. Split out from run() so tests can exercise the full routing tree
 // without binding a real socket.
-func buildHandler(cfg *config.Config, db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, settings api.Settings) http.Handler {
+func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, settings api.Settings) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", api.NewServer(cfg.APIKey, version, db, torrentProvider, usenetProvider, settings))
-	mux.Handle("/api/v2/", qbittorrent.NewServer(torrentProvider, db, cfg.APIKey))
+	mux.Handle("/api/v1/", api.NewServer(version, db, torrentProvider, usenetProvider, settings))
+	mux.Handle("/api/v2/", qbittorrent.NewServer(torrentProvider, db, settings))
 	// SABnzbd's real API is a single fixed endpoint, not a subtree.
-	mux.Handle("/api", sabnzbd.NewServer(usenetProvider, db, cfg.APIKey))
+	mux.Handle("/api", sabnzbd.NewServer(usenetProvider, db, settings))
 
 	// The embedded web UI is the lowest-priority route — it only ever
 	// receives requests the API/compat-shim patterns above didn't claim.

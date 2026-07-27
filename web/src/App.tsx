@@ -70,6 +70,14 @@ export default function App() {
     setApiKey(key)
   }
 
+  // Called by Settings after a successful regenerate — the old key just
+  // stopped working everywhere, so the UI's own session has to switch to
+  // the new one immediately or its next poll would 401 and log it out.
+  function handleApiKeyChanged(newKey: string) {
+    storeApiKey(newKey)
+    setApiKey(newKey)
+  }
+
   async function handleDelete(d: Download) {
     if (!apiKey) return
     if (!confirm(`Delete "${d.name}"? This also removes it from the debrid provider.`)) return
@@ -118,7 +126,7 @@ export default function App() {
         {view === 'downloads' ? (
           <DownloadsTable downloads={downloads} onDelete={handleDelete} onSelect={(d) => setSelectedId(d.id)} />
         ) : (
-          <Settings apiKey={apiKey} />
+          <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />
         )}
       </main>
 

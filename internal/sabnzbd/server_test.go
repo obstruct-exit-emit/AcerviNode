@@ -12,6 +12,12 @@ import (
 
 const testAPIKey = "test-api-key"
 
+// staticAPIKey satisfies apiKeySource for tests that don't need a live,
+// changeable key.
+type staticAPIKey string
+
+func (k staticAPIKey) APIKey() string { return string(k) }
+
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	db, err := database.Open(":memory:")
@@ -20,7 +26,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, testAPIKey)
+	srv := NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey))
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts

@@ -68,7 +68,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusBadRequest, "Fails.")
 		return
 	}
-	if r.FormValue("password") != s.apiKey {
+	if r.FormValue("password") != s.apiKey.APIKey() {
 		writeText(w, http.StatusOK, "Fails.")
 		return
 	}

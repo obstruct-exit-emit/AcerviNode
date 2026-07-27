@@ -109,6 +109,18 @@ CDN link instead of BitTorrent/NNTP.
   save path, size, added/updated/completed timestamps, retry status) and the
   file list — `DownloadDetail.tsx`, built entirely on the `files` array
   `GET /api/v1/downloads/{id}` already returned, so this was pure frontend work
+- **General settings + live API key regeneration** (added as a follow-on): the
+  Settings tab now shows AcerviNode's own configuration (port, data/download
+  dirs, log level, import settings) and its own API key — copyable from the UI
+  instead of digging through server logs or `config.yaml` — plus a "Regenerate
+  API key" button. Required a small refactor: the native API and both compat
+  shims previously each captured a static copy of `cfg.APIKey` at startup: they
+  now all check a shared `apiKeySource`/`Settings.APIKey()` live on every
+  request (the same `liveSettings` instance already used for the TorBox key),
+  so a regenerated key takes effect everywhere at once, no restart. Verified
+  live and in an integration test: the old key stops authenticating the native
+  API *and* the qBittorrent shim's login immediately after regenerating, and
+  the new key works on both right away
 
 ## Phase 4 — Multi-provider ⏳
 

@@ -81,7 +81,7 @@ func Load(path string) (*Config, error) {
 	applyEnv(cfg)
 
 	if cfg.APIKey == "" {
-		key, err := randomAPIKey()
+		key, err := NewAPIKey()
 		if err != nil {
 			return nil, fmt.Errorf("generate api key: %w", err)
 		}
@@ -181,7 +181,10 @@ func (c *Config) Save(path string) error {
 	return nil
 }
 
-func randomAPIKey() (string, error) {
+// NewAPIKey generates a fresh random API key — used both to fill in a first
+// run's config.yaml and by the settings API to regenerate one live (see
+// cmd/acervinode's liveSettings.RegenerateAPIKey).
+func NewAPIKey() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err

@@ -31,6 +31,10 @@ type fakeSettings struct {
 	configured bool
 	setCalls   []string
 	setErr     error
+	apiKey     string
+	regenCalls int
+	regenErr   error
+	general    GeneralInfo
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -44,6 +48,26 @@ func (f *fakeSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 	return nil
 }
 
+// APIKey defaults to "secret" (matching authedRequest below) so tests that
+// don't care about auth can pass a zero-value *fakeSettings.
+func (f *fakeSettings) APIKey() string {
+	if f.apiKey == "" {
+		return "secret"
+	}
+	return f.apiKey
+}
+
+func (f *fakeSettings) RegenerateAPIKey(_ context.Context) (string, error) {
+	f.regenCalls++
+	if f.regenErr != nil {
+		return "", f.regenErr
+	}
+	f.apiKey = "regenerated-key"
+	return f.apiKey, nil
+}
+
+func (f *fakeSettings) General() GeneralInfo { return f.general }
+
 func newTestServer(t *testing.T, torrentProvider, usenetProvider deleter, settings Settings) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
@@ -54,7 +78,7 @@ func newTestServer(t *testing.T, torrentProvider, usenetProvider deleter, settin
 	if settings == nil {
 		settings = &fakeSettings{}
 	}
-	return NewServer("secret", "dev", db, torrentProvider, usenetProvider, settings), db
+	return NewServer("dev", db, torrentProvider, usenetProvider, settings), db
 }
 
 func authedRequest(method, target string) *http.Request {
@@ -187,6 +211,66 @@ func TestHandleSetTorBoxAPIKey_RequiresAuth(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":"x"}`))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleGetGeneralSettings(t *testing.T) {
+	settings := &fakeSettings{general: GeneralInfo{
+		APIKey: "secret", Port: 7846, DataDir: "./data", DownloadDir: "./downloads",
+		LogLevel: "info", ImportIntervalSeconds: 10, ImportMaxRetries: 5,
+	}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/general"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got GeneralInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got != settings.general {
+		t.Errorf("got = %+v, want %+v", got, settings.general)
+	}
+}
+
+func TestHandleGetGeneralSettings_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleRegenerateAPIKey(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/api-key/regenerate"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if settings.regenCalls != 1 {
+		t.Errorf("RegenerateAPIKey calls = %d, want 1", settings.regenCalls)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["api_key"] != "regenerated-key" {
+		t.Errorf("api_key = %q, want regenerated-key", got["api_key"])
+	}
+}
+
+func TestHandleRegenerateAPIKey_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/api-key/regenerate", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

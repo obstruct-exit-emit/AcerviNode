@@ -12,6 +12,14 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
+// apiKeySource is the minimal interface needed to check the "apikey"
+// parameter against the live AcerviNode API key — matching cmd/acervinode's
+// liveSettings, whose APIKey() reflects a key regenerated through the
+// settings API with no restart needed (see internal/api.Settings).
+type apiKeySource interface {
+	APIKey() string
+}
+
 // Server is an http.Handler implementing the SABnzbd API surface AcerviNode
 // needs. It talks to a debrid.UsenetProvider for everything download-related
 // and to the shared downloads table for everything local.
@@ -21,14 +29,14 @@ type Server struct {
 	// apiKey is checked against the "apikey" query/form parameter on every
 	// request — SABnzbd's real auth model has no login step (see
 	// docs/configuration.md).
-	apiKey string
+	apiKey apiKeySource
 
 	mux        *http.ServeMux
 	categories *categoryStore
 }
 
 // NewServer builds a SABnzbd-compat Server backed by provider and db.
-func NewServer(provider debrid.UsenetProvider, db *database.DB, apiKey string) *Server {
+func NewServer(provider debrid.UsenetProvider, db *database.DB, apiKey apiKeySource) *Server {
 	s := &Server{
 		provider:   provider,
 		db:         db,
@@ -53,7 +61,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// though we ignore its error here.
 	_ = r.ParseMultipartForm(64 << 20)
 
-	if r.FormValue("apikey") != s.apiKey {
+	if r.FormValue("apikey") != s.apiKey.APIKey() {
 		writeJSON(w, map[string]any{"status": false, "error": "API Key Incorrect"})
 		return
 	}

@@ -107,3 +107,24 @@ export function setTorBoxApiKey(apiKey: string, torboxApiKey: string): Promise<v
     body: JSON.stringify({ api_key: torboxApiKey }),
   })
 }
+
+export interface GeneralSettings {
+  api_key: string
+  port: number
+  data_dir: string
+  download_dir: string
+  log_level: string
+  import_interval_seconds: number
+  import_max_retries: number
+}
+
+export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
+  return request('/api/v1/settings/general', apiKey)
+}
+
+// regenerateApiKey invalidates apiKey immediately (server-side, across the
+// native API and both compat shims) — the caller must switch to the
+// returned key right away, including for this same session.
+export function regenerateApiKey(apiKey: string): Promise<{ api_key: string }> {
+  return request('/api/v1/settings/api-key/regenerate', apiKey, { method: 'POST' })
+}

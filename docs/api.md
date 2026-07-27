@@ -8,7 +8,13 @@ that surface.
 ## Auth
 
 Every endpoint except `/health` requires `Authorization: Bearer <api_key>` (see
-[Configuration](configuration.md)).
+[Configuration](configuration.md)). Unlike a provider credential (see
+`GET /api/v1/settings/providers`, which never echoes the actual TorBox key back),
+`GET /api/v1/settings/general` does return AcerviNode's own `api_key` in
+plaintext — there's nothing to protect by hiding it from a caller who already
+had to present it to reach the endpoint, and the whole point of exposing it is
+so a human can find and copy it from the web UI instead of digging through
+server logs or `config.yaml`.
 
 ## Endpoints
 
@@ -22,6 +28,8 @@ Every endpoint except `/health` requires `Authorization: Bearer <api_key>` (see
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `GET` | `/api/v1/settings/providers` | `{"torbox": {"configured": bool}}` — never the actual key, only whether one is set |
 | `PUT` | `/api/v1/settings/providers/torbox` | Body `{"api_key": "..."}` — sets or replaces the TorBox key. Takes effect immediately (no restart) and is persisted to `config.yaml`; see [Providers](providers.md#live-settings) |
+| `GET` | `/api/v1/settings/general` | AcerviNode's own current configuration, including its own `api_key` in plaintext — see [Auth](#auth) for why that's not a secrecy problem here |
+| `POST` | `/api/v1/settings/api-key/regenerate` | Replaces AcerviNode's own API key with a fresh random one. Takes effect immediately (every route, both compat shims included) and is persisted to `config.yaml`. Returns `{"api_key": "..."}` — the caller must switch to it right away, since the key it just authenticated with is now invalid everywhere, including for this same request's own credentials going forward |
 
 ## Download JSON shape
 
