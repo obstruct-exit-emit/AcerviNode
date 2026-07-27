@@ -223,3 +223,42 @@ func readBody(t *testing.T, resp *http.Response) string {
 	}
 	return string(data)
 }
+
+// TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged is a
+// regression test: a magnet-only add starts with size_bytes=0 (magnet URIs
+// don't carry size), and a real bug let it stay 0 forever once state and
+// progress settled — refreshFromProvider's early-exit check only looked at
+// those two fields, never size, so a later poll that only changed size never
+// wrote it. Found manually testing against a real TorBox account.
+func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *testing.T) {
+	ctx := t.Context()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "fake-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Some Release", State: database.StateDownloading, Progress: 0.5, SizeBytes: 0,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	provider := newFakeProvider()
+	provider.entries["fake-1"] = &fakeEntry{
+		name: "Some Release", size: 276445467, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d's current state/progress exactly
+	}
+
+	srv := &Server{provider: provider, db: db}
+	srv.refreshFromProvider(ctx, []*database.Download{d})
+
+	got, err := db.GetDownloadByID(ctx, "dl-1")
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.SizeBytes != 276445467 {
+		t.Errorf("SizeBytes = %d, want 276445467 (backfilled even though state/progress didn't change)", got.SizeBytes)
+	}
+}

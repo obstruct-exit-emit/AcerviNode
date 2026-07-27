@@ -39,19 +39,20 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 			continue
 		}
 		newState := localState(st.State)
-		if newState == d.State && st.Progress == d.Progress {
+		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes {
 			continue
 		}
 		// completed_at is set once files are actually on disk
 		// (internal/importer), not merely when the provider reports done —
 		// so it isn't touched here.
 		var completedAt *time.Time
-		if err := s.db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, completedAt, ""); err != nil {
+		if err := s.db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, completedAt, ""); err != nil {
 			slog.Error("sabnzbd: update download status failed", "id", d.ID, "error", err)
 			continue
 		}
 		d.State = newState
 		d.Progress = st.Progress
+		d.SizeBytes = st.SizeBytes
 	}
 }
 

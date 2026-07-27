@@ -157,3 +157,41 @@ func getHistory(t *testing.T, baseURL string) historyResponse {
 	}
 	return h
 }
+
+// TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged
+// mirrors internal/qbittorrent's regression test for the same real bug: an
+// NZB-URL-only add starts with size_bytes=0, and refreshFromProvider's
+// early-exit check only compared state and progress, never size, so a later
+// poll that only changed size never got persisted.
+func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *testing.T) {
+	ctx := t.Context()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "fake-usenet-1", Kind: database.KindUsenet,
+		Name: "Some NZB Release", State: database.StateDownloading, Progress: 0.5, SizeBytes: 0,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	provider := newFakeProvider()
+	provider.entries["fake-usenet-1"] = &fakeEntry{
+		name: "Some NZB Release", size: 987654321, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d exactly
+	}
+
+	srv := &Server{provider: provider, db: db}
+	srv.refreshFromProvider(ctx, []*database.Download{d})
+
+	got, err := db.GetDownloadByID(ctx, "dl-1")
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.SizeBytes != 987654321 {
+		t.Errorf("SizeBytes = %d, want 987654321 (backfilled even though state/progress didn't change)", got.SizeBytes)
+	}
+}

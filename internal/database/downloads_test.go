@@ -115,7 +115,7 @@ func TestUpdateDownloadStatus(t *testing.T) {
 	}
 
 	completedAt := time.Now().UTC().Truncate(time.Second)
-	if err := db.UpdateDownloadStatus(ctx, d.ID, "ready_for_import", 1.0, &completedAt, ""); err != nil {
+	if err := db.UpdateDownloadStatus(ctx, d.ID, "ready_for_import", 1.0, 2048, &completedAt, ""); err != nil {
 		t.Fatalf("UpdateDownloadStatus() error = %v", err)
 	}
 
@@ -126,6 +126,9 @@ func TestUpdateDownloadStatus(t *testing.T) {
 	if got.State != "ready_for_import" || got.Progress != 1.0 {
 		t.Errorf("got state=%q progress=%v, want ready_for_import/1.0", got.State, got.Progress)
 	}
+	if got.SizeBytes != 2048 {
+		t.Errorf("got SizeBytes=%d, want 2048 (backfilled from provider)", got.SizeBytes)
+	}
 	if got.CompletedAt == nil || !got.CompletedAt.Equal(completedAt) {
 		t.Errorf("got CompletedAt=%v, want %v", got.CompletedAt, completedAt)
 	}
@@ -133,7 +136,7 @@ func TestUpdateDownloadStatus(t *testing.T) {
 
 func TestUpdateDownloadStatus_UnknownID(t *testing.T) {
 	db := openTestDB(t)
-	err := db.UpdateDownloadStatus(context.Background(), "does-not-exist", "error", 0, nil, "boom")
+	err := db.UpdateDownloadStatus(context.Background(), "does-not-exist", "error", 0, 0, nil, "boom")
 	if err == nil {
 		t.Error("UpdateDownloadStatus() expected error for unknown id, got nil")
 	}

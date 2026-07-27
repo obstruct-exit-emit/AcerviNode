@@ -50,6 +50,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - TorBox's `mylist`/`usenet/mylist` responses are now requested with
   `bypass_cache=true` — without it, TorBox serves up to a 600-second-stale cache,
   making freshly added downloads invisible to polling
+- `internal/database.UpdateDownloadStatus` now also backfills `size_bytes`, and
+  both compat shims' `refreshFromProvider` no longer skip an update when only
+  size changed — a magnet/NZB-URL-only add starts with `size_bytes=0` (neither
+  carries size info), and it was staying 0 forever once state/progress settled,
+  even though the provider had a real value all along. Found by pushing a real
+  download through a running instance and watching the API report `size_bytes: 0`
+  for a fully completed, correctly-downloaded file
 - `internal/api`'s `NewServer` no longer lets a `nil` providers slice marshal to
   JSON `null` (found while manually verifying the new web UI — its
   `providers.length` check would have thrown on that)

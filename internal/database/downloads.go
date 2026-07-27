@@ -158,13 +158,16 @@ func (db *DB) ListDownloadsByState(ctx context.Context, state string) ([]*Downlo
 	return out, rows.Err()
 }
 
-// UpdateDownloadStatus updates a download's local state machine fields.
-func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progress float64, completedAt *time.Time, errorMessage string) error {
+// UpdateDownloadStatus updates a download's local state machine fields,
+// including size_bytes — a magnet-only add starts with no size info (magnet
+// URIs don't carry it), so this is what backfills the real value once the
+// provider reports one, rather than leaving it stuck at 0 forever.
+func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progress float64, sizeBytes int64, completedAt *time.Time, errorMessage string) error {
 	res, err := db.ExecContext(ctx, `
 		UPDATE downloads
-		SET state = ?, progress = ?, completed_at = ?, error_message = ?, updated_at = ?
+		SET state = ?, progress = ?, size_bytes = ?, completed_at = ?, error_message = ?, updated_at = ?
 		WHERE id = ?`,
-		state, progress, completedAt, nullable(errorMessage), time.Now().UTC(), id,
+		state, progress, sizeBytes, completedAt, nullable(errorMessage), time.Now().UTC(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("update download status %s: %w", id, err)

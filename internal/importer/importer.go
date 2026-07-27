@@ -120,7 +120,7 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 
 	now := time.Now().UTC()
-	if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateReadyForImport, 1.0, &now, ""); err != nil {
+	if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateReadyForImport, 1.0, d.SizeBytes, &now, ""); err != nil {
 		return fmt.Errorf("mark ready_for_import: %w", err)
 	}
 	slog.Info("importer: download ready", "id", d.ID, "name", d.Name, "dest", destDir, "files", len(files))
