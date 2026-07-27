@@ -77,9 +77,17 @@ CDN link instead of BitTorrent/NNTP.
 - Embedded web UI: React 19 + Vite, matching LibriNode's own stack exactly, built
   into `web/dist` and embedded into the binary via `go:embed` (`web/webui.go`) — one
   binary, one port, SPA-fallback routing
-- A single dashboard view: downloads table (name, kind, category, state badge,
-  progress bar, size, added-when, delete), provider status badges — deliberately
-  one well-built view rather than a half-built multi-page app
+- Two dashboard views (Downloads, Settings): downloads table (name, kind, category,
+  state badge, progress bar, size, added-when, delete), provider status badges —
+  deliberately kept small rather than a sprawling multi-page app
+- **Live settings** (added as a follow-on): `internal/debrid`'s
+  `Dynamic*Provider` wrappers let a TorBox key be set or changed through the web
+  UI's Settings tab (`PUT /api/v1/settings/providers/torbox`) and take effect
+  immediately, with both compat shims now always mounted rather than only when a
+  provider exists at startup — no restart needed either way. Persisted to
+  `config.yaml` so it survives one when it does happen. Verified live: set a real
+  key through the running API with zero downtime, then used the qBittorrent shim
+  against the real TorBox API on the very next request
 - API-key auth on the native API (the UI prompts for it once, keeps it in
   `localStorage`), matching LibriNode's convention
 - Built and design-judgment-called autonomously (UI has no live feedback loop from

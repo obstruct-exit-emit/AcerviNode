@@ -76,3 +76,19 @@ export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean)
     method: 'DELETE',
   })
 }
+
+export interface ProviderSettings {
+  [providerName: string]: { configured: boolean }
+}
+
+export function getProviderSettings(apiKey: string): Promise<ProviderSettings> {
+  return request('/api/v1/settings/providers', apiKey)
+}
+
+export function setTorBoxApiKey(apiKey: string, torboxApiKey: string): Promise<void> {
+  return request('/api/v1/settings/providers/torbox', apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: torboxApiKey }),
+  })
+}

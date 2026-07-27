@@ -38,6 +38,102 @@
   padding: 4px 10px;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  padding: 8px 4px;
+  margin-right: 16px;
+  font-size: 14px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.settings-card {
+  max-width: 420px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+}
+
+.settings-card h2 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+
+.settings-status {
+  margin: 0 0 10px;
+}
+
+.settings-help {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.settings-card form {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-card input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-card input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-card button {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.settings-card button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.settings-success {
+  color: var(--state-ready);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.settings-error {
+  color: var(--state-error);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
 .logout-btn:hover {
   border-color: var(--text-muted);
   color: var(--text);

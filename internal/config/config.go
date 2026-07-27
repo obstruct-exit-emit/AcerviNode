@@ -150,6 +150,23 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// Save writes the full config back to path as YAML (0600 — it contains
+// secrets), overwriting whatever was there. Used by the settings API
+// (internal/api) so a provider key set through the web UI survives a
+// restart, the same as one hand-edited into config.yaml. Comments in an
+// existing file are not preserved — yaml.v3's encoder doesn't round-trip
+// them — which is an accepted limitation for now, not an oversight.
+func (c *Config) Save(path string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
 func randomAPIKey() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

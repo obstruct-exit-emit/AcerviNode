@@ -31,6 +31,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tags, attaching each to a GitHub release bundled with the unit file
 - `main.version` is now stamped at build time via `-ldflags`, defaulting to
   `0.0.0-dev` for a plain `go build`
+- `internal/debrid`'s `DynamicTorrentProvider`/`DynamicUsenetProvider`: delegate to
+  a swappable inner provider, returning `debrid.ErrNoProvider` until one is set
+- `internal/config.Save`: persists a config back to `config.yaml` (0600)
+- `internal/api`: `GET /api/v1/settings/providers`, `PUT
+  /api/v1/settings/providers/torbox` — set/replace the TorBox key live, no
+  restart; the web UI's new Settings tab uses this
+- Both compat shims are now always mounted (previously only when a provider was
+  configured at startup), which is what makes setting a key through the
+  settings API — not just at startup — actually take effect
 
 ### Fixed
 

@@ -13,7 +13,7 @@ units without a mounted config file.
 | `log_level` | `ACERVINODE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path` |
 | `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `10` | How often `internal/importer` checks for provider-completed downloads to fetch to local disk |
-| `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call |
+| `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings) |
 
 ## Example
 
@@ -31,10 +31,10 @@ providers:
 
 `providers` is a map keyed by provider name (`torbox` today; `realdebrid` and
 others land here as they're implemented — see [Providers](providers.md) and the
-[roadmap](../ROADMAP.md)). AcerviNode only mounts the SABnzbd compat shim if the
-configured provider implements the usenet interface — TorBox does, so both shims
-come up; a future torrent-only provider would leave the SABnzbd shim unmounted
-rather than erroring.
+[roadmap](../ROADMAP.md)). Both compat shims are always mounted, whether or not a
+provider is configured yet — see [Providers](providers.md#live-settings) for why
+that's what makes setting a key through the web UI (rather than only at startup)
+possible at all.
 
 ## Categories and save paths
 

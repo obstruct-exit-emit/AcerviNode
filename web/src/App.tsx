@@ -14,13 +14,17 @@ import {
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
+import { Settings } from './components/Settings'
 import './App.css'
 
 const POLL_INTERVAL_MS = 4000
 
+type View = 'downloads' | 'settings'
+
 export default function App() {
   const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey())
   const [gateError, setGateError] = useState<string | undefined>(undefined)
+  const [view, setView] = useState<View>('downloads')
   const [version, setVersion] = useState<string>('')
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [downloads, setDownloads] = useState<Download[]>([])
@@ -98,9 +102,22 @@ export default function App() {
         </div>
       </header>
 
+      <nav className="tabs">
+        <button className={view === 'downloads' ? 'tab tab-active' : 'tab'} onClick={() => setView('downloads')}>
+          Downloads
+        </button>
+        <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
+          Settings
+        </button>
+      </nav>
+
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
-        <DownloadsTable downloads={downloads} onDelete={handleDelete} />
+        {view === 'downloads' ? (
+          <DownloadsTable downloads={downloads} onDelete={handleDelete} />
+        ) : (
+          <Settings apiKey={apiKey} />
+        )}
       </main>
     </div>
   )

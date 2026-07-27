@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,10 +56,13 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 	}
 	defer db.Close()
 
-	handler, providers := buildHandler(cfg, db)
-	if len(providers) != 1 || providers[0].Name != "torbox" {
-		t.Fatalf("providers = %+v, want one torbox entry", providers)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	if !settings.TorBoxConfigured() {
+		t.Fatal("TorBoxConfigured() = false, want true (key was set via env)")
 	}
+
+	handler := buildHandler(cfg, db, torrentDyn, usenetDyn, settings)
 
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -71,6 +75,19 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/api/v1/health status = %d, want 200", resp.StatusCode)
+	}
+
+	// Native API reports the provider as configured.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/providers", nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/providers error = %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "torbox") {
+		t.Errorf("/api/v1/providers body = %q, want it to mention torbox", body)
 	}
 
 	// qBittorrent shim mounted.
@@ -105,15 +122,19 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / error = %v", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `<div id="root">`) {
 		t.Errorf("GET / status=%d body=%q, want the built index.html", resp.StatusCode, body)
 	}
 }
 
-// TestBuildHandler_NoProviderConfigured proves the compat shims simply don't
-// mount (404, not a crash) when no provider is configured.
+// TestBuildHandler_NoProviderConfigured proves both compat shims are still
+// mounted (protocol-level probes like "Test" work) even with no TorBox key
+// set yet — they just answer provider-dependent calls with a clean error via
+// debrid.ErrNoProvider (see internal/debrid's Dynamic*Provider) rather than
+// the route not existing at all. That's what makes configuring TorBox later
+// through the settings API (rather than only at startup) possible.
 func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 	cfg, err := config.Load("")
 	if err != nil {
@@ -125,26 +146,39 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 	}
 	defer db.Close()
 
-	handler, providers := buildHandler(cfg, db)
-	if len(providers) != 0 {
-		t.Fatalf("providers = %+v, want none", providers)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	if settings.TorBoxConfigured() {
+		t.Fatal("TorBoxConfigured() = true, want false (no key set)")
 	}
 
+	handler := buildHandler(cfg, db, torrentDyn, usenetDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
+	// The qBittorrent shim is mounted and answers its protocol-level probe
+	// normally — this doesn't touch the provider at all.
 	resp, err := http.Get(ts.URL + "/api/v2/app/webapiVersion")
 	if err != nil {
 		t.Fatalf("GET /api/v2/app/webapiVersion error = %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	// Nothing under /api/v2 is registered when no torrent provider is
-	// configured, so the request falls through to the embedded web UI's
-	// catch-all SPA route — the qBittorrent shim's real plaintext response
-	// ("2.9.3") is what must NOT appear, rather than a specific status code.
-	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), "2.9.3") {
-		t.Errorf("status=%d body=%q — expected the UI's SPA fallback, not the qBittorrent shim's response", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) == "" {
+		t.Errorf("webapiVersion status=%d body=%q, want a real (unconditional) response", resp.StatusCode, body)
+	}
+
+	// The native API correctly reports nothing configured.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/providers", nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/providers error = %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := strings.TrimSpace(string(body)); got != "[]" {
+		t.Errorf("/api/v1/providers body = %q, want [] (nothing configured yet)", got)
 	}
 }
 

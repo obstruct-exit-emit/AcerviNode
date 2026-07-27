@@ -20,6 +20,8 @@ Every endpoint except `/health` requires `Authorization: Bearer <api_key>` (see
 | `GET` | `/api/v1/downloads` | Every download, either kind, most recently added first |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
+| `GET` | `/api/v1/settings/providers` | `{"torbox": {"configured": bool}}` — never the actual key, only whether one is set |
+| `PUT` | `/api/v1/settings/providers/torbox` | Body `{"api_key": "..."}` — sets or replaces the TorBox key. Takes effect immediately (no restart) and is persisted to `config.yaml`; see [Providers](providers.md#live-settings) |
 
 ## Download JSON shape
 

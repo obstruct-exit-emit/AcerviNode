@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -141,6 +142,52 @@ func TestLoad_DownloadDirEnvOverride(t *testing.T) {
 	}
 	if cfg.ImportIntervalSeconds != 30 {
 		t.Errorf("ImportIntervalSeconds = %d, want 30", cfg.ImportIntervalSeconds)
+	}
+}
+
+func TestSave_RoundTripsThroughLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.Providers["torbox"] = ProviderConfig{APIKey: "new-torbox-key"}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() after Save() error = %v", err)
+	}
+	if got := reloaded.Providers["torbox"].APIKey; got != "new-torbox-key" {
+		t.Errorf("Providers[torbox].APIKey = %q, want new-torbox-key", got)
+	}
+	if reloaded.Port != cfg.Port || reloaded.APIKey != cfg.APIKey {
+		t.Errorf("reloaded config = %+v, want it to match saved %+v", reloaded, cfg)
+	}
+}
+
+func TestSave_FilePermissionsAreRestrictive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows doesn't enforce POSIX permission bits — os.WriteFile's mode argument is a no-op there")
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("config file permissions = %o, want no group/other access", perm)
 	}
 }
 

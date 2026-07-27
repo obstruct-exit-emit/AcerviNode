@@ -26,14 +26,34 @@ func (f *fakeDeleter) Delete(_ context.Context, id debrid.ProviderDownloadID, de
 	return f.err
 }
 
-func newTestServer(t *testing.T, providers []ProviderStatus, torrentProvider, usenetProvider deleter) (*Server, *database.DB) {
+type fakeSettings struct {
+	configured bool
+	setCalls   []string
+	setErr     error
+}
+
+func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
+
+func (f *fakeSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
+	f.setCalls = append(f.setCalls, apiKey)
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.configured = true
+	return nil
+}
+
+func newTestServer(t *testing.T, torrentProvider, usenetProvider deleter, settings Settings) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return NewServer("secret", "dev", providers, db, torrentProvider, usenetProvider), db
+	if settings == nil {
+		settings = &fakeSettings{}
+	}
+	return NewServer("secret", "dev", db, torrentProvider, usenetProvider, settings), db
 }
 
 func authedRequest(method, target string) *http.Request {
@@ -81,9 +101,7 @@ func TestHandleVersion_RequiresAuth(t *testing.T) {
 }
 
 func TestHandleProviders_ReturnsConfigured(t *testing.T) {
-	srv, _ := newTestServer(t, []ProviderStatus{
-		{Name: "torbox", TorrentCapable: true, UsenetCapable: true},
-	}, nil, nil)
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{configured: true})
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/providers"))
 	if rec.Code != http.StatusOK {
@@ -94,13 +112,11 @@ func TestHandleProviders_ReturnsConfigured(t *testing.T) {
 	}
 }
 
-// TestHandleProviders_NilProvidersReturnsEmptyArray guards against a real
-// bug found during manual testing: a nil providers slice (the case when no
-// provider is configured — see cmd/acervinode's buildProviders) marshals to
-// JSON `null`, which the embedded UI's `providers.length` check would throw
-// on. NewServer must normalize nil to an empty slice.
-func TestHandleProviders_NilProvidersReturnsEmptyArray(t *testing.T) {
-	srv, _ := newTestServer(t, nil, nil, nil)
+// TestHandleProviders_UnconfiguredReturnsEmptyArray guards against a real
+// bug found during manual testing: a nil slice marshals to JSON `null`,
+// which the embedded UI's `providers.length` check would throw on.
+func TestHandleProviders_UnconfiguredReturnsEmptyArray(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{configured: false})
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/providers"))
 	if rec.Code != http.StatusOK {
@@ -108,6 +124,70 @@ func TestHandleProviders_NilProvidersReturnsEmptyArray(t *testing.T) {
 	}
 	if got := strings.TrimSpace(rec.Body.String()); got != "[]" {
 		t.Errorf("body = %q, want [] (not null)", got)
+	}
+}
+
+func TestHandleGetProviderSettings(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{configured: true})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/providers"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got map[string]providerSettingResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got["torbox"].Configured {
+		t.Errorf("got = %+v, want torbox.configured = true", got)
+	}
+	// The actual key must never appear in the response body.
+	if strings.Contains(rec.Body.String(), "api_key") {
+		t.Errorf("response leaked a field named api_key: %s", rec.Body.String())
+	}
+}
+
+func TestHandleSetTorBoxAPIKey(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":"new-torbox-key"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.setCalls) != 1 || settings.setCalls[0] != "new-torbox-key" {
+		t.Errorf("SetTorBoxAPIKey calls = %v, want one call with new-torbox-key", settings.setCalls)
+	}
+}
+
+func TestHandleSetTorBoxAPIKey_RejectsEmptyKey(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":""}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if len(settings.setCalls) != 0 {
+		t.Errorf("SetTorBoxAPIKey should not have been called for an empty key")
+	}
+}
+
+func TestHandleSetTorBoxAPIKey_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":"x"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
 
@@ -192,7 +272,7 @@ func TestHandleGetDownload_NotFound(t *testing.T) {
 
 func TestHandleDeleteDownload(t *testing.T) {
 	torrentDeleter := &fakeDeleter{}
-	srv, db := newTestServer(t, nil, torrentDeleter, nil)
+	srv, db := newTestServer(t, torrentDeleter, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
 
 	rec := httptest.NewRecorder()
@@ -222,7 +302,7 @@ func TestHandleDeleteDownload(t *testing.T) {
 func TestHandleDeleteDownload_UsenetKindUsesUsenetProvider(t *testing.T) {
 	torrentDeleter := &fakeDeleter{}
 	usenetDeleter := &fakeDeleter{}
-	srv, db := newTestServer(t, nil, torrentDeleter, usenetDeleter)
+	srv, db := newTestServer(t, torrentDeleter, usenetDeleter, nil)
 	d := seedDownload(t, db, database.KindUsenet, "p2")
 
 	rec := httptest.NewRecorder()
@@ -240,7 +320,7 @@ func TestHandleDeleteDownload_UsenetKindUsesUsenetProvider(t *testing.T) {
 
 func TestHandleDeleteDownload_ProviderErrorStillCleansUpLocally(t *testing.T) {
 	failing := &fakeDeleter{err: context.DeadlineExceeded}
-	srv, db := newTestServer(t, nil, failing, nil)
+	srv, db := newTestServer(t, failing, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
 
 	rec := httptest.NewRecorder()
