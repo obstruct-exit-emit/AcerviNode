@@ -25,9 +25,10 @@ import (
 	"github.com/acervinode/acervinode/web"
 )
 
-// version is a free-form build identifier — not stamped via ldflags yet
-// (see docs/development.md).
-const version = "0.0.0-dev"
+// version is stamped at build time via -ldflags "-X main.version=...", the
+// same tag pushed to trigger .github/workflows/release.yml. A plain
+// `go build` (or `go run`) without that flag keeps this default.
+var version = "0.0.0-dev"
 
 func main() {
 	if err := run(context.Background()); err != nil {

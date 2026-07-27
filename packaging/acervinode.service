@@ -1,0 +1,26 @@
+[Unit]
+Description=AcerviNode - debrid download client
+Documentation=https://github.com/obstruct-exit-emit/AcerviNode
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=acervinode
+Group=acervinode
+ExecStart=/opt/acervinode/acervinode
+Environment=ACERVINODE_CONFIG=/etc/acervinode/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Hardening — AcerviNode only needs to read its config under /etc/acervinode
+# and read/write its data and download directories under /var/lib/acervinode;
+# everything else stays read-only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/acervinode
+
+[Install]
+WantedBy=multi-user.target

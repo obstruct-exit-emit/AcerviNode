@@ -6,8 +6,8 @@
 
 AcerviNode speaks the qBittorrent Web API and the SABnzbd API, so your *arr apps add it as a normal download client and never know the download isn't real — it resolves everything through a debrid provider instead of doing actual P2P or NNTP work.
 
-[![Release](https://img.shields.io/github/v/release/acervinode/acervinode?include_prereleases&label=release)](https://github.com/acervinode/acervinode/releases)
-[![CI](https://github.com/acervinode/acervinode/actions/workflows/ci.yml/badge.svg)](https://github.com/acervinode/acervinode/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/obstruct-exit-emit/AcerviNode?include_prereleases&label=release)](https://github.com/obstruct-exit-emit/AcerviNode/releases)
+[![CI](https://github.com/obstruct-exit-emit/AcerviNode/actions/workflows/ci.yml/badge.svg)](https://github.com/obstruct-exit-emit/AcerviNode/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 
@@ -88,9 +88,11 @@ Then open `http://localhost:7846` for the dashboard. Full steps, including
 pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
 [Installation](docs/installation.md) · [Quickstart](docs/quickstart.md).
 
-> Docker and packaged Windows builds are on hold for now (see the
-> [roadmap](ROADMAP.md)) — production deployment targets Linux, same as LibriNode,
-> though every feature runs the same on Windows for local development.
+> Tagged releases publish Linux amd64/arm64 binaries with a systemd unit — see
+> [Installation](docs/installation.md). No Docker image, no packaged Windows
+> build — not currently planned (see the [roadmap](ROADMAP.md)); production
+> deployment targets Linux, same as LibriNode, though every feature runs the same
+> on Windows for local development.
 
 ## Documentation
 

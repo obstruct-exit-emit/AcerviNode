@@ -56,5 +56,9 @@ provider is a new subpackage under `internal/debrid/`, implementing
 
 ## Releases
 
-Not yet automated — see [Phase 5](../ROADMAP.md#phase-5--hardening--release-) on the
-roadmap.
+Cut by tagging `v*` — `.github/workflows/release.yml` builds the frontend, then
+cross-compiles version-stamped (`-ldflags "-X main.version=..."`) Linux amd64/arm64
+binaries and attaches them, each bundled with
+[packaging/acervinode.service](../packaging/acervinode.service), to a GitHub
+release. No Docker image and no packaged Windows build — not currently planned
+(see the [roadmap](../ROADMAP.md)).

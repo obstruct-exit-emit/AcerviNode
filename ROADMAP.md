@@ -1,7 +1,8 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 are complete. The
-fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
+Where the project has been and where it's going. Phases 0–3 and 5 are complete;
+Phase 4 (more debrid providers) is blocked for now. The fine-grained record of
+every change lives in the [CHANGELOG](CHANGELOG.md).
 
 **Legend:** ✅ complete · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
@@ -14,7 +15,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [2 — Completed Download Handling](#phase-2--completed-download-handling-) | Fetch resolved files to local disk once a download is done | ✅ |
 | [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | ✅ |
 | [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
-| [5 — Hardening & release](#phase-5--hardening--release-) | Packaging, systemd unit, Docker, release automation | 💡 |
+| [5 — Hardening & release](#phase-5--hardening--release-) | systemd unit, packaged Linux binaries, release automation | ✅ |
 
 ---
 
@@ -96,8 +97,24 @@ CDN link instead of BitTorrent/NNTP.
 - Debrid-Link, AllDebrid, Premiumize as they become worth the maintenance cost
 - Per-provider cached-availability checks where the provider supports them
 
-## Phase 5 — Hardening & release 💡
+## Phase 5 — Hardening & release ✅
 
-- systemd unit, packaged Linux binaries (amd64/arm64) attached to tagged releases
-- Docker image (Linux)
-- Windows builds: no committed timeline, same posture as LibriNode
+- `packaging/acervinode.service`: a hardened systemd unit (`ProtectSystem=strict`,
+  `NoNewPrivileges`, dedicated user, write access scoped to
+  `/var/lib/acervinode`) — verified with `systemd-analyze verify` in a real
+  systemd environment (WSL2), not just written and assumed correct
+- `.github/workflows/release.yml`: tags matching `v*` build the frontend, then
+  cross-compile version-stamped (`-ldflags "-X main.version=..."`) Linux
+  amd64/arm64 binaries, each bundled with the systemd unit into a `.tar.gz`
+  attached to a GitHub release
+- Verified for real, not just reasoned about: both cross-compiled binaries
+  actually run (executed the linux/amd64 build inside WSL2 — real ELF execution,
+  not just a successful `go build`), and the stamped version showed up correctly
+  in `/api/v1/version`
+- Docker and a packaged Windows install are explicitly out of scope for now (may
+  be added later) — Linux binary + systemd is the whole packaging story today
+- Fixed a real, pre-existing bug found while wiring this up: README/docs release
+  and CI badges/links pointed at `github.com/acervinode/acervinode` (the Go
+  module's vanity import path) instead of the actual repo,
+  `github.com/obstruct-exit-emit/AcerviNode` — meant the release badge and the
+  `git clone` instructions were both broken

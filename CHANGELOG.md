@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `web/`: React 19 + Vite single-page dashboard (downloads table, provider status,
   API-key gate), embedded into the binary via `go:embed` (`web/webui.go`), served
   at `/` alongside the API and both compat shims
+- `packaging/acervinode.service`: hardened systemd unit (verified with
+  `systemd-analyze verify`), and `.github/workflows/release.yml`, which builds the
+  frontend and cross-compiles version-stamped Linux amd64/arm64 binaries on `v*`
+  tags, attaching each to a GitHub release bundled with the unit file
+- `main.version` is now stamped at build time via `-ldflags`, defaulting to
+  `0.0.0-dev` for a plain `go build`
 
 ### Fixed
 
@@ -38,3 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `internal/api`'s `NewServer` no longer lets a `nil` providers slice marshal to
   JSON `null` (found while manually verifying the new web UI — its
   `providers.length` check would have thrown on that)
+- README/docs release and CI badges/links pointed at the Go module's vanity
+  import path (`github.com/acervinode/acervinode`) instead of the actual repo
+  (`github.com/obstruct-exit-emit/AcerviNode`) — the release badge and the
+  documented `git clone` command were both broken
