@@ -1,0 +1,11 @@
+# Normalize everything to LF; the repo is edited from both Windows and WSL/Linux.
+* text=auto eol=lf
+
+# Windows-only files keep CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.db binary

@@ -1,0 +1,26 @@
+# Binaries
+/acervinode
+/acervinode.exe
+/dist/
+/bin/
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Runtime data (never commit a live database or config)
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+
+# Personal Claude Code settings
+.claude/settings.local.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+*.tsbuildinfo

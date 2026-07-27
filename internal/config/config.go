@@ -1,0 +1,136 @@
+// Package config loads AcerviNode's configuration from config.yaml, with
+// ACERVINODE_* environment variables taking precedence over file values.
+package config
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ProviderConfig holds the settings for a single debrid provider, keyed by
+// provider name (e.g. "torbox") in Config.Providers.
+type ProviderConfig struct {
+	APIKey string `yaml:"api_key"`
+}
+
+// Config is AcerviNode's full runtime configuration.
+type Config struct {
+	Port      int                       `yaml:"port"`
+	DataDir   string                    `yaml:"data_dir"`
+	APIKey    string                    `yaml:"api_key"`
+	LogLevel  string                    `yaml:"log_level"`
+	Providers map[string]ProviderConfig `yaml:"providers"`
+}
+
+var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+
+func defaults() *Config {
+	return &Config{
+		Port:      7846,
+		DataDir:   "./data",
+		LogLevel:  "info",
+		Providers: map[string]ProviderConfig{},
+	}
+}
+
+// Load reads config from path (if it exists), applies ACERVINODE_* environment
+// overrides, fills in an API key if one wasn't set, and validates the result.
+// An empty path skips the file read and uses defaults plus env overrides only.
+func Load(path string) (*Config, error) {
+	cfg := defaults()
+
+	if path != "" {
+		data, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			if err := yaml.Unmarshal(data, cfg); err != nil {
+				return nil, fmt.Errorf("parse config %s: %w", path, err)
+			}
+		case os.IsNotExist(err):
+			// no config file yet — defaults and env vars only
+		default:
+			return nil, fmt.Errorf("read config %s: %w", path, err)
+		}
+	}
+
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
+	}
+
+	applyEnv(cfg)
+
+	if cfg.APIKey == "" {
+		key, err := randomAPIKey()
+		if err != nil {
+			return nil, fmt.Errorf("generate api key: %w", err)
+		}
+		cfg.APIKey = key
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+func applyEnv(cfg *Config) {
+	if v := os.Getenv("ACERVINODE_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.Port = port
+		}
+	}
+	if v := os.Getenv("ACERVINODE_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
+	if v := os.Getenv("ACERVINODE_API_KEY"); v != "" {
+		cfg.APIKey = v
+	}
+	if v := os.Getenv("ACERVINODE_LOG_LEVEL"); v != "" {
+		cfg.LogLevel = v
+	}
+
+	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
+	const prefix = "ACERVINODE_PROVIDERS_"
+	const suffix = "_API_KEY"
+	for _, kv := range os.Environ() {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(key, prefix), suffix))
+		if name == "" {
+			continue
+		}
+		pc := cfg.Providers[name]
+		pc.APIKey = value
+		cfg.Providers[name] = pc
+	}
+}
+
+func (c *Config) validate() error {
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("invalid port %d: must be between 1 and 65535", c.Port)
+	}
+	if c.DataDir == "" {
+		return fmt.Errorf("data_dir must not be empty")
+	}
+	if !validLogLevels[c.LogLevel] {
+		return fmt.Errorf("invalid log_level %q: must be one of debug, info, warn, error", c.LogLevel)
+	}
+	return nil
+}
+
+func randomAPIKey() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
