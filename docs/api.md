@@ -24,6 +24,8 @@ server logs or `config.yaml`.
 | `GET` | `/api/v1/version` | Build version string |
 | `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`) |
 | `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first |
+| `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category`. Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
+| `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `GET` | `/api/v1/settings/providers` | `{"torbox": {"configured": bool}}` — never the actual key, only whether one is set |
@@ -71,8 +73,32 @@ a download has failed at least once — see
 (`[{"path": "...", "size_bytes": ...}]`), which the list endpoint omits since it
 would mean an extra query per row for something the table view doesn't show.
 
+## Adding downloads directly
+
+`POST /api/v1/downloads/torrent` and `POST /api/v1/downloads/usenet` let you add
+a download without going through Sonarr/Radarr or faking being one against a
+compat shim — this is what the web UI's "+ Add" button uses. Errors:
+`400` if neither a link (`magnet`/`url`) nor a `file` is given, `503` if the
+relevant provider isn't configured yet, `502` for any other provider-side
+failure (e.g. an invalid magnet or a real upstream error).
+
+Debrid providers dedupe by content: adding a magnet whose hash the provider
+already has cached under an earlier add returns the *existing* tracked
+download (`200`) instead of creating a duplicate row — the provider handed
+back the same `torrent_id`/`usenetdownload_id` it gave out before, and
+AcerviNode's schema has a uniqueness constraint on `(provider,
+provider_download_id)` for exactly this reason. The existing row's original
+category is kept; the new request's `category` is ignored in that case.
+
+Both endpoints try `Status` on the just-added ID immediately, so the response
+usually has the provider's real name/hash/size right away — same
+provider-status-not-indexed-yet fallback (using the magnet/URL/filename
+instead) as both compat shims already do on their own adds; see
+[qBittorrent API](qbittorrent-api.md) and [SABnzbd API](sabnzbd-api.md).
+
 ## What's thin here (see [Providers](providers.md) for why)
 
-There's no `POST /api/v1/downloads` to add a download directly — adds go through
-whichever compat shim (or *arr app) is already in use. This API is for observing
-and managing what's already tracked, which is exactly what the embedded UI needs.
+Beyond adding and observing/managing what's tracked, this API stays thin —
+there's no bulk operations, no pause/resume, no priority. Sonarr/Radarr never
+call this API directly regardless (they only know the compat shims); this
+surface is for the web UI and anyone scripting against AcerviNode directly.

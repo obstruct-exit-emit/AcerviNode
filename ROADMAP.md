@@ -137,6 +137,21 @@ CDN link instead of BitTorrent/NNTP.
   live and in an integration test: the old key stops authenticating the native
   API *and* the qBittorrent shim's login immediately after regenerating, and
   the new key works on both right away
+- **Add downloads directly** (added as a follow-on): `POST
+  /api/v1/downloads/torrent` and `/usenet` add a magnet/`.torrent`/NZB
+  URL/`.nzb` file without needing Sonarr/Radarr or faking being one against a
+  compat shim — the web UI's new "+ Add" button uses this. Server struct's
+  provider fields widened from a delete-only interface to
+  `torrentAdder`/`usenetAdder` (add, status, delete); no change needed in
+  `cmd/acervinode` since the Dynamic\*Provider wrappers already satisfied the
+  wider shape. Found and fixed a real bug during manual verification: TorBox
+  dedupes by content and can hand back a `torrent_id` already tracked locally
+  (e.g. re-adding an already-cached magnet), which tripped the `(provider,
+  provider_download_id)` UNIQUE constraint as a raw 500 — added
+  `database.GetDownloadByProviderID` and now return the existing row (`200`)
+  instead of attempting a duplicate insert. Verified live against the real
+  TorBox account: the exact failing scenario now returns the existing tracked
+  download cleanly.
 
 ## Phase 4 — Multi-provider ⏳
 

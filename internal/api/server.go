@@ -22,9 +22,32 @@ type ProviderStatus struct {
 
 // deleter is the subset of debrid.TorrentProvider/debrid.UsenetProvider that
 // DELETE /api/v1/downloads/{id} needs — same narrow-interface approach as
-// internal/importer's fileResolver.
+// internal/importer's provider.
 type deleter interface {
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
+}
+
+// torrentAdder is what POST /api/v1/downloads/torrent needs from a
+// torrent-capable debrid provider — enough to add a torrent directly
+// (magnet or an uploaded .torrent file), mirroring internal/qbittorrent's
+// own add flow, plus Delete so one field on Server covers everything the
+// native API does with a torrent provider.
+type torrentAdder interface {
+	deleter
+	Name() string
+	AddMagnet(ctx context.Context, magnetURI string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
+	AddTorrentFile(ctx context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
+	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
+}
+
+// usenetAdder is torrentAdder's usenet counterpart, backing
+// POST /api/v1/downloads/usenet.
+type usenetAdder interface {
+	deleter
+	Name() string
+	AddNZBURL(ctx context.Context, link string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
+	AddNZBFile(ctx context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
+	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
 }
 
 // GeneralInfo is AcerviNode's own runtime configuration, as reported to the
@@ -68,8 +91,8 @@ type Settings interface {
 type Server struct {
 	version         string
 	db              *database.DB
-	torrentProvider deleter // nil if no torrent-capable provider is configured
-	usenetProvider  deleter // nil if no usenet-capable provider is configured
+	torrentProvider torrentAdder // nil if no torrent-capable provider is configured
+	usenetProvider  usenetAdder  // nil if no usenet-capable provider is configured
 	settings        Settings
 	mux             *http.ServeMux
 }
@@ -79,7 +102,7 @@ type Server struct {
 // settings.APIKey() live on every request rather than a value captured at
 // construction, so a regenerated key takes effect immediately — see
 // requireAuth.
-func NewServer(version string, db *database.DB, torrentProvider deleter, usenetProvider deleter, settings Settings) *Server {
+func NewServer(version string, db *database.DB, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) *Server {
 	s := &Server{
 		version: version, db: db,
 		torrentProvider: torrentProvider, usenetProvider: usenetProvider,
@@ -101,6 +124,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/version", s.requireAuth(s.handleVersion))
 	s.mux.HandleFunc("GET /api/v1/providers", s.requireAuth(s.handleProviders))
 	s.mux.HandleFunc("GET /api/v1/downloads", s.requireAuth(s.handleListDownloads))
+	s.mux.HandleFunc("POST /api/v1/downloads/torrent", s.requireAuth(s.handleAddTorrent))
+	s.mux.HandleFunc("POST /api/v1/downloads/usenet", s.requireAuth(s.handleAddUsenet))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}", s.requireAuth(s.handleGetDownload))
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))

@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,18 +16,82 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-type fakeDeleter struct {
-	called      bool
-	lastID      debrid.ProviderDownloadID
-	deleteFiles bool
-	err         error
+// fakeProvider satisfies both torrentAdder and usenetAdder — every test that
+// previously only exercised Delete keeps working unchanged (the extra
+// methods are simply unused in those cases), and add-download tests
+// configure addID/addErr/statusResp/statusErr as needed.
+type fakeProvider struct {
+	providerName string
+
+	deleteCalled bool
+	deleteID     debrid.ProviderDownloadID
+	deleteFiles  bool
+	deleteErr    error
+
+	addID         debrid.ProviderDownloadID
+	addErr        error
+	addedMagnet   string
+	addedURL      string
+	addedFilename string
+	addedFile     []byte
+
+	statusResp debrid.DownloadStatus
+	statusErr  error
 }
 
-func (f *fakeDeleter) Delete(_ context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error {
-	f.called = true
-	f.lastID = id
+func (f *fakeProvider) Name() string {
+	if f.providerName == "" {
+		return "fake"
+	}
+	return f.providerName
+}
+
+func (f *fakeProvider) Delete(_ context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error {
+	f.deleteCalled = true
+	f.deleteID = id
 	f.deleteFiles = deleteFiles
-	return f.err
+	return f.deleteErr
+}
+
+func (f *fakeProvider) AddMagnet(_ context.Context, magnetURI string, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.addedMagnet = magnetURI
+	if f.addErr != nil {
+		return "", f.addErr
+	}
+	return f.addID, nil
+}
+
+func (f *fakeProvider) AddTorrentFile(_ context.Context, filename string, data []byte, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.addedFilename = filename
+	f.addedFile = data
+	if f.addErr != nil {
+		return "", f.addErr
+	}
+	return f.addID, nil
+}
+
+func (f *fakeProvider) AddNZBURL(_ context.Context, link string, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.addedURL = link
+	if f.addErr != nil {
+		return "", f.addErr
+	}
+	return f.addID, nil
+}
+
+func (f *fakeProvider) AddNZBFile(_ context.Context, filename string, data []byte, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.addedFilename = filename
+	f.addedFile = data
+	if f.addErr != nil {
+		return "", f.addErr
+	}
+	return f.addID, nil
+}
+
+func (f *fakeProvider) Status(_ context.Context, _ debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
+	if f.statusErr != nil {
+		return debrid.DownloadStatus{}, f.statusErr
+	}
+	return f.statusResp, nil
 }
 
 type fakeSettings struct {
@@ -68,7 +135,7 @@ func (f *fakeSettings) RegenerateAPIKey(_ context.Context) (string, error) {
 
 func (f *fakeSettings) General() GeneralInfo { return f.general }
 
-func newTestServer(t *testing.T, torrentProvider, usenetProvider deleter, settings Settings) (*Server, *database.DB) {
+func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -385,7 +452,7 @@ func TestHandleGetDownload_NotFound(t *testing.T) {
 }
 
 func TestHandleDeleteDownload(t *testing.T) {
-	torrentDeleter := &fakeDeleter{}
+	torrentDeleter := &fakeProvider{}
 	srv, db := newTestServer(t, torrentDeleter, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
 
@@ -394,11 +461,11 @@ func TestHandleDeleteDownload(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
-	if !torrentDeleter.called {
+	if !torrentDeleter.deleteCalled {
 		t.Error("expected torrent provider Delete to be called")
 	}
-	if torrentDeleter.lastID != debrid.ProviderDownloadID("p1") {
-		t.Errorf("provider id = %q, want p1", torrentDeleter.lastID)
+	if torrentDeleter.deleteID != debrid.ProviderDownloadID("p1") {
+		t.Errorf("provider id = %q, want p1", torrentDeleter.deleteID)
 	}
 	if !torrentDeleter.deleteFiles {
 		t.Error("deleteFiles should have been true")
@@ -414,8 +481,8 @@ func TestHandleDeleteDownload(t *testing.T) {
 }
 
 func TestHandleDeleteDownload_UsenetKindUsesUsenetProvider(t *testing.T) {
-	torrentDeleter := &fakeDeleter{}
-	usenetDeleter := &fakeDeleter{}
+	torrentDeleter := &fakeProvider{}
+	usenetDeleter := &fakeProvider{}
 	srv, db := newTestServer(t, torrentDeleter, usenetDeleter, nil)
 	d := seedDownload(t, db, database.KindUsenet, "p2")
 
@@ -424,16 +491,16 @@ func TestHandleDeleteDownload_UsenetKindUsesUsenetProvider(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
-	if torrentDeleter.called {
+	if torrentDeleter.deleteCalled {
 		t.Error("torrent provider should not have been called for a usenet download")
 	}
-	if !usenetDeleter.called {
+	if !usenetDeleter.deleteCalled {
 		t.Error("usenet provider should have been called")
 	}
 }
 
 func TestHandleDeleteDownload_ProviderErrorStillCleansUpLocally(t *testing.T) {
-	failing := &fakeDeleter{err: context.DeadlineExceeded}
+	failing := &fakeProvider{deleteErr: context.DeadlineExceeded}
 	srv, db := newTestServer(t, failing, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
 
@@ -449,5 +516,330 @@ func TestHandleDeleteDownload_ProviderErrorStillCleansUpLocally(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("download still present after delete despite provider error: %+v", got)
+	}
+}
+
+// multipartRequest builds a POST request against target with the given form
+// fields, and optionally one file part — mirrors how a real browser's
+// FormData (or *arr apps' own add calls) would submit it.
+func multipartRequest(t *testing.T, target string, fields map[string]string, fileField, filename string, fileData []byte) *http.Request {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for k, v := range fields {
+		if v == "" {
+			continue
+		}
+		if err := writer.WriteField(k, v); err != nil {
+			t.Fatalf("write field %s: %v", k, err)
+		}
+	}
+	if fileData != nil {
+		part, err := writer.CreateFormFile(fileField, filename)
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := part.Write(fileData); err != nil {
+			t.Fatalf("write form file: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, target, body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer secret")
+	return req
+}
+
+const testMagnet = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=Some.Release.Name"
+
+func TestHandleAddTorrent_Magnet(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "999", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet, "category": "movies"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedMagnet != testMagnet {
+		t.Errorf("AddMagnet called with %q, want %q", provider.addedMagnet, testMagnet)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Protocol != "torrent" {
+		t.Errorf("protocol = %q, want torrent", got.Protocol)
+	}
+	if got.Name != "Some.Release.Name" {
+		t.Errorf("name = %q, want the magnet's dn (fallback, since provider status wasn't available yet)", got.Name)
+	}
+	if got.Hash != "abcdef0123456789abcdef0123456789abcdef01" {
+		t.Errorf("hash = %q, want the magnet's infohash, lowercased", got.Hash)
+	}
+	if got.Category != "movies" {
+		t.Errorf("category = %q, want movies", got.Category)
+	}
+
+	d, err := db.GetDownloadByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if d == nil {
+		t.Fatal("download was not persisted")
+	}
+	if d.ProviderDownloadID != "999" || d.Provider != "torbox" {
+		t.Errorf("provider_download_id/provider = %q/%q, want 999/torbox", d.ProviderDownloadID, d.Provider)
+	}
+}
+
+// TestHandleAddTorrent_DedupedByProviderReturnsExisting proves adding a
+// magnet whose provider dedupes to an already-tracked torrent_id (e.g.
+// TorBox recognizing an already-cached hash and handing back the same ID as
+// an earlier add) doesn't 500 on the (provider, provider_download_id) UNIQUE
+// constraint — it returns the existing row with 200 instead of creating a
+// duplicate. Found via a real TorBox add during manual verification.
+func TestHandleAddTorrent_DedupedByProviderReturnsExisting(t *testing.T) {
+	provider := &fakeProvider{addID: "999", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, provider, nil, nil)
+
+	first := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, first)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("first add status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	var firstResp downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	second := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, second)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second add status = %d, want 200 (already tracked), body=%s", rec.Code, rec.Body.String())
+	}
+	var secondResp downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if secondResp.ID != firstResp.ID {
+		t.Errorf("second add ID = %q, want the same as the first add (%q)", secondResp.ID, firstResp.ID)
+	}
+
+	rows, err := db.ListAllDownloads(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("len(rows) = %d, want 1 (no duplicate row created)", len(rows))
+	}
+}
+
+func TestHandleAddTorrent_UsesProviderStatusWhenAvailable(t *testing.T) {
+	provider := &fakeProvider{
+		addID: "999",
+		statusResp: debrid.DownloadStatus{
+			Name: "Real Name From Provider", Hash: "REALHASH", SizeBytes: 12345,
+			Progress: 0.5, State: debrid.StateDownloading,
+		},
+	}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Name != "Real Name From Provider" {
+		t.Errorf("name = %q, want the provider's real name, not the magnet-derived fallback", got.Name)
+	}
+	if got.Hash != "realhash" {
+		t.Errorf("hash = %q, want the provider's hash (lowercased)", got.Hash)
+	}
+	if got.State != database.StateDownloading {
+		t.Errorf("state = %q, want downloading", got.State)
+	}
+}
+
+func TestHandleAddTorrent_File(t *testing.T) {
+	provider := &fakeProvider{addID: "999", statusErr: errors.New("not indexed yet")}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"category": "tv"}, "file", "release.torrent", []byte("fake torrent bytes"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedFilename != "release.torrent" || string(provider.addedFile) != "fake torrent bytes" {
+		t.Errorf("AddTorrentFile called with filename=%q data=%q", provider.addedFilename, provider.addedFile)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Name != "release.torrent" {
+		t.Errorf("name = %q, want the uploaded filename (fallback)", got.Name)
+	}
+}
+
+func TestHandleAddTorrent_RequiresMagnetOrFile(t *testing.T) {
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"category": "tv"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleAddTorrent_NoProviderConfigured(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleAddTorrent_ProviderReturnsErrNoProvider(t *testing.T) {
+	provider := &fakeProvider{addErr: debrid.ErrNoProvider}
+	srv, _ := newTestServer(t, provider, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleAddTorrent_ProviderError(t *testing.T) {
+	provider := &fakeProvider{addErr: errors.New("torbox: rate limited")}
+	srv, _ := newTestServer(t, provider, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleAddTorrent_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	req.Header.Del("Authorization")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleAddUsenet_URL(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "nzb-1", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, nil, provider, nil)
+
+	const nzbURL = "https://example.com/release.nzb"
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"url": nzbURL, "category": "movies"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedURL != nzbURL {
+		t.Errorf("AddNZBURL called with %q, want %q", provider.addedURL, nzbURL)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Protocol != "usenet" {
+		t.Errorf("protocol = %q, want usenet", got.Protocol)
+	}
+	if got.Name != nzbURL {
+		t.Errorf("name = %q, want the URL (fallback, since provider status wasn't available yet)", got.Name)
+	}
+
+	d, err := db.GetDownloadByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if d == nil || d.ProviderDownloadID != "nzb-1" || d.Kind != database.KindUsenet {
+		t.Errorf("persisted row = %+v, want provider_download_id=nzb-1 kind=usenet", d)
+	}
+}
+
+func TestHandleAddUsenet_File(t *testing.T) {
+	provider := &fakeProvider{addID: "nzb-2", statusErr: errors.New("not indexed yet")}
+	srv, _ := newTestServer(t, nil, provider, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"category": "tv"}, "file", "release.nzb", []byte("fake nzb bytes"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedFilename != "release.nzb" || string(provider.addedFile) != "fake nzb bytes" {
+		t.Errorf("AddNZBFile called with filename=%q data=%q", provider.addedFilename, provider.addedFile)
+	}
+}
+
+func TestHandleAddUsenet_RequiresURLOrFile(t *testing.T) {
+	srv, _ := newTestServer(t, nil, &fakeProvider{}, nil)
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"category": "tv"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleAddUsenet_NoProviderConfigured(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"url": "https://example.com/x.nzb"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleAddUsenet_ProviderError(t *testing.T) {
+	provider := &fakeProvider{addErr: errors.New("torbox: rate limited")}
+	srv, _ := newTestServer(t, nil, provider, nil)
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"url": "https://example.com/x.nzb"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleAddUsenet_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, &fakeProvider{}, nil)
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"url": "https://example.com/x.nzb"}, "", "", nil)
+	req.Header.Del("Authorization")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }

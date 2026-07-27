@@ -11,6 +11,7 @@ import {
   type Download,
   type ProviderStatus,
 } from './api'
+import { AddDownload } from './components/AddDownload'
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadsTable } from './components/DownloadsTable'
@@ -31,6 +32,7 @@ export default function App() {
   const [downloads, setDownloads] = useState<Download[]>([])
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
 
   const handleUnauthorized = useCallback(() => {
     clearStoredApiKey()
@@ -119,6 +121,9 @@ export default function App() {
         <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
           Settings
         </button>
+        <button className="add-download-btn" onClick={() => setAddOpen(true)}>
+          + Add
+        </button>
       </nav>
 
       <main>
@@ -131,6 +136,18 @@ export default function App() {
       </main>
 
       {selectedId && <DownloadDetail apiKey={apiKey} id={selectedId} onClose={() => setSelectedId(null)} />}
+      {addOpen && (
+        <AddDownload
+          apiKey={apiKey}
+          providers={providers}
+          onClose={() => setAddOpen(false)}
+          onAdded={() => {
+            setAddOpen(false)
+            setView('downloads')
+            refresh(apiKey)
+          }}
+        />
+      )}
     </div>
   )
 }

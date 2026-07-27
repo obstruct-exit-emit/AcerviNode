@@ -73,13 +73,15 @@ the storage layer.
 **🖥️ Native API + web UI**
 
 - Versioned REST API (`/api/v1`): health, version, provider status, download
-  listing/management, settings — API-key authenticated, the exact API the UI
-  itself uses
+  listing/management/**adding** (magnet, .torrent, NZB URL, or .nzb file — no
+  need to go through Sonarr/Radarr or fake being one), settings — API-key
+  authenticated, the exact API the UI itself uses
 - A React (Vite) single-page dashboard, embedded into the binary — download table
-  with live state/progress, provider status, one-click delete, a per-download
-  detail view (full metadata, file list, retry status), and a Settings tab to
-  add/change your TorBox key without touching `config.yaml` — takes effect
-  immediately, no restart
+  with live state/progress, provider status, one-click delete, a "+ Add" button
+  to push a magnet/torrent file/NZB straight in, a per-download detail view
+  (full metadata, file list, retry status), and a Settings tab to add/change
+  your TorBox key without touching `config.yaml` — takes effect immediately,
+  no restart
 - The Settings tab also surfaces AcerviNode's own configuration (port, data/download
   dirs, log level, import settings) and its own API key — copyable straight from
   the UI instead of digging through server logs or `config.yaml`, with a

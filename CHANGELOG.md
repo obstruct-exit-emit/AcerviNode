@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `internal/api`: `POST /api/v1/downloads/torrent` and `POST
+  /api/v1/downloads/usenet` add a magnet/`.torrent`/NZB URL/`.nzb` file
+  directly, without needing Sonarr/Radarr or faking being one against a
+  compat shim. Web UI: a new "+ Add" button opens a form for either protocol,
+  either a link or a file upload, plus an optional category. Adding a magnet
+  the provider dedupes to an already-tracked download (TorBox can hand back
+  the same `torrent_id` for an already-cached hash) returns the existing row
+  (`200`) instead of erroring on a duplicate — found and fixed during manual
+  verification against the real TorBox account, which previously 500'd on
+  this exact case.
 - `internal/importer`: a new `refreshStatuses` step runs on every tick,
   proactively syncing every tracked download's status from its provider —
   previously this only ever happened reactively, when an *arr app polled one

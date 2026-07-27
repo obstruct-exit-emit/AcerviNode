@@ -65,6 +65,22 @@
   font-weight: 500;
 }
 
+.add-download-btn {
+  margin-left: auto;
+  align-self: center;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.add-download-btn:hover {
+  opacity: 0.9;
+}
+
 .settings {
   display: flex;
   flex-direction: column;
@@ -550,4 +566,66 @@ table.detail-files tbody tr:last-child td {
 
 .text-muted {
   color: var(--text-muted);
+}
+
+/* AddDownload */
+.add-download-panel {
+  max-width: 440px;
+}
+
+.protocol-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.add-download-panel form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mode-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.add-download-panel input[type='text'],
+.add-download-panel input[type='file'] {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.add-download-panel input[type='text']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.add-download-panel button[type='submit'] {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+  align-self: flex-start;
+}
+
+.add-download-panel button[type='submit']:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

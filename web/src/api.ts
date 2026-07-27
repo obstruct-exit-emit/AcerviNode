@@ -92,6 +92,31 @@ export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean)
   })
 }
 
+export function addTorrent(
+  apiKey: string,
+  input: { magnet: string; category?: string } | { file: File; category?: string },
+): Promise<Download> {
+  const form = new FormData()
+  if ('magnet' in input) form.set('magnet', input.magnet)
+  else form.set('file', input.file)
+  if (input.category) form.set('category', input.category)
+  // No Content-Type header here on purpose — the browser sets
+  // multipart/form-data with the correct boundary itself when the body is a
+  // FormData; setting it manually would drop the boundary parameter.
+  return request('/api/v1/downloads/torrent', apiKey, { method: 'POST', body: form })
+}
+
+export function addUsenet(
+  apiKey: string,
+  input: { url: string; category?: string } | { file: File; category?: string },
+): Promise<Download> {
+  const form = new FormData()
+  if ('url' in input) form.set('url', input.url)
+  else form.set('file', input.file)
+  if (input.category) form.set('category', input.category)
+  return request('/api/v1/downloads/usenet', apiKey, { method: 'POST', body: form })
+}
+
 export interface ProviderSettings {
   [providerName: string]: { configured: boolean }
 }

@@ -106,6 +106,18 @@ func (db *DB) GetDownloadByHash(ctx context.Context, hash string) (*Download, er
 	return db.scanOneDownload(ctx, `SELECT `+downloadColumns+` FROM downloads WHERE hash = ? AND kind = 'torrent'`, hash)
 }
 
+// GetDownloadByProviderID looks up a download already tracked under a given
+// provider's own download ID — used before inserting a fresh add, since a
+// provider may dedupe by content and return an ID that's already tracked
+// (e.g. TorBox returning the same torrent_id for a magnet whose hash it
+// already has cached under an existing entry), which would otherwise trip
+// the (provider, provider_download_id) UNIQUE constraint.
+func (db *DB) GetDownloadByProviderID(ctx context.Context, provider, providerDownloadID string) (*Download, error) {
+	return db.scanOneDownload(ctx,
+		`SELECT `+downloadColumns+` FROM downloads WHERE provider = ? AND provider_download_id = ?`,
+		provider, providerDownloadID)
+}
+
 // ListDownloads returns every download of the given kind, most recently added first.
 func (db *DB) ListDownloads(ctx context.Context, kind Kind) ([]*Download, error) {
 	rows, err := db.QueryContext(ctx, `SELECT `+downloadColumns+` FROM downloads WHERE kind = ? ORDER BY added_at DESC`, string(kind))
@@ -381,8 +393,8 @@ const downloadColumns = `
 	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
 	retry_count, next_retry_at`
 
-func (db *DB) scanOneDownload(ctx context.Context, query string, arg string) (*Download, error) {
-	row := db.QueryRowContext(ctx, query, arg)
+func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
+	row := db.QueryRowContext(ctx, query, args...)
 	d, err := scanDownload(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
