@@ -99,10 +99,15 @@ type Torrent struct {
 	Files            []TorrentFile `json:"files"`
 }
 
-// ListTorrents returns every torrent on the account.
+// ListTorrents returns every torrent on the account. TorBox's own docs note
+// mylist "only gets updated every 600 seconds" server-side unless asked to
+// bypass that cache — confirmed live (a freshly added torrent was simply
+// absent from an un-bypassed mylist response) — so this always sets
+// bypass_cache, since AcerviNode's whole polling model depends on this
+// endpoint reflecting current state promptly.
 func (c *Client) ListTorrents(ctx context.Context) ([]Torrent, error) {
 	var env envelope[[]Torrent]
-	if err := c.doGet(ctx, "/torrents/mylist", nil, &env); err != nil {
+	if err := c.doGet(ctx, "/torrents/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
@@ -225,10 +230,11 @@ type UsenetDownload struct {
 	Files            []UsenetFile `json:"files"`
 }
 
-// ListUsenetDownloads returns every usenet download on the account.
+// ListUsenetDownloads returns every usenet download on the account. Same
+// bypass_cache reasoning as ListTorrents.
 func (c *Client) ListUsenetDownloads(ctx context.Context) ([]UsenetDownload, error) {
 	var env envelope[[]UsenetDownload]
-	if err := c.doGet(ctx, "/usenet/mylist", nil, &env); err != nil {
+	if err := c.doGet(ctx, "/usenet/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {

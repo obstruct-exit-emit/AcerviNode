@@ -41,9 +41,13 @@ protocol-bridging trick here, TorBox genuinely does usenet downloads.
 ## State mapping
 
 Same approach as the [qBittorrent shim](qbittorrent-api.md): the internal
-`downloads.state` machine (`queued` → `downloading` → `provider_completed` →
-`ready_for_import` → `error`) is translated to SABnzbd's queue/history vocabulary
-only at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`.
+`downloads.state` machine is translated to SABnzbd's queue/history vocabulary only
+at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`. `queued`,
+`downloading`, and `provider_completed` all stay in `/queue` (the latter as
+`Downloading`, since [Completed Download Handling](providers.md#completed-download-handling)
+hasn't fetched the files to local disk yet, and Sonarr's import step needs them
+there first). Only `ready_for_import` moves to `/history` as `Completed`; `error`
+moves there as `Failed`.
 
 ## What's not emulated
 

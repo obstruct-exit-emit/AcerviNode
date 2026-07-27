@@ -1,6 +1,6 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–1 are complete and
+Where the project has been and where it's going. Phases 0–2 are complete and
 verified against the real TorBox API, not just unit-tested. The fine-grained
 record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
@@ -12,7 +12,7 @@ record of every change lives in the [CHANGELOG](CHANGELOG.md).
 |---|---|---|
 | [0 — Foundation](#phase-0--foundation-) | Repo, config, database, CI | ✅ |
 | [1 — TorBox vertical slice](#phase-1--torbox-vertical-slice-) | TorBox provider, qBittorrent shim, SABnzbd shim | ✅ |
-| [2 — Local import](#phase-2--local-import-) | FUSE-style Linux mount, completed-download handling | 💡 |
+| [2 — Completed Download Handling](#phase-2--completed-download-handling-) | Fetch resolved files to local disk once a download is done | ✅ |
 | [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | 💡 |
 | [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
 | [5 — Hardening & release](#phase-5--hardening--release-) | Packaging, systemd unit, Docker, release automation | 💡 |
@@ -41,16 +41,33 @@ record of every change lives in the [CHANGELOG](CHANGELOG.md).
   transitions → resolve a real CDN download link → delete, including a real
   upstream `500` on double-delete handled gracefully
 
-## Phase 2 — Local import 💡
+## Phase 2 — Completed Download Handling ✅
 
-The actual gap standing between "protocol-compatible demo" and "a real decypharr
-replacement": AcerviNode can already tell Sonarr a download finished, but nothing
-yet places the bytes where Sonarr expects them on disk. Testable against the
-TorBox account already in use, unlike Phase 4 below.
+The actual gap standing between "protocol-compatible demo" and a real download
+client: AcerviNode could already tell Sonarr a download finished, but nothing
+placed the bytes where Sonarr expects them on disk. Closed the simple way —
+direct download over HTTP from the provider's resolved link, not a FUSE mount —
+same mechanism a normal download client already uses, just sourced from a debrid
+CDN link instead of BitTorrent/NNTP.
 
-- FUSE-style Linux mount exposing debrid-resolved files as local paths, the way
-  decypharr does, so \*arr apps can complete their normal import step
-- Completed-download handling: rename/organize/cleanup once a download is ready
+- `internal/importer`: background loop (matches LibriNode's own package name and
+  purpose for this) that finds `provider_completed` downloads, resolves each file's
+  link, and streams it to `save_path` (or a configured fallback `download_dir`)
+- Local state only reaches `ready_for_import` once files are actually on disk —
+  before this, both compat shims reported completion the moment the *provider*
+  said done, which was too early for Sonarr's import step to actually find anything
+- Size-check idempotency (skip files already fully written) rather than true
+  HTTP range-resume — deliberately the simpler option for now
+- Verified against the real TorBox API end to end: added a real magnet, watched it
+  reach `provider_completed` (correctly still reported as "downloading" to Sonarr),
+  watched `internal/importer` fetch all 3 real files (subtitle, ~263MB video,
+  poster) to local disk within one tick, verified the video file's actual magic
+  bytes and the subtitle's actual content, watched the state move to
+  `ready_for_import`/"uploading". Along the way, found and fixed a real bug: TorBox's
+  `mylist`/`usenet/mylist` endpoints are server-side cached for up to 600 seconds
+  unless `bypass_cache=true` is passed — without it, a freshly added torrent was
+  invisible to every poll for as long as the cache window lasted. See
+  [Providers](docs/providers.md#completed-download-handling).
 
 ## Phase 3 — Native API & UI 💡
 
@@ -72,6 +89,5 @@ TorBox account already in use, unlike Phase 4 below.
 ## Phase 5 — Hardening & release 💡
 
 - systemd unit, packaged Linux binaries (amd64/arm64) attached to tagged releases
-- Docker image (Linux) — deferred behind the mount work, since the mount is the
-  part that actually needs `/dev/fuse` + `SYS_ADMIN`
+- Docker image (Linux)
 - Windows builds: no committed timeline, same posture as LibriNode

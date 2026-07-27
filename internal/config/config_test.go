@@ -23,6 +23,12 @@ func TestLoad_DefaultsWithNoFile(t *testing.T) {
 	if cfg.APIKey == "" {
 		t.Error("APIKey should be generated when unset, got empty string")
 	}
+	if cfg.DownloadDir != "./downloads" {
+		t.Errorf("DownloadDir = %q, want ./downloads", cfg.DownloadDir)
+	}
+	if cfg.ImportIntervalSeconds != 10 {
+		t.Errorf("ImportIntervalSeconds = %d, want 10", cfg.ImportIntervalSeconds)
+	}
 }
 
 func TestLoad_GeneratedAPIKeysAreUnique(t *testing.T) {
@@ -110,6 +116,31 @@ func TestLoad_InvalidLogLevel(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Error("Load() expected error for invalid log_level, got nil")
+	}
+}
+
+func TestLoad_InvalidImportInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "import_interval_seconds: 0\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid import_interval_seconds, got nil")
+	}
+}
+
+func TestLoad_DownloadDirEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_DOWNLOAD_DIR", "/data/downloads")
+	t.Setenv("ACERVINODE_IMPORT_INTERVAL_SECONDS", "30")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DownloadDir != "/data/downloads" {
+		t.Errorf("DownloadDir = %q, want /data/downloads", cfg.DownloadDir)
+	}
+	if cfg.ImportIntervalSeconds != 30 {
+		t.Errorf("ImportIntervalSeconds = %d, want 30", cfg.ImportIntervalSeconds)
 	}
 }
 

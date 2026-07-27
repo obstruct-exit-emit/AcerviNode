@@ -56,6 +56,24 @@ concern — \*arr apps set them purely to know which local path to watch for
 completed imports, and AcerviNode stores them directly on the `downloads` row. The
 provider interfaces stay protocol-agnostic.
 
+## Completed Download Handling (`internal/importer`)
+
+Neither interface has a "download the bytes to disk" method — that's deliberately
+one level up, in `internal/importer`, built entirely on `Files` and
+`RequestDownloadLink`, which both interfaces already provide. A background loop
+(`Importer.Run`, ticking every `import_interval_seconds`) finds every `downloads`
+row in `provider_completed` state, resolves each file's real link, and streams it
+over plain HTTP to `save_path` (or `download_dir` as a fallback) — the same thing a
+normal download client does, just sourced from a debrid CDN link instead of
+BitTorrent/NNTP. A row only reaches `ready_for_import` once its files are actually
+on disk; both compat shims report `provider_completed` as still "downloading" to
+\*arr apps for exactly this reason — see [qBittorrent API](qbittorrent-api.md) and
+[SABnzbd API](sabnzbd-api.md).
+
+This works identically for any future provider, torrent or usenet, with zero
+changes — it only depends on `Files`/`RequestDownloadLink`, which every provider
+already has to implement.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent
@@ -70,6 +88,14 @@ Torrent endpoints used: `POST /torrents/createtorrent` (magnet or multipart file
 
 Usenet endpoints follow the same shape under a `/usenet/...` path family (add,
 list, request-download-link, control/delete).
+
+**Confirmed live (not just from docs):** `mylist`/`usenet/mylist` is cached
+server-side for up to 600 seconds by default — a freshly added torrent was simply
+absent from the response until `bypass_cache=true` was passed. Both `ListTorrents`
+and `ListUsenetDownloads` always set it, since AcerviNode's whole polling model
+(both compat shims' `refreshFromProvider`, and `internal/importer`'s own ticks)
+depends on this endpoint reflecting current state promptly, not on a 10-minute
+delay.
 
 Exact field names and error envelope are cross-checked against the official
 [`torbox-sdk-go`](https://github.com/TorBox-App/torbox-sdk-go) rather than

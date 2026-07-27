@@ -116,6 +116,27 @@ func (db *DB) ListDownloads(ctx context.Context, kind Kind) ([]*Download, error)
 	return out, rows.Err()
 }
 
+// ListDownloadsByState returns every download (either kind) currently in the
+// given state, oldest first — used by internal/importer to find downloads
+// the provider has finished but that haven't been fetched to local disk yet.
+func (db *DB) ListDownloadsByState(ctx context.Context, state string) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+downloadColumns+` FROM downloads WHERE state = ? ORDER BY added_at`, state)
+	if err != nil {
+		return nil, fmt.Errorf("list downloads by state: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // UpdateDownloadStatus updates a download's local state machine fields.
 func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progress float64, completedAt *time.Time, errorMessage string) error {
 	res, err := db.ExecContext(ctx, `

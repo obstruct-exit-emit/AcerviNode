@@ -138,6 +138,12 @@ func TestListTorrents(t *testing.T) {
 		if got := r.URL.Path; got != "/v1/api/torrents/mylist" {
 			t.Errorf("path = %s", got)
 		}
+		// Regression check: TorBox's mylist is server-side cached for up to
+		// 600s unless bypass_cache is set — confirmed live against a real
+		// account (a just-added torrent was simply absent otherwise).
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
 			"data": []map[string]any{
@@ -220,6 +226,9 @@ func TestCreateUsenetDownload_Link(t *testing.T) {
 
 func TestListUsenetDownloads(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
 			"data": []map[string]any{

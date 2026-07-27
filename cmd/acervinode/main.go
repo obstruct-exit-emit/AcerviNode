@@ -19,6 +19,7 @@ import (
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
 	"github.com/acervinode/acervinode/internal/debrid/torbox"
+	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
 	"github.com/acervinode/acervinode/internal/sabnzbd"
 )
@@ -50,6 +51,9 @@ func run(ctx context.Context) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
+	if err := os.MkdirAll(cfg.DownloadDir, 0o755); err != nil {
+		return fmt.Errorf("create download dir: %w", err)
+	}
 	db, err := database.Open(cfg.DataDir + "/acervinode.db")
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -65,6 +69,15 @@ func run(ctx context.Context) error {
 	// invisible to whoever needs to type it into Sonarr. Set api_key
 	// explicitly once you've picked it, so it survives restarts.
 	slog.Info("api key for the native API and both compat shims", "api_key", cfg.APIKey)
+
+	// Completed Download Handling: fetches provider_completed downloads to
+	// local disk so *arr apps' import step has real files to find. Built
+	// from its own buildProviders() call (a second, independent provider
+	// instance from buildHandler's) — simple and harmless, since a provider
+	// client is just a thin, stateless HTTP wrapper.
+	torrentProvider, usenetProvider, _ := buildProviders(cfg)
+	imp := importer.New(db, torrentProvider, usenetProvider, cfg.DownloadDir)
+	go imp.Run(ctx, time.Duration(cfg.ImportIntervalSeconds)*time.Second)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),

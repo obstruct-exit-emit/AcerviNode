@@ -26,16 +26,25 @@ type Config struct {
 	APIKey    string                    `yaml:"api_key"`
 	LogLevel  string                    `yaml:"log_level"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
+
+	// DownloadDir is where completed files land when the *arr app that added
+	// a download didn't supply its own save_path (see internal/importer).
+	DownloadDir string `yaml:"download_dir"`
+	// ImportIntervalSeconds controls how often internal/importer checks for
+	// provider-completed downloads to fetch to local disk.
+	ImportIntervalSeconds int `yaml:"import_interval_seconds"`
 }
 
 var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
 func defaults() *Config {
 	return &Config{
-		Port:      7846,
-		DataDir:   "./data",
-		LogLevel:  "info",
-		Providers: map[string]ProviderConfig{},
+		Port:                  7846,
+		DataDir:               "./data",
+		LogLevel:              "info",
+		Providers:             map[string]ProviderConfig{},
+		DownloadDir:           "./downloads",
+		ImportIntervalSeconds: 10,
 	}
 }
 
@@ -95,6 +104,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("ACERVINODE_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
+	if v := os.Getenv("ACERVINODE_DOWNLOAD_DIR"); v != "" {
+		cfg.DownloadDir = v
+	}
+	if v := os.Getenv("ACERVINODE_IMPORT_INTERVAL_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ImportIntervalSeconds = n
+		}
+	}
 
 	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
 	const prefix = "ACERVINODE_PROVIDERS_"
@@ -123,6 +140,12 @@ func (c *Config) validate() error {
 	}
 	if !validLogLevels[c.LogLevel] {
 		return fmt.Errorf("invalid log_level %q: must be one of debug, info, warn, error", c.LogLevel)
+	}
+	if c.DownloadDir == "" {
+		return fmt.Errorf("download_dir must not be empty")
+	}
+	if c.ImportIntervalSeconds < 1 {
+		return fmt.Errorf("import_interval_seconds must be at least 1")
 	}
 	return nil
 }

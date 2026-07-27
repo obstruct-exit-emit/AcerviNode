@@ -47,7 +47,10 @@ Settings → Download Clients → Add → qBittorrent:
 
 Grab a release. In AcerviNode's SQLite `downloads` table you should see a new row
 with `kind = 'torrent'` and a `provider_download_id` set once TorBox accepts the
-add. Progress should advance as TorBox's own torrent list reports it.
+add. Progress should advance as TorBox's own torrent list reports it, and once
+TorBox reports it done, `internal/importer` fetches the actual files to
+`save_path` (or `download_dir`) within one `import_interval_seconds` tick — check
+there directly, or wait for Sonarr's own import step to find them.
 
 ## 3b. Point Sonarr at it as a SABnzbd client
 
@@ -60,13 +63,14 @@ Settings → Download Clients → Add → SABnzbd:
   and should succeed
 
 Grab an NZB-eligible release. You should see a `downloads` row with
-`kind = 'usenet'`, tracked through TorBox's usenet service the same way.
+`kind = 'usenet'`, tracked through TorBox's usenet service the same way, with files
+fetched to disk by `internal/importer` the same way once TorBox reports it done.
 
 ## What this doesn't do yet
 
-AcerviNode does not yet place resolved files on local disk for Sonarr's import step
-to pick up — that's the FUSE-style mount decypharr uses, and it's a Linux-specific
-feature tracked as [Phase 4](../ROADMAP.md#phase-4--local-import-) on the roadmap,
-not built in this vertical slice. Today you can confirm the whole pipeline works —
-add, track, resolve a real download URL from TorBox — but the last mile (getting
-bytes onto disk where Sonarr expects them) isn't wired up yet.
+Completed Download Handling ([Providers](providers.md#completed-download-handling))
+closes the gap that used to be here — AcerviNode now places resolved files on local
+disk itself, over plain HTTP, so Sonarr's normal import step has something real to
+find. What's still not built: multi-provider support beyond TorBox (Real-Debrid and
+others, see [Phase 4](../ROADMAP.md#phase-4--multi-provider-)) and the native web
+UI ([Phase 3](../ROADMAP.md#phase-3--native-api--ui-)).

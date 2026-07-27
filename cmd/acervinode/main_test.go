@@ -15,6 +15,7 @@ import (
 
 func TestRun_ShutsDownOnContextCancel(t *testing.T) {
 	t.Setenv("ACERVINODE_DATA_DIR", t.TempDir())
+	t.Setenv("ACERVINODE_DOWNLOAD_DIR", t.TempDir())
 	t.Setenv("ACERVINODE_PORT", freePort(t))
 
 	ctx, cancel := context.WithCancel(context.Background())

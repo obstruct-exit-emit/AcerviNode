@@ -31,11 +31,18 @@ gives AcerviNode a drop-in integration path with zero changes required on the
 
 AcerviNode's internal `downloads.state` column (`queued` → `downloading` →
 `provider_completed` → `ready_for_import` → `error`) is translated to the specific
-qBittorrent state strings \*arr apps pattern-match on (e.g. `downloading`,
-`uploading`, `pausedUP`, `stalledUP`) at the HTTP boundary in
+qBittorrent state strings \*arr apps pattern-match on at the HTTP boundary in
 `internal/qbittorrent/torrents.go` — the internal state machine stays
 provider-agnostic, and only this translation layer needs to know qBittorrent's
-specific vocabulary.
+specific vocabulary:
+
+| Local state | qBittorrent state | Why |
+|---|---|---|
+| `queued` | `queuedDL` | Not yet accepted by the provider |
+| `downloading` | `downloading` | Provider is fetching it |
+| `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling) hasn't fetched the files to local disk yet — reporting `uploading` here would send Sonarr's import step looking for files that don't exist yet |
+| `ready_for_import` | `uploading` | Files are actually on disk; safe to report as complete/seeding |
+| `error` | `error` | Either the provider or Completed Download Handling failed |
 
 ## What's not emulated
 

@@ -126,10 +126,13 @@ func TestSonarrCallSequence(t *testing.T) {
 		t.Errorf("category = %q, want tv-sonarr", items[0].Category)
 	}
 
-	// Second /info poll: fake provider now reports completed.
+	// Second /info poll: fake provider now reports completed, but that only
+	// maps to local "provider_completed" — still "downloading" to Sonarr,
+	// since internal/importer hasn't fetched the files to disk yet (that's
+	// exercised separately in internal/importer's own tests).
 	items = getTorrentInfo(t, client, ts.URL)
-	if len(items) != 1 || items[0].State != "uploading" {
-		t.Fatalf("state after second poll = %+v, want uploading (mapped from provider_completed)", items)
+	if len(items) != 1 || items[0].State != "downloading" {
+		t.Fatalf("state after second poll = %+v, want downloading (provider_completed, not yet imported)", items)
 	}
 
 	// properties

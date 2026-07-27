@@ -13,11 +13,12 @@ AcerviNode speaks the qBittorrent Web API and the SABnzbd API, so your *arr apps
 
 </div>
 
-> 🚧 **Pre-1.0, early vertical slice.** TorBox is the only wired provider so far, but
-> both compat shims work end to end against it: point Sonarr's qBittorrent client or
-> its SABnzbd client at AcerviNode and it adds, tracks, and resolves real downloads.
-> Real-Debrid and other providers, the local mount/import step, and the embedded web
-> UI aren't built yet. See the [roadmap](ROADMAP.md).
+> 🚧 **Pre-1.0.** TorBox is the only wired provider so far, but the full pipeline
+> works end to end against it: point Sonarr's qBittorrent client or its SABnzbd
+> client at AcerviNode and it adds, tracks, resolves, and downloads real files to
+> disk where Sonarr's own import step expects them. Real-Debrid and other
+> providers, and the embedded web UI, aren't built yet. See the
+> [roadmap](ROADMAP.md).
 
 ---
 
@@ -56,6 +57,13 @@ The provider interface is deliberately thin: a new torrent-only provider (like
 Real-Debrid) is a pure addition — no changes to either compat shim, no changes to
 the storage layer.
 
+**📥 Completed Download Handling**
+
+- Once a download finishes on the provider side, `internal/importer` fetches the
+  actual files over plain HTTP and writes them to `save_path` — the same thing a
+  normal download client does, just sourced from a debrid CDN link instead of
+  BitTorrent/NNTP. No FUSE, no Linux-only mount — this runs the same on Windows.
+
 **🗄️ Storage**
 
 - SQLite (pure Go, no cgo) — one `downloads` table shared by both shims, tracking
@@ -73,8 +81,9 @@ Then open `http://localhost:7846`. Full steps, including pointing Sonarr at
 AcerviNode as either a qBittorrent or a SABnzbd client:
 [Installation](docs/installation.md) · [Quickstart](docs/quickstart.md).
 
-> Docker, Windows builds, and the local mount/import step are on hold for now (see
-> the [roadmap](ROADMAP.md)) — this is a Linux-first tool, same as LibriNode.
+> Docker and packaged Windows builds are on hold for now (see the
+> [roadmap](ROADMAP.md)) — production deployment targets Linux, same as LibriNode,
+> though every feature runs the same on Windows for local development.
 
 ## Documentation
 
@@ -97,6 +106,8 @@ AcerviNode as either a qBittorrent or a SABnzbd client:
   interfaces; `internal/debrid/torbox` is the first concrete implementation
 - **Compat shims:** `internal/qbittorrent` and `internal/sabnzbd` each translate a
   real \*arr download-client protocol onto the provider interfaces
+- **Completed Download Handling:** `internal/importer` fetches finished downloads'
+  files to local disk over plain HTTP — no FUSE, no Linux-only mount
 - **Default port:** `7846` · **License:** GPL-3.0
 
 ## Security

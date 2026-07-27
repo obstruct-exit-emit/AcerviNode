@@ -114,23 +114,19 @@ func TestSonarrCallSequence(t *testing.T) {
 		t.Errorf("cat = %q, want tv-sonarr", slot.Cat)
 	}
 
-	// Second /queue poll: fake provider now reports completed, so the item
-	// should have left the queue entirely.
+	// Second /queue poll: fake provider now reports completed. That's still
+	// "Downloading" from Sonarr's perspective — internal/importer (not
+	// wired into this shim-only test, see internal/importer's own tests)
+	// is what would fetch the files to disk and move it to history.
 	queue = getQueue(t, ts.URL)
-	if len(queue.Queue.Slots) != 0 {
-		t.Fatalf("queue after completion = %+v, want empty", queue.Queue.Slots)
+	if len(queue.Queue.Slots) != 1 || queue.Queue.Slots[0].Status != "Downloading" {
+		t.Fatalf("queue after provider-completion = %+v, want one Downloading slot (provider_completed, not yet imported)", queue.Queue.Slots)
 	}
 
-	// It should now show up in history as completed.
+	// history stays empty — nothing has reached ready_for_import yet.
 	hist := getHistory(t, ts.URL)
-	if len(hist.History.Slots) != 1 {
-		t.Fatalf("history = %d slots, want 1", len(hist.History.Slots))
-	}
-	if hist.History.Slots[0].Status != "Completed" {
-		t.Errorf("history status = %q, want Completed", hist.History.Slots[0].Status)
-	}
-	if hist.History.Slots[0].NzoID != nzoID {
-		t.Errorf("history nzo_id = %q, want %q", hist.History.Slots[0].NzoID, nzoID)
+	if len(hist.History.Slots) != 0 {
+		t.Fatalf("history = %+v, want empty (nothing imported yet)", hist.History.Slots)
 	}
 }
 

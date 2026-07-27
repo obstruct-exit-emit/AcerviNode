@@ -15,10 +15,10 @@ type historySlot struct {
 	FailMessage string `json:"fail_message"`
 }
 
-// handleHistory implements mode=history: everything in a terminal state
-// (completed or failed). AcerviNode's "ready_for_import" isn't reachable yet
-// in this vertical slice (see ROADMAP.md) but is treated the same as
-// provider_completed here for forward compatibility.
+// handleHistory implements mode=history: only downloads that are actually
+// done — ready_for_import (files fetched to local disk by internal/importer)
+// or error. provider_completed stays in the queue (see handleQueue) since
+// the provider being done isn't the same as AcerviNode being done.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rows, err := s.db.ListDownloads(ctx, database.KindUsenet)
@@ -31,7 +31,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	slots := make([]historySlot, 0, len(rows))
 	for _, d := range rows {
 		switch d.State {
-		case database.StateProviderCompleted, database.StateReadyForImport:
+		case database.StateReadyForImport:
 			slots = append(slots, historySlot{
 				NzoID: d.ID, Name: d.Name, Category: d.Category,
 				Status: "Completed", Storage: d.SavePath,

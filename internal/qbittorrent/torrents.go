@@ -173,6 +173,14 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 	}
 
 	for _, d := range rows {
+		// Once internal/importer has moved a row to ready_for_import (files
+		// actually on disk), the provider's own state is no longer
+		// authoritative for it — TorBox still reporting "completed" must not
+		// regress the row back to provider_completed.
+		if d.State == database.StateReadyForImport {
+			continue
+		}
+
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
 			continue
@@ -181,11 +189,10 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 		if newState == d.State && st.Progress == d.Progress {
 			continue
 		}
+		// completed_at is set once files are actually on disk
+		// (internal/importer), not merely when the provider reports done —
+		// so it isn't touched here.
 		var completedAt *time.Time
-		if newState == database.StateProviderCompleted {
-			now := time.Now().UTC()
-			completedAt = &now
-		}
 		if err := s.db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, completedAt, ""); err != nil {
 			slog.Error("qbittorrent: update download status failed", "id", d.ID, "error", err)
 			continue
@@ -319,13 +326,18 @@ func toTorrentInfo(d *database.Download) torrentInfo {
 
 // qbtState translates AcerviNode's local state machine to the qBittorrent
 // state vocabulary *arr apps pattern-match on. See docs/qbittorrent-api.md.
+//
+// provider_completed deliberately still reports as "downloading" — the
+// provider is done, but internal/importer hasn't fetched the files to local
+// disk yet, and Sonarr's import step would find nothing if told otherwise.
+// Only ready_for_import (files actually on disk) is a real "uploading".
 func qbtState(local string) string {
 	switch local {
 	case database.StateQueued:
 		return "queuedDL"
-	case database.StateDownloading:
+	case database.StateDownloading, database.StateProviderCompleted:
 		return "downloading"
-	case database.StateProviderCompleted, database.StateReadyForImport:
+	case database.StateReadyForImport:
 		return "uploading"
 	case database.StateError:
 		return "error"
@@ -335,9 +347,10 @@ func qbtState(local string) string {
 }
 
 // localState translates a provider's DownloadState into AcerviNode's local
-// state machine. "provider_completed" is the terminal state this vertical
-// slice reaches — "ready_for_import" belongs to the not-yet-built local
-// mount/import phase (see ROADMAP.md).
+// state machine. This function only ever produces "provider_completed", never
+// "ready_for_import" — that transition happens once internal/importer has
+// actually fetched the files to local disk, not merely when the provider
+// says it's done.
 func localState(s debrid.DownloadState) string {
 	switch s {
 	case debrid.StateQueued:

@@ -11,6 +11,8 @@ units without a mounted config file.
 | `data_dir` | `ACERVINODE_DATA_DIR` | `./data` | Where the SQLite database file lives |
 | `api_key` | `ACERVINODE_API_KEY` | *(generated on first run)* | Key required by the native `/api/v1` endpoints, and by default the key the SABnzbd shim's `apikey` param is checked against |
 | `log_level` | `ACERVINODE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path` |
+| `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `10` | How often `internal/importer` checks for provider-completed downloads to fetch to local disk |
 | `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call |
 
 ## Example
@@ -18,6 +20,7 @@ units without a mounted config file.
 ```yaml
 port: 7846
 data_dir: /var/lib/acervinode
+download_dir: /var/lib/acervinode/downloads
 log_level: info
 providers:
   torbox:
@@ -35,7 +38,12 @@ rather than erroring.
 
 ## Categories and save paths
 
-*arr apps set a category on every add (`tv-sonarr`, `radarr`, ...) purely so they
-know which import path to watch. AcerviNode stores whatever category and save path
-the calling app sends and echoes it straight back — there's no category-to-path
-mapping to configure on AcerviNode's side.
+*arr apps set a category on every add (`tv-sonarr`, `radarr`, ...) and, for the
+qBittorrent shim, generally rely on the category's own configured path rather than
+sending an explicit `save_path`. AcerviNode stores whatever category and save path
+the calling app does send, and Completed Download Handling
+([Providers](providers.md#completed-download-handling)) writes fetched files there
+— falling back to `download_dir` (organized as `<download_dir>/<category>/<name>/`)
+when no save path was supplied. There's no category-to-path mapping to configure
+separately on AcerviNode's side; whatever path arrives with the add request (or the
+fallback) is where files land.
