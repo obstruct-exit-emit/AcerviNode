@@ -112,30 +112,11 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		Name:               status.Name,
 		Category:           category,
 		SizeBytes:          status.SizeBytes,
-		State:              localState(status.State),
+		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
 	}
 	if err := s.db.InsertDownload(ctx, d); err != nil {
 		return "", err
 	}
 	return d.ID, nil
-}
-
-// localState mirrors internal/qbittorrent's mapping — kept as an unexported
-// duplicate rather than a shared helper, since the two shims' local state
-// vocabularies are meant to stay decoupled from each other, not just from
-// their respective providers.
-func localState(s debrid.DownloadState) string {
-	switch s {
-	case debrid.StateQueued:
-		return database.StateQueued
-	case debrid.StateDownloading:
-		return database.StateDownloading
-	case debrid.StateCompleted:
-		return database.StateProviderCompleted
-	case debrid.StateError:
-		return database.StateError
-	default:
-		return database.StateQueued
-	}
 }

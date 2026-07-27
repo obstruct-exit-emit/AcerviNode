@@ -77,6 +77,22 @@ CDN link instead of BitTorrent/NNTP.
   timing: drove three simulated failures and watched the wait grow each time,
   and separately confirmed a row stops retrying and lands in `error` once the
   limit is hit.
+- **Proactive status refresh** (added as a follow-on): status sync from provider
+  to local state used to happen *only* reactively — when an *arr app polled
+  `GET /api/v2/torrents/info` or `mode=queue`. Watching only the native API/web
+  UI (neither touches a provider) could leave a finished download looking stuck
+  at "queued" indefinitely. `Importer.refreshStatuses` now runs this same sync
+  proactively on every tick for both kinds, so a download is picked up within
+  one `import_interval_seconds` tick of the provider reflecting it, regardless
+  of whether anything is polling. The sync logic itself (`RefreshFromProvider`,
+  `LocalStateFromProvider`) moved from being duplicated per compat shim to one
+  shared home in `internal/database`, so all three callers agree on how a
+  provider's state maps to AcerviNode's own. Verified live end to end with zero
+  *arr-shim polling: added a real magnet, watched only the read-only native API,
+  and saw it reach `ready_for_import` entirely on the importer's own tick — also
+  confirmed via direct TorBox API calls that the *remaining* delay is TorBox's
+  own `mylist` taking a few minutes to index a brand-new torrent, not anything
+  on AcerviNode's side.
 
 ## Phase 3 — Native API & UI ✅
 

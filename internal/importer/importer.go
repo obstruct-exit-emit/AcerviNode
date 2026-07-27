@@ -7,6 +7,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,11 +21,14 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// fileResolver is the subset of debrid.TorrentProvider and
-// debrid.UsenetProvider the importer needs. Both interfaces already share
-// this exact method shape (see internal/debrid), so either provider type
-// satisfies it without any adapter code.
-type fileResolver interface {
+// provider is the subset of debrid.TorrentProvider and debrid.UsenetProvider
+// the importer needs: List to proactively refresh status (see
+// refreshStatuses), Files/RequestDownloadLink to actually fetch a completed
+// download's bytes. Both interfaces already share this exact method shape
+// (see internal/debrid), so either provider type satisfies it without any
+// adapter code.
+type provider interface {
+	List(ctx context.Context) ([]debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 }
@@ -35,12 +39,12 @@ type fileResolver interface {
 // one lever (MaxRetries) that's actually worth exposing.
 const maxBackoff = time.Hour
 
-// Importer periodically scans for provider_completed downloads and fetches
-// their files to local disk.
+// Importer periodically refreshes every tracked download's status from its
+// provider and fetches provider_completed downloads' files to local disk.
 type Importer struct {
 	db              *database.DB
-	torrentProvider fileResolver // nil if no torrent-capable provider is configured
-	usenetProvider  fileResolver // nil if no usenet-capable provider is configured
+	torrentProvider provider // nil if no torrent-capable provider is configured
+	usenetProvider  provider // nil if no usenet-capable provider is configured
 	downloadDir     string
 	interval        time.Duration // also the backoff base: attempt N waits ~interval*2^N
 	maxRetries      int
@@ -51,12 +55,13 @@ type Importer struct {
 // isn't configured (see cmd/acervinode's buildProviders) — downloads of that
 // kind are simply skipped with a logged error rather than crashing. Callers
 // pass their concrete debrid.TorrentProvider/debrid.UsenetProvider values
-// directly; both satisfy fileResolver structurally since it's a subset of
-// each. downloadDir is the fallback destination when a download has no
-// save_path. interval is both the tick period and the backoff base;
-// maxRetries is how many failed attempts a download gets before it's moved
-// to StateError instead of retried again.
-func New(db *database.DB, torrentProvider fileResolver, usenetProvider fileResolver, downloadDir string, interval time.Duration, maxRetries int) *Importer {
+// directly; both satisfy provider structurally since it's a subset of each.
+// downloadDir is the fallback destination when a download has no save_path.
+// interval is the tick period (also the backoff base and the proactive
+// status-refresh cadence — see refreshStatuses); maxRetries is how many
+// failed attempts a download gets before it's moved to StateError instead of
+// retried again.
+func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
 	return &Importer{
 		db:              db,
 		torrentProvider: torrentProvider,
@@ -84,11 +89,17 @@ func (im *Importer) Run(ctx context.Context) {
 	}
 }
 
-// Tick processes every provider_completed download whose next_retry_at has
-// passed (or was never set), once each. A failure is handled by
+// Tick first refreshes every tracked download's status from its provider
+// (see refreshStatuses), then processes every provider_completed download
+// whose next_retry_at has passed (or was never set), once each — including
+// any row refreshStatuses itself just moved into provider_completed this
+// same tick, so a download that finishes between polls is fetched within one
+// tick instead of waiting for the next one. A failure is handled by
 // handleFailure — backed off and retried, or given up on — rather than left
 // to retry on every single tick forever.
 func (im *Importer) Tick(ctx context.Context) error {
+	im.refreshStatuses(ctx)
+
 	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("list downloads due for retry: %w", err)
@@ -99,6 +110,46 @@ func (im *Importer) Tick(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// refreshStatuses proactively syncs every queued/downloading row's local
+// state against its provider — the same sync each compat shim already does
+// reactively when an *arr app polls /info or mode=queue (see
+// internal/qbittorrent and internal/sabnzbd's own refreshFromProvider), but
+// run on im.interval regardless of whether anything is actively polling
+// right now. Without this, a download only ever progressed when something
+// external happened to poll — including never, if nothing but the native API
+// or web UI (which don't touch the provider at all) is watching it — so it
+// could sit looking stuck long after the provider actually finished. See
+// docs/providers.md#completed-download-handling.
+func (im *Importer) refreshStatuses(ctx context.Context) {
+	im.refreshKind(ctx, database.KindTorrent, im.torrentProvider)
+	im.refreshKind(ctx, database.KindUsenet, im.usenetProvider)
+}
+
+func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provider) {
+	if p == nil {
+		return
+	}
+	rows, err := im.db.ListDownloads(ctx, kind)
+	if err != nil {
+		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	statuses, err := p.List(ctx)
+	if err != nil {
+		// Not yet configured is routine (e.g. no TorBox key set yet) and
+		// would otherwise log an error every single tick — everything else
+		// is worth surfacing.
+		if !errors.Is(err, debrid.ErrNoProvider) {
+			slog.Error("importer: provider list failed", "kind", kind, "error", err)
+		}
+		return
+	}
+	im.db.RefreshFromProvider(ctx, rows, statuses)
 }
 
 // handleFailure records a failed attempt: either schedules the next retry
@@ -144,21 +195,21 @@ func (im *Importer) backoff(attempt int) time.Duration {
 }
 
 func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
-	var provider fileResolver
+	var p provider
 	switch d.Kind {
 	case database.KindTorrent:
-		provider = im.torrentProvider
+		p = im.torrentProvider
 	case database.KindUsenet:
-		provider = im.usenetProvider
+		p = im.usenetProvider
 	default:
 		return fmt.Errorf("unknown kind %q", d.Kind)
 	}
-	if provider == nil {
+	if p == nil {
 		return fmt.Errorf("no provider configured for kind %q", d.Kind)
 	}
 
 	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
-	files, err := provider.Files(ctx, id)
+	files, err := p.Files(ctx, id)
 	if err != nil {
 		return fmt.Errorf("list files: %w", err)
 	}
@@ -169,7 +220,7 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 
 	for _, f := range files {
-		if err := im.fetchFile(ctx, provider, id, f, destDir); err != nil {
+		if err := im.fetchFile(ctx, p, id, f, destDir); err != nil {
 			return fmt.Errorf("fetch file %q: %w", f.Path, err)
 		}
 	}
@@ -186,7 +237,7 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 // skipping files already present at the expected size (the idempotency
 // story for this version — a resumed download re-fetches a partial file
 // from scratch rather than range-resuming it).
-func (im *Importer) fetchFile(ctx context.Context, provider fileResolver, id debrid.ProviderDownloadID, f debrid.DownloadFile, destDir string) error {
+func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.ProviderDownloadID, f debrid.DownloadFile, destDir string) error {
 	destPath, err := safeJoin(destDir, f.Path)
 	if err != nil {
 		return err
@@ -200,7 +251,7 @@ func (im *Importer) fetchFile(ctx context.Context, provider fileResolver, id deb
 		return fmt.Errorf("create directory: %w", err)
 	}
 
-	link, err := provider.RequestDownloadLink(ctx, id, f.ProviderFileID)
+	link, err := p.RequestDownloadLink(ctx, id, f.ProviderFileID)
 	if err != nil {
 		return fmt.Errorf("resolve download link: %w", err)
 	}

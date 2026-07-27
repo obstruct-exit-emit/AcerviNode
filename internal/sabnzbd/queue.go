@@ -5,55 +5,22 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
-	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 // refreshFromProvider syncs every tracked usenet download's local state
-// against one provider List() call, mirroring internal/qbittorrent's
-// approach — a single bulk request rather than one Status() call per row.
+// against one provider List() call. See database.RefreshFromProvider, which
+// this and internal/importer's own proactive background refresh both share,
+// so an *arr app polling here still gets the freshest possible view even
+// between importer ticks.
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) {
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
 		return
 	}
-	byID := make(map[string]debrid.DownloadStatus, len(statuses))
-	for _, st := range statuses {
-		byID[string(st.ID)] = st
-	}
-
-	for _, d := range rows {
-		// Once internal/importer has moved a row to ready_for_import (files
-		// actually on disk), the provider's own state is no longer
-		// authoritative for it — TorBox still reporting "completed" must not
-		// regress the row back to provider_completed.
-		if d.State == database.StateReadyForImport {
-			continue
-		}
-
-		st, ok := byID[d.ProviderDownloadID]
-		if !ok {
-			continue
-		}
-		newState := localState(st.State)
-		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes {
-			continue
-		}
-		// completed_at is set once files are actually on disk
-		// (internal/importer), not merely when the provider reports done —
-		// so it isn't touched here.
-		var completedAt *time.Time
-		if err := s.db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, completedAt, ""); err != nil {
-			slog.Error("sabnzbd: update download status failed", "id", d.ID, "error", err)
-			continue
-		}
-		d.State = newState
-		d.Progress = st.Progress
-		d.SizeBytes = st.SizeBytes
-	}
+	s.db.RefreshFromProvider(ctx, rows, statuses)
 }
 
 type queueSlot struct {

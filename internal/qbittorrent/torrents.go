@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -119,7 +118,7 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		Category:           category,
 		SavePath:           savePath,
 		SizeBytes:          status.SizeBytes,
-		State:              localState(status.State),
+		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
 	}
 	if d.Name == "" {
@@ -161,46 +160,16 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 // refreshFromProvider syncs every row's local state against one provider
 // List() call — a single bulk request rather than one Status() call per row.
+// See database.RefreshFromProvider, which this and internal/importer's own
+// proactive background refresh both share, so an *arr app polling here still
+// gets the freshest possible view even between importer ticks.
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) {
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("qbittorrent: provider list failed", "error", err)
 		return
 	}
-	byID := make(map[string]debrid.DownloadStatus, len(statuses))
-	for _, st := range statuses {
-		byID[string(st.ID)] = st
-	}
-
-	for _, d := range rows {
-		// Once internal/importer has moved a row to ready_for_import (files
-		// actually on disk), the provider's own state is no longer
-		// authoritative for it — TorBox still reporting "completed" must not
-		// regress the row back to provider_completed.
-		if d.State == database.StateReadyForImport {
-			continue
-		}
-
-		st, ok := byID[d.ProviderDownloadID]
-		if !ok {
-			continue
-		}
-		newState := localState(st.State)
-		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes {
-			continue
-		}
-		// completed_at is set once files are actually on disk
-		// (internal/importer), not merely when the provider reports done —
-		// so it isn't touched here.
-		var completedAt *time.Time
-		if err := s.db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, completedAt, ""); err != nil {
-			slog.Error("qbittorrent: update download status failed", "id", d.ID, "error", err)
-			continue
-		}
-		d.State = newState
-		d.Progress = st.Progress
-		d.SizeBytes = st.SizeBytes
-	}
+	s.db.RefreshFromProvider(ctx, rows, statuses)
 }
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
@@ -344,26 +313,6 @@ func qbtState(local string) string {
 		return "error"
 	default:
 		return "unknown"
-	}
-}
-
-// localState translates a provider's DownloadState into AcerviNode's local
-// state machine. This function only ever produces "provider_completed", never
-// "ready_for_import" — that transition happens once internal/importer has
-// actually fetched the files to local disk, not merely when the provider
-// says it's done.
-func localState(s debrid.DownloadState) string {
-	switch s {
-	case debrid.StateQueued:
-		return database.StateQueued
-	case debrid.StateDownloading:
-		return database.StateDownloading
-	case debrid.StateCompleted:
-		return database.StateProviderCompleted
-	case debrid.StateError:
-		return database.StateError
-	default:
-		return database.StateQueued
 	}
 }
 

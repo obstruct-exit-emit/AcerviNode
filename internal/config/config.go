@@ -30,8 +30,11 @@ type Config struct {
 	// DownloadDir is where completed files land when the *arr app that added
 	// a download didn't supply its own save_path (see internal/importer).
 	DownloadDir string `yaml:"download_dir"`
-	// ImportIntervalSeconds controls how often internal/importer checks for
-	// provider-completed downloads to fetch to local disk.
+	// ImportIntervalSeconds controls how often internal/importer ticks: it
+	// proactively refreshes every tracked download's status from its
+	// provider (rather than waiting on an *arr app to poll one of the compat
+	// shims — see refreshStatuses) and checks for provider-completed
+	// downloads to fetch to local disk.
 	ImportIntervalSeconds int `yaml:"import_interval_seconds"`
 	// ImportMaxRetries is how many times internal/importer retries a failed
 	// fetch (with exponential backoff between attempts, based on

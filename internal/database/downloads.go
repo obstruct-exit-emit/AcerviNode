@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 // Kind distinguishes the two compat shims' rows in the shared downloads table.
@@ -223,6 +226,78 @@ func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progre
 		return fmt.Errorf("update download status %s: %w", id, err)
 	}
 	return checkRowsAffected(res, id)
+}
+
+// LocalStateFromProvider translates a debrid provider's own DownloadState
+// into AcerviNode's local state machine (see the State* constants above) —
+// shared by both compat shims and internal/importer so all three interpret a
+// provider's state identically. This never produces StateReadyForImport:
+// that transition only happens once internal/importer has actually fetched a
+// download's files to local disk, not merely when the provider says it's
+// done.
+func LocalStateFromProvider(s debrid.DownloadState) string {
+	switch s {
+	case debrid.StateQueued:
+		return StateQueued
+	case debrid.StateDownloading:
+		return StateDownloading
+	case debrid.StateCompleted:
+		return StateProviderCompleted
+	case debrid.StateError:
+		return StateError
+	default:
+		return StateQueued
+	}
+}
+
+// RefreshFromProvider updates every row in rows whose provider-reported
+// state, progress, or size has changed, using one bulk statuses slice (a
+// single provider List() call) rather than a Status() call per row. Mutates
+// both the database and the rows themselves in place, so callers see current
+// values immediately without a re-query.
+//
+// Shared by both compat shims (called reactively on every /info or
+// mode=queue poll from an *arr app) and internal/importer (called
+// proactively on its own background tick) — see
+// docs/providers.md#completed-download-handling for why a single proactive
+// poller was added: without it, a download only ever progressed when
+// something external happened to poll, which could leave it looking stuck
+// for a long time with nothing polling at all (e.g. only the web UI open,
+// which never triggers a provider refresh on its own).
+func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus) {
+	byID := make(map[string]debrid.DownloadStatus, len(statuses))
+	for _, st := range statuses {
+		byID[string(st.ID)] = st
+	}
+
+	for _, d := range rows {
+		// Once internal/importer has moved a row to ready_for_import (files
+		// actually on disk), the provider's own state is no longer
+		// authoritative for it — TorBox still reporting "completed" must not
+		// regress the row back to provider_completed.
+		if d.State == StateReadyForImport {
+			continue
+		}
+
+		st, ok := byID[d.ProviderDownloadID]
+		if !ok {
+			continue
+		}
+		newState := LocalStateFromProvider(st.State)
+		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes {
+			continue
+		}
+		// completed_at is set once files are actually on disk
+		// (internal/importer), not merely when the provider reports done —
+		// so it isn't touched here.
+		if err := db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, nil, ""); err != nil {
+			slog.Error("database: refresh from provider failed", "id", d.ID, "error", err)
+			continue
+		}
+		d.State = newState
+		d.Progress = st.Progress
+		d.SizeBytes = st.SizeBytes
+	}
 }
 
 // DeleteDownload removes a download and its files (files cascade via FK).

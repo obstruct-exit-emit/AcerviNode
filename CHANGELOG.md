@@ -17,9 +17,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   capture a static copy of `cfg.APIKey` at startup — every auth check now
   reads it live from a shared `Settings.APIKey()`/`apiKeySource`, which is what
   makes regenerating the key (see below) apply everywhere immediately.
+- `internal/qbittorrent` and `internal/sabnzbd`'s near-identical
+  `refreshFromProvider`/`localState` logic moved to `database.RefreshFromProvider`
+  and `database.LocalStateFromProvider`, one shared implementation both shims
+  (and now `internal/importer`, see below) call instead of duplicating.
 
 ### Added
 
+- `internal/importer`: a new `refreshStatuses` step runs on every tick,
+  proactively syncing every tracked download's status from its provider —
+  previously this only ever happened reactively, when an *arr app polled one
+  of the compat shims, so a download watched only through the native API or
+  web UI could sit looking "queued" indefinitely even after the provider
+  finished it. Verified live: added a real magnet, watched only the read-only
+  native API (no shim polling at all), and saw it reach `ready_for_import` on
+  the importer's own tick.
 - `internal/api`: `GET /api/v1/settings/general` (AcerviNode's own port, data
   dir, download dir, log level, import settings, and its own `api_key` in
   plaintext) and `POST /api/v1/settings/api-key/regenerate` (replaces the key,

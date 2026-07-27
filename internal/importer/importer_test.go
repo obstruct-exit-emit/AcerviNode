@@ -14,13 +14,24 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// fakeProvider is a minimal fileResolver backed by an httptest.Server
-// standing in for a debrid CDN — real HTTP round trips, no network.
+// fakeProvider is a minimal provider backed by an httptest.Server standing
+// in for a debrid CDN — real HTTP round trips, no network.
 type fakeProvider struct {
 	cdn         *httptest.Server
 	files       []debrid.DownloadFile
 	failLinks   map[string]bool // fileID -> force RequestDownloadLink to fail
 	requestedAt []string        // fileIDs RequestDownloadLink was called for, in order
+	statuses    []debrid.DownloadStatus
+	listErr     error
+	listCalls   int
+}
+
+func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) {
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.statuses, nil
 }
 
 func (f *fakeProvider) Files(_ context.Context, _ debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
@@ -385,6 +396,138 @@ func TestTick_RejectsPathTraversal(t *testing.T) {
 	}
 	if got.State != database.StateProviderCompleted {
 		t.Errorf("state = %q, want provider_completed (rejected, left for investigation)", got.State)
+	}
+}
+
+// TestTick_ProactivelyRefreshesAndFetchesWithinOneTick proves the actual
+// point of refreshStatuses: a row still sitting in StateQueued/StateDownloading
+// is synced against the provider's List() *and* has its files fetched to
+// ready_for_import within the same Tick call, without anything external
+// (an *arr app polling /info, or a person hitting the qBittorrent shim) ever
+// touching it — previously this could only ever happen reactively, so a
+// download watched only through the native API/web UI could sit looking
+// "queued" indefinitely even after the provider finished it.
+func TestTick_ProactivelyRefreshesAndFetchesWithinOneTick(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("movie bytes"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn: cdn,
+		files: []debrid.DownloadFile{
+			{ProviderFileID: "1", Path: "movie.mkv", SizeBytes: int64(len("movie bytes"))},
+		},
+		statuses: []debrid.DownloadStatus{
+			{ID: "provider-6", State: debrid.StateCompleted, Progress: 1, SizeBytes: 12345},
+		},
+	}
+
+	destDir := t.TempDir()
+	d := &database.Download{
+		ID: "dl-6", Provider: "fake", ProviderDownloadID: "provider-6", Kind: database.KindTorrent,
+		Hash: "proactive1", Name: "Proactive", SavePath: destDir, State: database.StateQueued,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateReadyForImport {
+		t.Errorf("state = %q, want ready_for_import (refresh + fetch in one tick)", got.State)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "movie.mkv")); err != nil {
+		t.Errorf("expected file fetched within the same tick: %v", err)
+	}
+}
+
+// TestTick_RefreshDoesNotRegressReadyForImport proves a row already marked
+// ready_for_import stays that way even if the provider is still reporting an
+// earlier state (e.g. its own cache hasn't caught up yet) — matches
+// database.RefreshFromProvider's own guarantee, exercised here through the
+// full Tick path.
+func TestTick_RefreshDoesNotRegressReadyForImport(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{
+		statuses: []debrid.DownloadStatus{
+			{ID: "provider-7", State: debrid.StateDownloading, Progress: 0.5},
+		},
+	}
+
+	d := &database.Download{
+		ID: "dl-7", Provider: "fake", ProviderDownloadID: "provider-7", Kind: database.KindTorrent,
+		Hash: "ready1", Name: "Already Ready", SavePath: t.TempDir(),
+		State: database.StateReadyForImport, Progress: 1,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateReadyForImport {
+		t.Errorf("state = %q, want it to stay ready_for_import", got.State)
+	}
+}
+
+// TestTick_SkipsListCallWhenNothingTracked proves refreshStatuses doesn't
+// waste a provider API call when there's nothing local to refresh — relevant
+// since this now runs proactively on every tick, not just when something's
+// actively polling.
+func TestTick_SkipsListCallWhenNothingTracked(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{}
+	im := New(db, provider, provider, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	if provider.listCalls != 0 {
+		t.Errorf("List() called %d times with nothing tracked, want 0", provider.listCalls)
+	}
+}
+
+// TestTick_ToleratesNoProviderConfiguredDuringRefresh proves a
+// debrid.ErrNoProvider from List() (e.g. no TorBox key set yet) doesn't fail
+// the tick — it's a routine, expected state, not an error worth surfacing on
+// every single tick.
+func TestTick_ToleratesNoProviderConfiguredDuringRefresh(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{listErr: debrid.ErrNoProvider}
+	d := &database.Download{
+		ID: "dl-8", Provider: "fake", ProviderDownloadID: "provider-8", Kind: database.KindTorrent,
+		Hash: "noprovider1", Name: "No Provider Yet", SavePath: t.TempDir(), State: database.StateQueued,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v, want nil even when the provider isn't configured yet", err)
 	}
 }
 

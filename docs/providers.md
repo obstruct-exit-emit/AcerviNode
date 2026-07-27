@@ -83,11 +83,13 @@ Generalize this (and `Settings` in `internal/api`) when a second provider is add
 ## Completed Download Handling (`internal/importer`)
 
 Neither interface has a "download the bytes to disk" method — that's deliberately
-one level up, in `internal/importer`, built entirely on `Files` and
+one level up, in `internal/importer`, built entirely on `List`, `Files`, and
 `RequestDownloadLink`, which both interfaces already provide. A background loop
-(`Importer.Run`, ticking every `import_interval_seconds`) finds every `downloads`
-row in `provider_completed` state, resolves each file's real link, and streams it
-over plain HTTP to `save_path` (or `download_dir` as a fallback) — the same thing a
+(`Importer.Run`, ticking every `import_interval_seconds`) does two things every
+tick: refreshes every tracked download's state from its provider
+(`refreshStatuses`, see below), then finds every `downloads` row now in
+`provider_completed` state and resolves each file's real link, streaming it over
+plain HTTP to `save_path` (or `download_dir` as a fallback) — the same thing a
 normal download client does, just sourced from a debrid CDN link instead of
 BitTorrent/NNTP. A row only reaches `ready_for_import` once its files are actually
 on disk; both compat shims report `provider_completed` as still "downloading" to
@@ -95,8 +97,38 @@ on disk; both compat shims report `provider_completed` as still "downloading" to
 [SABnzbd API](sabnzbd-api.md).
 
 This works identically for any future provider, torrent or usenet, with zero
-changes — it only depends on `Files`/`RequestDownloadLink`, which every provider
-already has to implement.
+changes — it only depends on `List`/`Files`/`RequestDownloadLink`, which every
+provider already has to implement.
+
+### Proactive status refresh
+
+Both compat shims sync a download's local state against the provider
+*reactively* — only when an \*arr app happens to call `GET /api/v2/torrents/info`
+or `mode=queue`. On its own, that meant a download's state only ever advanced
+when something external polled one of those endpoints; watching only the native
+API or web UI (neither of which touches a provider at all) could leave a
+finished download looking permanently "queued", and even an actively-polling
+\*arr app only caught up on its own poll cadence.
+
+`Importer.refreshStatuses` closes that gap: every tick, it calls each configured
+provider's `List` for both kinds and applies the result via
+`database.RefreshFromProvider` — the exact same sync logic both compat shims'
+`refreshFromProvider` call, now shared in one place (`internal/database`) instead
+of duplicated per shim, so all three interpret a provider's state identically.
+Because this runs on `import_interval_seconds` regardless of external polling, a
+download that finishes between polls — or with nothing polling at all — is
+picked up within one tick, and if that same tick moves it into
+`provider_completed`, its files get fetched immediately after, in the same
+`Tick` call. `List` errors are logged, except `debrid.ErrNoProvider` (no key
+configured yet), which is expected and would otherwise spam the log every tick.
+
+This does **not** shrink whatever delay exists on the provider's own side — TorBox's
+`mylist` (even with `bypass_cache=true`, see below) has been observed taking a few
+minutes to index a brand-new torrent, independent of how it's polled. What this
+closes is AcerviNode's own contribution to the delay: previously a finished
+download could sit unnoticed indefinitely with nothing polling; now it's picked
+up within one `import_interval_seconds` tick of the provider actually reflecting
+it, guaranteed.
 
 A fetch that fails (a `Files`/`RequestDownloadLink` call error, or the HTTP
 download itself failing) doesn't retry on every subsequent tick forever, and

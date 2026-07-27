@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 func newTestDownload(kind Kind) *Download {
@@ -316,5 +318,139 @@ func TestListDownloadsDueForRetry(t *testing.T) {
 	}
 	if gotIDs[notYetDue.ID] {
 		t.Errorf("expected %q (next_retry_at in the future) NOT to be due", notYetDue.ID)
+	}
+}
+
+func TestLocalStateFromProvider(t *testing.T) {
+	tests := []struct {
+		in   debrid.DownloadState
+		want string
+	}{
+		{debrid.StateQueued, StateQueued},
+		{debrid.StateDownloading, StateDownloading},
+		{debrid.StateCompleted, StateProviderCompleted},
+		{debrid.StateError, StateError},
+		{debrid.StateUnknown, StateQueued},
+		{debrid.DownloadState("something TorBox invents later"), StateQueued},
+	}
+	for _, tt := range tests {
+		if got := LocalStateFromProvider(tt.in); got != tt.want {
+			t.Errorf("LocalStateFromProvider(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestRefreshFromProvider_UpdatesChangedRows(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateQueued
+	d.Progress = 0
+	d.SizeBytes = 0
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	rows := []*Download{d}
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1, SizeBytes: 999},
+	}
+	db.RefreshFromProvider(ctx, rows, statuses)
+
+	// The in-memory row is updated in place...
+	if d.State != StateProviderCompleted || d.Progress != 1 || d.SizeBytes != 999 {
+		t.Errorf("in-memory row = state:%q progress:%v size:%v, want provider_completed/1/999", d.State, d.Progress, d.SizeBytes)
+	}
+	// ...and so is the persisted one.
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateProviderCompleted || got.Progress != 1 || got.SizeBytes != 999 {
+		t.Errorf("persisted row = state:%q progress:%v size:%v, want provider_completed/1/999", got.State, got.Progress, got.SizeBytes)
+	}
+}
+
+func TestRefreshFromProvider_IgnoresRowsMissingFromStatuses(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateQueued
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	// statuses has no entry at all for d.ProviderDownloadID — e.g. the
+	// provider's list hasn't indexed a freshly-added download yet.
+	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+
+	if d.State != StateQueued {
+		t.Errorf("state = %q, want it left unchanged (queued) when absent from statuses", d.State)
+	}
+}
+
+// TestRefreshFromProvider_NeverRegressesReadyForImport is the guarantee the
+// comment on RefreshFromProvider promises: once internal/importer has moved
+// a row to ready_for_import, the provider's own (possibly stale) state must
+// never move it back.
+func TestRefreshFromProvider_NeverRegressesReadyForImport(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateReadyForImport
+	d.Progress = 1
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.3},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.State != StateReadyForImport {
+		t.Errorf("state = %q, want it to stay ready_for_import", d.State)
+	}
+}
+
+// TestRefreshFromProvider_ToleratesUpdateFailure proves one row's update
+// error (e.g. it was deleted concurrently) doesn't stop the rest of the
+// batch from being processed.
+func TestRefreshFromProvider_ToleratesUpdateFailure(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	good := newTestDownload(KindTorrent)
+	good.State = StateQueued
+	good.ProviderDownloadID = "good"
+	if err := db.InsertDownload(ctx, good); err != nil {
+		t.Fatalf("InsertDownload(good) error = %v", err)
+	}
+
+	// missing was never inserted, so UpdateDownloadStatus will fail with
+	// ErrNotFound for it.
+	missing := newTestDownload(KindTorrent)
+	missing.State = StateQueued
+	missing.ProviderDownloadID = "missing"
+
+	statuses := []debrid.DownloadStatus{
+		{ID: "good", State: debrid.StateCompleted, Progress: 1},
+		{ID: "missing", State: debrid.StateCompleted, Progress: 1},
+	}
+	db.RefreshFromProvider(ctx, []*Download{missing, good}, statuses)
+
+	if good.State != StateProviderCompleted {
+		t.Errorf("good row's state = %q, want provider_completed despite missing row's update failing", good.State)
+	}
+
+	got, err := db.GetDownloadByID(ctx, good.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateProviderCompleted {
+		t.Errorf("good row not persisted: state = %q", got.State)
 	}
 }
