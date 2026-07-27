@@ -151,7 +151,10 @@ CDN link instead of BitTorrent/NNTP.
   `database.GetDownloadByProviderID` and now return the existing row (`200`)
   instead of attempting a duplicate insert. Verified live against the real
   TorBox account: the exact failing scenario now returns the existing tracked
-  download cleanly.
+  download cleanly. A second real bug turned up moments later from an actual
+  NZB upload through the web UI: TorBox's `createusenetdownload` sends
+  `usenetdownload_id` back as a JSON number, not the string the official SDK's
+  docs describe — see [Providers](docs/providers.md#torbox-internaldebridtorbox).
 
 ## Phase 4 — Multi-provider ⏳
 

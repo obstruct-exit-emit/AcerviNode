@@ -92,6 +92,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `internal/debrid/torbox`: `createusenetdownload`'s `usenetdownload_id` is
+  decoded as a JSON number now, not a string — the official SDK's docs say
+  string, but a real account's response doesn't match that, and adding an NZB
+  through the native API's new usenet endpoint failed every time with `json:
+  cannot unmarshal number into Go struct field ...usenetdownload_id of type
+  string`. Found via a real NZB upload through the web UI.
 - `internal/qbittorrent` and `internal/sabnzbd` no longer report a download as
   fully complete the instant the provider says so — only once
   `internal/importer` has actually fetched the files to local disk

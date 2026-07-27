@@ -204,9 +204,12 @@ func TestCreateUsenetDownload_Link(t *testing.T) {
 		if got := r.FormValue("link"); got != "https://example.com/release.nzb" {
 			t.Errorf("link field = %q", got)
 		}
+		// usenetdownload_id is a JSON number in the real API — confirmed live
+		// against a real account; a string here would be unrepresentative of
+		// what TorBox actually returns (see CreateUsenetDownload).
 		json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
-			"data":    map[string]any{"usenetdownload_id": "usenet-99", "hash": "nzbhash"},
+			"data":    map[string]any{"usenetdownload_id": 99, "hash": "nzbhash"},
 		})
 	})
 
@@ -216,8 +219,8 @@ func TestCreateUsenetDownload_Link(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUsenetDownload() error = %v", err)
 	}
-	if id != "usenet-99" {
-		t.Errorf("id = %q, want usenet-99 (string, not numeric-formatted)", id)
+	if id != "99" {
+		t.Errorf("id = %q, want 99 (formatted the same way torrent ids are)", id)
 	}
 	if hash != "nzbhash" {
 		t.Errorf("hash = %q", hash)

@@ -100,7 +100,10 @@ func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 				"download_state": "cached", "progress": 1.0,
 				"files": []map[string]any{{"id": 1.0, "name": "episode.mkv", "size": 4096.0}},
 			})
-			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"usenetdownload_id": "99", "hash": "nzbhash"}})
+			// usenetdownload_id is a JSON number in the real API, matching
+			// mylist's own numeric "id" above — confirmed live (see
+			// CreateUsenetDownload).
+			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"usenetdownload_id": 99, "hash": "nzbhash"}})
 		case "/v1/api/usenet/mylist":
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": downloads})
 		case "/v1/api/usenet/requestdl":

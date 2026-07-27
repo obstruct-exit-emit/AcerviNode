@@ -168,6 +168,12 @@ delay.
 Exact field names and error envelope are cross-checked against the official
 [`torbox-sdk-go`](https://github.com/TorBox-App/torbox-sdk-go) rather than
 guessed — see `internal/debrid/torbox/types.go` for the structs actually in use.
+That said, the SDK's own docs aren't always right either: `createusenetdownload`'s
+`usenetdownload_id` is documented there as a string, but a real account's response
+sends it as a JSON number (found via a real NZB upload failing with `json: cannot
+unmarshal number into Go struct field ...usenetdownload_id of type string`) — same
+numeric shape as a torrent's `torrent_id`, and now decoded/formatted the same way
+(`CreateUsenetDownload`).
 
 ## Adding a new provider
 

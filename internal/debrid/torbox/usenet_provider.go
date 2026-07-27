@@ -39,14 +39,11 @@ func (p *UsenetProvider) AddNZBURL(ctx context.Context, url string, opts debrid.
 }
 
 // idMatches compares a usenet download's list-endpoint numeric id against the
-// string id AcerviNode stored when it was created. TorBox's create response
-// returns "usenetdownload_id" as a string while the list/mylist response
-// returns a numeric "id" — per the official SDK's own struct definitions,
-// this asymmetry is real, not a transcription error here. Formatting the
-// numeric id the same way torrent ids are formatted is the working
-// assumption; if TorBox ever returns a usenetdownload_id that isn't simply
-// that same integer as a string, this comparison needs revisiting against a
-// live account (see docs/providers.md).
+// string id AcerviNode stored when it was created. Both createusenetdownload's
+// "usenetdownload_id" and mylist's "id" are JSON numbers — confirmed live
+// against a real account (the official SDK's docs describe the create
+// response's id as a string, which turned out not to match reality; see
+// CreateUsenetDownload) — so both are formatted the same way torrent ids are.
 func idMatches(numericID float64, wantID string) bool {
 	return formatID(numericID) == wantID
 }

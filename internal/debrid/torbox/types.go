@@ -162,12 +162,19 @@ type CreateUsenetDownloadRequest struct {
 }
 
 type createUsenetDownloadData struct {
-	UsenetDownloadID string `json:"usenetdownload_id"`
-	Hash             string `json:"hash"`
+	UsenetDownloadID float64 `json:"usenetdownload_id"`
+	Hash             string  `json:"hash"`
 }
 
-// CreateUsenetDownload submits an NZB link or file. Unlike torrent IDs,
-// TorBox's usenet download IDs are already strings.
+// CreateUsenetDownload submits an NZB link or file. usenetdownload_id comes
+// back as a JSON number, the same as a torrent's torrent_id — confirmed live
+// against a real account (the official SDK's docs describe it as a string,
+// which doesn't match reality and caused a real decode failure here: "json:
+// cannot unmarshal number into Go struct field ...usenetdownload_id of type
+// string"). Formatted the same way torrent IDs are (formatID) so it's
+// consistent with what ListUsenetDownloads' own numeric id produces — see
+// idMatches in usenet_provider.go, which no longer needs to assume the two
+// match, now that both are derived the same way.
 func (c *Client) CreateUsenetDownload(ctx context.Context, req CreateUsenetDownloadRequest) (id string, hash string, err error) {
 	fields := map[string]string{
 		"link": req.Link,
@@ -180,7 +187,7 @@ func (c *Client) CreateUsenetDownload(ctx context.Context, req CreateUsenetDownl
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
 		return "", "", err
 	}
-	return env.Data.UsenetDownloadID, env.Data.Hash, nil
+	return formatID(env.Data.UsenetDownloadID), env.Data.Hash, nil
 }
 
 // ControlUsenetDownload performs delete/pause/resume on a usenet download.
