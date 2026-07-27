@@ -17,7 +17,7 @@ export function DownloadsTable({ downloads, onDelete }: Props) {
       <thead>
         <tr>
           <th>Name</th>
-          <th>Kind</th>
+          <th>Protocol</th>
           <th>Category</th>
           <th>State</th>
           <th>Progress</th>
@@ -33,7 +33,7 @@ export function DownloadsTable({ downloads, onDelete }: Props) {
               {d.name}
               {d.error_message && <div className="error-message">{d.error_message}</div>}
             </td>
-            <td>{d.kind}</td>
+            <td>{d.protocol}</td>
             <td>{d.category || '—'}</td>
             <td>
               <StateBadge state={d.state} />

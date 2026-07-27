@@ -10,7 +10,7 @@ export interface ProviderStatus {
 export interface Download {
   id: string
   provider: string
-  kind: 'torrent' | 'usenet'
+  protocol: 'torrent' | 'usenet'
   hash?: string
   name: string
   category?: string

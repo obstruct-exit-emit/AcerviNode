@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Native API's `GET /api/v1/downloads[/{id}]` field `kind` is now `protocol`
+  (`torrent`/`usenet`) — reads better to API consumers; the internal Go type
+  stays `database.Kind` (matches `reflect.Kind`'s naming, avoids clashing with
+  Go's `type` keyword). Frontend (`Download.protocol`) and the downloads table's
+  column header updated to match.
+
 ### Added
 
 - Repo bootstrap: README, LICENSE (GPL-3.0), ROADMAP, CI workflow, docs skeleton

@@ -12,10 +12,16 @@ import (
 // clean superset of what's needed by the UI, independent of either compat
 // shim's protocol-specific vocabulary (qBittorrent/SABnzbd state strings
 // never appear here; only AcerviNode's own state machine does).
+//
+// Protocol is named that way externally (JSON, UI) because it reads better
+// to API consumers than the internal Go domain type's name — see
+// database.Kind, which stays as-is internally (matches the standard
+// library's own reflect.Kind naming for "which variant of a thing this is",
+// and avoids "type" clashing with the Go keyword throughout the backend).
 type downloadResponse struct {
 	ID           string  `json:"id"`
 	Provider     string  `json:"provider"`
-	Kind         string  `json:"kind"`
+	Protocol     string  `json:"protocol"`
 	Hash         string  `json:"hash,omitempty"`
 	Name         string  `json:"name"`
 	Category     string  `json:"category,omitempty"`
@@ -43,7 +49,7 @@ func toDownloadResponse(d *database.Download) downloadResponse {
 	return downloadResponse{
 		ID:           d.ID,
 		Provider:     d.Provider,
-		Kind:         string(d.Kind),
+		Protocol:     string(d.Kind),
 		Hash:         d.Hash,
 		Name:         d.Name,
 		Category:     d.Category,
