@@ -33,6 +33,12 @@ type downloadResponse struct {
 	UpdatedAt    string  `json:"updated_at"`
 	CompletedAt  *string `json:"completed_at,omitempty"`
 	ErrorMessage string  `json:"error_message,omitempty"`
+	// RetryCount/NextRetryAt reflect internal/importer's backoff — non-zero
+	// only for a download that has failed at least once and is still being
+	// retried (state stays provider_completed until either it succeeds or
+	// hits the configured max, at which point it moves to error instead).
+	RetryCount  int     `json:"retry_count,omitempty"`
+	NextRetryAt *string `json:"next_retry_at,omitempty"`
 }
 
 type downloadFileResponse struct {
@@ -40,11 +46,18 @@ type downloadFileResponse struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
+const timeFormat = "2006-01-02T15:04:05Z07:00"
+
 func toDownloadResponse(d *database.Download) downloadResponse {
 	var completedAt *string
 	if d.CompletedAt != nil {
-		s := d.CompletedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+		s := d.CompletedAt.UTC().Format(timeFormat)
 		completedAt = &s
+	}
+	var nextRetryAt *string
+	if d.NextRetryAt != nil {
+		s := d.NextRetryAt.UTC().Format(timeFormat)
+		nextRetryAt = &s
 	}
 	return downloadResponse{
 		ID:           d.ID,
@@ -57,10 +70,12 @@ func toDownloadResponse(d *database.Download) downloadResponse {
 		SizeBytes:    d.SizeBytes,
 		State:        d.State,
 		Progress:     d.Progress,
-		AddedAt:      d.AddedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:    d.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		AddedAt:      d.AddedAt.UTC().Format(timeFormat),
+		UpdatedAt:    d.UpdatedAt.UTC().Format(timeFormat),
 		CompletedAt:  completedAt,
 		ErrorMessage: d.ErrorMessage,
+		RetryCount:   d.RetryCount,
+		NextRetryAt:  nextRetryAt,
 	}
 }
 

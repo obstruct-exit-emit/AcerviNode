@@ -18,7 +18,7 @@ Every endpoint except `/health` requires `Authorization: Bearer <api_key>` (see
 | `GET` | `/api/v1/version` | Build version string |
 | `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`) |
 | `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first |
-| `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list |
+| `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `GET` | `/api/v1/settings/providers` | `{"torbox": {"configured": bool}}` — never the actual key, only whether one is set |
 | `PUT` | `/api/v1/settings/providers/torbox` | Body `{"api_key": "..."}` — sets or replaces the TorBox key. Takes effect immediately (no restart) and is persisted to `config.yaml`; see [Providers](providers.md#live-settings) |
@@ -55,6 +55,13 @@ convention for "which variant of a thing this is"). `id` is AcerviNode's own
 identifier,
 not the provider's — use it for `/downloads/{id}` calls, not `hash` or a
 provider ID.
+
+`retry_count` and `next_retry_at` are omitted entirely (not just zero/null) until
+a download has failed at least once — see
+[Providers](providers.md#completed-download-handling) for what sets them.
+`GET /api/v1/downloads/{id}` additionally embeds a `files` array
+(`[{"path": "...", "size_bytes": ...}]`), which the list endpoint omits since it
+would mean an extra query per row for something the table view doesn't show.
 
 ## What's thin here (see [Providers](providers.md) for why)
 

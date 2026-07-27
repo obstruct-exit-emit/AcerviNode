@@ -22,6 +22,17 @@ export interface Download {
   updated_at: string
   completed_at?: string
   error_message?: string
+  retry_count?: number
+  next_retry_at?: string
+}
+
+export interface DownloadFile {
+  path: string
+  size_bytes: number
+}
+
+export interface DownloadDetail extends Download {
+  files: DownloadFile[]
 }
 
 export class ApiError extends Error {
@@ -69,6 +80,10 @@ export function getProviders(apiKey: string): Promise<ProviderStatus[]> {
 
 export function listDownloads(apiKey: string): Promise<Download[]> {
   return request('/api/v1/downloads', apiKey)
+}
+
+export function getDownload(apiKey: string, id: string): Promise<DownloadDetail> {
+  return request(`/api/v1/downloads/${encodeURIComponent(id)}`, apiKey)
 }
 
 export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean): Promise<void> {

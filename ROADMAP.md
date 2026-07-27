@@ -68,6 +68,15 @@ CDN link instead of BitTorrent/NNTP.
   unless `bypass_cache=true` is passed — without it, a freshly added torrent was
   invisible to every poll for as long as the cache window lasted. See
   [Providers](docs/providers.md#completed-download-handling).
+- **Retry/backoff** (added as a follow-on): a fetch failure no longer retries on
+  every tick forever with no limit — `Importer.handleFailure` schedules the next
+  attempt with exponential backoff (`retry_count`/`next_retry_at` on the row,
+  capped at one hour between attempts) and gives up after `import_max_retries`
+  (default 5), moving the download to `error` instead. Surfaced on
+  `GET /api/v1/downloads/{id}` and in the UI's detail view. Verified with real
+  timing: drove three simulated failures and watched the wait grow each time,
+  and separately confirmed a row stops retrying and lands in `error` once the
+  limit is hit.
 
 ## Phase 3 — Native API & UI ✅
 
@@ -95,6 +104,11 @@ CDN link instead of BitTorrent/NNTP.
 - Found and fixed a real bug during manual verification: a `nil` `providers` slice
   marshaled to JSON `null` instead of `[]`, which would have thrown in the UI's
   `providers.length` check — `NewServer` now normalizes it, with a regression test
+- **Per-download detail view** (added as a follow-on): clicking a row in the
+  downloads table opens a panel with full metadata (protocol, provider, hash,
+  save path, size, added/updated/completed timestamps, retry status) and the
+  file list — `DownloadDetail.tsx`, built entirely on the `files` array
+  `GET /api/v1/downloads/{id}` already returned, so this was pure frontend work
 
 ## Phase 4 — Multi-provider ⏳
 

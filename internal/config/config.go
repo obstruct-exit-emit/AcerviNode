@@ -33,6 +33,11 @@ type Config struct {
 	// ImportIntervalSeconds controls how often internal/importer checks for
 	// provider-completed downloads to fetch to local disk.
 	ImportIntervalSeconds int `yaml:"import_interval_seconds"`
+	// ImportMaxRetries is how many times internal/importer retries a failed
+	// fetch (with exponential backoff between attempts, based on
+	// ImportIntervalSeconds) before giving up and moving the download to
+	// StateError.
+	ImportMaxRetries int `yaml:"import_max_retries"`
 }
 
 var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
@@ -45,6 +50,7 @@ func defaults() *Config {
 		Providers:             map[string]ProviderConfig{},
 		DownloadDir:           "./downloads",
 		ImportIntervalSeconds: 10,
+		ImportMaxRetries:      5,
 	}
 }
 
@@ -112,6 +118,11 @@ func applyEnv(cfg *Config) {
 			cfg.ImportIntervalSeconds = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_IMPORT_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ImportMaxRetries = n
+		}
+	}
 
 	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
 	const prefix = "ACERVINODE_PROVIDERS_"
@@ -146,6 +157,9 @@ func (c *Config) validate() error {
 	}
 	if c.ImportIntervalSeconds < 1 {
 		return fmt.Errorf("import_interval_seconds must be at least 1")
+	}
+	if c.ImportMaxRetries < 1 {
+		return fmt.Errorf("import_max_retries must be at least 1")
 	}
 	return nil
 }

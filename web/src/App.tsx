@@ -12,6 +12,7 @@ import {
   type ProviderStatus,
 } from './api'
 import { ApiKeyGate } from './components/ApiKeyGate'
+import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
@@ -29,6 +30,7 @@ export default function App() {
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [downloads, setDownloads] = useState<Download[]>([])
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const handleUnauthorized = useCallback(() => {
     clearStoredApiKey()
@@ -114,11 +116,13 @@ export default function App() {
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
         {view === 'downloads' ? (
-          <DownloadsTable downloads={downloads} onDelete={handleDelete} />
+          <DownloadsTable downloads={downloads} onDelete={handleDelete} onSelect={(d) => setSelectedId(d.id)} />
         ) : (
           <Settings apiKey={apiKey} />
         )}
       </main>
+
+      {selectedId && <DownloadDetail apiKey={apiKey} id={selectedId} onClose={() => setSelectedId(null)} />}
     </div>
   )
 }

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -258,6 +259,35 @@ func TestHandleGetDownload(t *testing.T) {
 	}
 	if len(got.Files) != 1 || got.Files[0].Path != "movie.mkv" {
 		t.Errorf("files = %+v", got.Files)
+	}
+}
+
+func TestHandleGetDownload_ExposesRetryInfo(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	nextRetry := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+	if err := db.UpdateDownloadRetry(context.Background(), d.ID, 2, nextRetry, "connection reset"); err != nil {
+		t.Fatalf("UpdateDownloadRetry() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.RetryCount != 2 {
+		t.Errorf("RetryCount = %d, want 2", got.RetryCount)
+	}
+	if got.NextRetryAt == nil {
+		t.Fatal("NextRetryAt is nil, want it set")
+	}
+	if got.ErrorMessage != "connection reset" {
+		t.Errorf("ErrorMessage = %q, want connection reset", got.ErrorMessage)
 	}
 }
 

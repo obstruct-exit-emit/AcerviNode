@@ -233,3 +233,88 @@ func TestSetDownloadFileURL(t *testing.T) {
 		t.Errorf("ListDownloadFiles() = %+v, want resolved URL set", files)
 	}
 }
+
+func TestUpdateDownloadRetry(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateProviderCompleted
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	nextRetry := time.Now().Add(20 * time.Second).UTC().Truncate(time.Second)
+	if err := db.UpdateDownloadRetry(ctx, d.ID, 1, nextRetry, "temporary network error"); err != nil {
+		t.Fatalf("UpdateDownloadRetry() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1", got.RetryCount)
+	}
+	if got.NextRetryAt == nil || !got.NextRetryAt.Equal(nextRetry) {
+		t.Errorf("NextRetryAt = %v, want %v", got.NextRetryAt, nextRetry)
+	}
+	if got.ErrorMessage != "temporary network error" {
+		t.Errorf("ErrorMessage = %q, want temporary network error", got.ErrorMessage)
+	}
+	// A retry (not a give-up) must not change state.
+	if got.State != StateProviderCompleted {
+		t.Errorf("State = %q, want unchanged provider_completed", got.State)
+	}
+}
+
+func TestListDownloadsDueForRetry(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Now().UTC()
+
+	ready := newTestDownload(KindTorrent)
+	ready.State = StateProviderCompleted
+	ready.ProviderDownloadID = "ready"
+	if err := db.InsertDownload(ctx, ready); err != nil {
+		t.Fatalf("InsertDownload(ready) error = %v", err)
+	}
+
+	notYetDue := newTestDownload(KindTorrent)
+	notYetDue.State = StateProviderCompleted
+	notYetDue.ProviderDownloadID = "not-yet-due"
+	if err := db.InsertDownload(ctx, notYetDue); err != nil {
+		t.Fatalf("InsertDownload(notYetDue) error = %v", err)
+	}
+	if err := db.UpdateDownloadRetry(ctx, notYetDue.ID, 1, now.Add(1*time.Hour), "still backing off"); err != nil {
+		t.Fatalf("UpdateDownloadRetry(notYetDue) error = %v", err)
+	}
+
+	pastDue := newTestDownload(KindTorrent)
+	pastDue.State = StateProviderCompleted
+	pastDue.ProviderDownloadID = "past-due"
+	if err := db.InsertDownload(ctx, pastDue); err != nil {
+		t.Fatalf("InsertDownload(pastDue) error = %v", err)
+	}
+	if err := db.UpdateDownloadRetry(ctx, pastDue.ID, 1, now.Add(-1*time.Hour), "backoff elapsed"); err != nil {
+		t.Fatalf("UpdateDownloadRetry(pastDue) error = %v", err)
+	}
+
+	due, err := db.ListDownloadsDueForRetry(ctx, StateProviderCompleted, now)
+	if err != nil {
+		t.Fatalf("ListDownloadsDueForRetry() error = %v", err)
+	}
+	gotIDs := map[string]bool{}
+	for _, d := range due {
+		gotIDs[d.ID] = true
+	}
+	if !gotIDs[ready.ID] {
+		t.Errorf("expected %q (no next_retry_at) to be due", ready.ID)
+	}
+	if !gotIDs[pastDue.ID] {
+		t.Errorf("expected %q (next_retry_at in the past) to be due", pastDue.ID)
+	}
+	if gotIDs[notYetDue.ID] {
+		t.Errorf("expected %q (next_retry_at in the future) NOT to be due", notYetDue.ID)
+	}
+}

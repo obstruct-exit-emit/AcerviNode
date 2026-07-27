@@ -30,6 +30,9 @@ func TestLoad_DefaultsWithNoFile(t *testing.T) {
 	if cfg.ImportIntervalSeconds != 10 {
 		t.Errorf("ImportIntervalSeconds = %d, want 10", cfg.ImportIntervalSeconds)
 	}
+	if cfg.ImportMaxRetries != 5 {
+		t.Errorf("ImportMaxRetries = %d, want 5", cfg.ImportMaxRetries)
+	}
 }
 
 func TestLoad_GeneratedAPIKeysAreUnique(t *testing.T) {
@@ -132,6 +135,7 @@ func TestLoad_InvalidImportInterval(t *testing.T) {
 func TestLoad_DownloadDirEnvOverride(t *testing.T) {
 	t.Setenv("ACERVINODE_DOWNLOAD_DIR", "/data/downloads")
 	t.Setenv("ACERVINODE_IMPORT_INTERVAL_SECONDS", "30")
+	t.Setenv("ACERVINODE_IMPORT_MAX_RETRIES", "3")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -142,6 +146,18 @@ func TestLoad_DownloadDirEnvOverride(t *testing.T) {
 	}
 	if cfg.ImportIntervalSeconds != 30 {
 		t.Errorf("ImportIntervalSeconds = %d, want 30", cfg.ImportIntervalSeconds)
+	}
+	if cfg.ImportMaxRetries != 3 {
+		t.Errorf("ImportMaxRetries = %d, want 3", cfg.ImportMaxRetries)
+	}
+}
+
+func TestLoad_InvalidImportMaxRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "import_max_retries: 0\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid import_max_retries, got nil")
 	}
 }
 

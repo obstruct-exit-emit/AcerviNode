@@ -98,6 +98,18 @@ This works identically for any future provider, torrent or usenet, with zero
 changes — it only depends on `Files`/`RequestDownloadLink`, which every provider
 already has to implement.
 
+A fetch that fails (a `Files`/`RequestDownloadLink` call error, or the HTTP
+download itself failing) doesn't retry on every subsequent tick forever, and
+doesn't retry instantly either: `Importer.handleFailure` records the failure and
+schedules the next attempt with exponential backoff — attempt *N* waits
+`import_interval_seconds`×2^*N*, capped at one hour — stored on the row as
+`retry_count`/`next_retry_at` (`Tick` only picks up rows whose `next_retry_at`
+has passed). Once `retry_count` reaches `import_max_retries`, the download is
+moved to `error` instead of scheduled again, so a permanently-broken link stops
+occupying a retry slot forever rather than silently never finishing. Both fields
+are surfaced on `GET /api/v1/downloads/{id}` — see [API](api.md) — and shown in
+the web UI's detail view.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

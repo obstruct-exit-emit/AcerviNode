@@ -77,7 +77,7 @@ func TestTick_DownloadsFilesAndMarksReadyForImport(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir())
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestTick_UsesDownloadDirWhenNoSavePath(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, nil, provider, downloadDir)
+	im := New(db, nil, provider, downloadDir, time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -173,7 +173,7 @@ func TestTick_SkipsAlreadyDownloadedFiles(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir())
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -211,7 +211,8 @@ func TestTick_LeavesRowForRetryOnFailure(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir())
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	before := time.Now().UTC()
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -222,6 +223,126 @@ func TestTick_LeavesRowForRetryOnFailure(t *testing.T) {
 	}
 	if got.State != database.StateProviderCompleted {
 		t.Errorf("state = %q, want provider_completed (left for retry)", got.State)
+	}
+	if got.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1", got.RetryCount)
+	}
+	if got.NextRetryAt == nil || !got.NextRetryAt.After(before) {
+		t.Errorf("NextRetryAt = %v, want a time after %v (backed off)", got.NextRetryAt, before)
+	}
+	if got.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set even while still retrying, not just after giving up")
+	}
+}
+
+// TestHandleFailure_BackoffGrowsWithEachAttempt drives three consecutive
+// failures directly through handleFailure and checks next_retry_at moves
+// further out each time — exponential, not fixed-interval, retrying.
+func TestHandleFailure_BackoffGrowsWithEachAttempt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-backoff", Provider: "fake", ProviderDownloadID: "provider-backoff", Kind: database.KindTorrent,
+		Hash: "backoff1", Name: "Backoff Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, nil, nil, t.TempDir(), 10*time.Second, 10)
+
+	var previousWait time.Duration
+	for attempt := 1; attempt <= 3; attempt++ {
+		before := time.Now().UTC()
+		im.handleFailure(ctx, d, errors.New("simulated failure"))
+
+		got, err := db.GetDownloadByID(ctx, d.ID)
+		if err != nil {
+			t.Fatalf("GetDownloadByID() error = %v", err)
+		}
+		if got.RetryCount != attempt {
+			t.Fatalf("attempt %d: RetryCount = %d, want %d", attempt, got.RetryCount, attempt)
+		}
+		if got.NextRetryAt == nil {
+			t.Fatalf("attempt %d: NextRetryAt is nil", attempt)
+		}
+		wait := got.NextRetryAt.Sub(before)
+		if attempt > 1 && wait <= previousWait {
+			t.Errorf("attempt %d: wait = %v, want longer than previous attempt's %v", attempt, wait, previousWait)
+		}
+		previousWait = wait
+		d = got // next iteration's handleFailure needs the updated RetryCount
+	}
+}
+
+// TestHandleFailure_GivesUpAfterMaxRetries proves a download stops being
+// retried and moves to StateError once it has failed MaxRetries times,
+// rather than being retried forever.
+func TestHandleFailure_GivesUpAfterMaxRetries(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-giveup", Provider: "fake", ProviderDownloadID: "provider-giveup", Kind: database.KindTorrent,
+		Hash: "giveup1", Name: "Give Up Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	const maxRetries = 3
+	im := New(db, nil, nil, t.TempDir(), time.Millisecond, maxRetries)
+
+	for i := 1; i <= maxRetries; i++ {
+		im.handleFailure(ctx, d, errors.New("simulated failure"))
+		got, err := db.GetDownloadByID(ctx, d.ID)
+		if err != nil {
+			t.Fatalf("GetDownloadByID() error = %v", err)
+		}
+		d = got
+	}
+
+	if d.State != database.StateError {
+		t.Errorf("state after %d failures = %q, want error (gave up)", maxRetries, d.State)
+	}
+	if d.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set on give-up")
+	}
+	if d.CompletedAt != nil {
+		t.Error("CompletedAt should stay unset — a give-up isn't a completion")
+	}
+}
+
+// TestTick_DoesNotRetryBeforeNextRetryAt proves a download in backoff isn't
+// retried early — the fake provider records every RequestDownloadLink call,
+// so a Tick that shouldn't touch this download must leave that list empty.
+func TestTick_DoesNotRetryBeforeNextRetryAt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: 100}},
+	}
+
+	d := &database.Download{
+		ID: "dl-backoff-wait", Provider: "fake", ProviderDownloadID: "provider-backoff-wait", Kind: database.KindTorrent,
+		Hash: "waiting1", Name: "Waiting", SavePath: t.TempDir(), State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	if err := db.UpdateDownloadRetry(ctx, d.ID, 1, time.Now().UTC().Add(time.Hour), "backing off"); err != nil {
+		t.Fatalf("UpdateDownloadRetry() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if len(provider.requestedAt) != 0 {
+		t.Errorf("provider was contacted during backoff: %v", provider.requestedAt)
 	}
 }
 
@@ -250,7 +371,7 @@ func TestTick_RejectsPathTraversal(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir())
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -269,12 +390,12 @@ func TestTick_RejectsPathTraversal(t *testing.T) {
 
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	db := openTestDB(t)
-	im := New(db, &fakeProvider{}, nil, t.TempDir())
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Hour, 5) // long interval — we only care that cancel stops it
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		im.Run(ctx, time.Hour) // long interval — we only care that cancel stops it
+		im.Run(ctx)
 		close(done)
 	}()
 

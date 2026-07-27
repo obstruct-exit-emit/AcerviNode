@@ -47,6 +47,12 @@ type Download struct {
 	UpdatedAt          time.Time
 	CompletedAt        *time.Time
 	ErrorMessage       string
+	// RetryCount and NextRetryAt back internal/importer's backoff: a failed
+	// fetch attempt increments RetryCount and sets NextRetryAt to when it's
+	// eligible to try again, until MaxRetries is reached and the row moves
+	// to StateError instead.
+	RetryCount  int
+	NextRetryAt *time.Time
 }
 
 // DownloadFile is a single file within a Download.
@@ -158,6 +164,50 @@ func (db *DB) ListDownloadsByState(ctx context.Context, state string) ([]*Downlo
 	return out, rows.Err()
 }
 
+// ListDownloadsDueForRetry returns every download (either kind) currently in
+// the given state whose next_retry_at has passed (or was never set) — used
+// by internal/importer so a download in backoff isn't retried before its
+// scheduled time.
+func (db *DB) ListDownloadsDueForRetry(ctx context.Context, state string, now time.Time) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+downloadColumns+`
+		FROM downloads
+		WHERE state = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)
+		ORDER BY added_at`, state, now)
+	if err != nil {
+		return nil, fmt.Errorf("list downloads due for retry: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// UpdateDownloadRetry records a failed attempt: increments bookkeeping for
+// internal/importer's backoff without changing state — the row stays
+// provider_completed and is picked up again once next_retry_at passes.
+// errorMessage is stored so the API/UI can show the last failure while a
+// download is still being retried, not just after it finally gives up.
+func (db *DB) UpdateDownloadRetry(ctx context.Context, id string, retryCount int, nextRetryAt time.Time, errorMessage string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET retry_count = ?, next_retry_at = ?, error_message = ?, updated_at = ?
+		WHERE id = ?`,
+		retryCount, nextRetryAt, nullable(errorMessage), time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update download retry %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // UpdateDownloadStatus updates a download's local state machine fields,
 // including size_bytes — a magnet-only add starts with no size info (magnet
 // URIs don't carry it), so this is what backfills the real value once the
@@ -253,7 +303,8 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
-	size_bytes, state, progress, added_at, updated_at, completed_at, error_message`
+	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
+	retry_count, next_retry_at`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, arg string) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, arg)
@@ -277,6 +328,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
+		&d.RetryCount, &d.NextRetryAt,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}

@@ -208,6 +208,10 @@ table.downloads tbody tr:hover {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
+.row-clickable {
+  cursor: pointer;
+}
+
 .name-cell {
   max-width: 320px;
   overflow: hidden;
@@ -341,4 +345,128 @@ table.downloads tbody tr:hover {
   background: var(--accent);
   color: var(--accent-text);
   font-weight: 500;
+}
+
+/* DownloadDetail */
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, black 45%, transparent);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 20px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.detail-panel {
+  width: 100%;
+  max-width: 640px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px 24px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.detail-header h2 {
+  font-size: 17px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.detail-close:hover {
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 10%, transparent);
+}
+
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 20px;
+  margin: 0 0 16px;
+}
+
+.detail-meta dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detail-meta dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.detail-meta .mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.detail-error-message {
+  color: var(--state-error);
+  font-size: 13px;
+  background: color-mix(in srgb, var(--state-error) 10%, transparent);
+  border: 1px solid var(--state-error);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 0 16px;
+}
+
+.detail-panel h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+table.detail-files {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.detail-files th,
+table.detail-files td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+table.detail-files td:last-child,
+table.detail-files th:last-child {
+  white-space: nowrap;
+  text-align: right;
+}
+
+table.detail-files td.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+table.detail-files tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.text-muted {
+  color: var(--text-muted);
 }

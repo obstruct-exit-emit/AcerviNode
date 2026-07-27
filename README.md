@@ -63,6 +63,9 @@ the storage layer.
   actual files over plain HTTP and writes them to `save_path` — the same thing a
   normal download client does, just sourced from a debrid CDN link instead of
   BitTorrent/NNTP. No FUSE, no Linux-only mount — this runs the same on Windows.
+- A fetch that fails is retried with exponential backoff, not forever and not
+  instantly — `import_max_retries` (default 5) caps how many attempts a download
+  gets before it's moved to `error` instead of retried again.
 
 **🖥️ Native API + web UI**
 
@@ -70,8 +73,9 @@ the storage layer.
   listing/management, settings — API-key authenticated, the exact API the UI
   itself uses
 - A React (Vite) single-page dashboard, embedded into the binary — download table
-  with live state/progress, provider status, one-click delete, and a Settings tab
-  to add/change your TorBox key without touching `config.yaml` — takes effect
+  with live state/progress, provider status, one-click delete, a per-download
+  detail view (full metadata, file list, retry status), and a Settings tab to
+  add/change your TorBox key without touching `config.yaml` — takes effect
   immediately, no restart
 
 **🗄️ Storage**

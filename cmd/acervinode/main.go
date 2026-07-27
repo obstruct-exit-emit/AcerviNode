@@ -75,8 +75,9 @@ func run(ctx context.Context) error {
 	// Completed Download Handling: fetches provider_completed downloads to
 	// local disk so *arr apps' import step has real files to find. Shares
 	// the same dynamic provider instances as everything else above.
-	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir)
-	go imp.Run(ctx, time.Duration(cfg.ImportIntervalSeconds)*time.Second)
+	importInterval := time.Duration(cfg.ImportIntervalSeconds) * time.Second
+	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
+	go imp.Run(ctx)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),

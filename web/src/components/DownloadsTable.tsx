@@ -5,9 +5,10 @@ import { StateBadge } from './StateBadge'
 interface Props {
   downloads: Download[]
   onDelete: (d: Download) => void
+  onSelect: (d: Download) => void
 }
 
-export function DownloadsTable({ downloads, onDelete }: Props) {
+export function DownloadsTable({ downloads, onDelete, onSelect }: Props) {
   if (downloads.length === 0) {
     return <p className="empty">No downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly.</p>
   }
@@ -28,7 +29,7 @@ export function DownloadsTable({ downloads, onDelete }: Props) {
       </thead>
       <tbody>
         {downloads.map((d) => (
-          <tr key={d.id}>
+          <tr key={d.id} className="row-clickable" onClick={() => onSelect(d)}>
             <td className="name-cell" title={d.name}>
               {d.name}
               {d.error_message && <div className="error-message">{d.error_message}</div>}
@@ -47,7 +48,14 @@ export function DownloadsTable({ downloads, onDelete }: Props) {
             <td>{formatBytes(d.size_bytes)}</td>
             <td title={d.added_at}>{formatRelativeTime(d.added_at)}</td>
             <td>
-              <button className="delete-btn" onClick={() => onDelete(d)} title="Delete">
+              <button
+                className="delete-btn"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(d)
+                }}
+                title="Delete"
+              >
                 ✕
               </button>
             </td>

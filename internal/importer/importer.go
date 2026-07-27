@@ -29,6 +29,12 @@ type fileResolver interface {
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 }
 
+// maxBackoff caps how long a failing download waits between retries,
+// regardless of how the exponential backoff computation grows — a hardcoded
+// ceiling rather than another config knob, since "eventually give up" is the
+// one lever (MaxRetries) that's actually worth exposing.
+const maxBackoff = time.Hour
+
 // Importer periodically scans for provider_completed downloads and fetches
 // their files to local disk.
 type Importer struct {
@@ -36,6 +42,8 @@ type Importer struct {
 	torrentProvider fileResolver // nil if no torrent-capable provider is configured
 	usenetProvider  fileResolver // nil if no usenet-capable provider is configured
 	downloadDir     string
+	interval        time.Duration // also the backoff base: attempt N waits ~interval*2^N
+	maxRetries      int
 	httpClient      *http.Client
 }
 
@@ -45,20 +53,24 @@ type Importer struct {
 // pass their concrete debrid.TorrentProvider/debrid.UsenetProvider values
 // directly; both satisfy fileResolver structurally since it's a subset of
 // each. downloadDir is the fallback destination when a download has no
-// save_path.
-func New(db *database.DB, torrentProvider fileResolver, usenetProvider fileResolver, downloadDir string) *Importer {
+// save_path. interval is both the tick period and the backoff base;
+// maxRetries is how many failed attempts a download gets before it's moved
+// to StateError instead of retried again.
+func New(db *database.DB, torrentProvider fileResolver, usenetProvider fileResolver, downloadDir string, interval time.Duration, maxRetries int) *Importer {
 	return &Importer{
 		db:              db,
 		torrentProvider: torrentProvider,
 		usenetProvider:  usenetProvider,
 		downloadDir:     downloadDir,
+		interval:        interval,
+		maxRetries:      maxRetries,
 		httpClient:      &http.Client{Timeout: 10 * time.Minute}, // files can be large
 	}
 }
 
 // Run blocks, calling Tick every interval until ctx is done.
-func (im *Importer) Run(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
+func (im *Importer) Run(ctx context.Context) {
+	ticker := time.NewTicker(im.interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -72,20 +84,63 @@ func (im *Importer) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Tick processes every download currently in provider_completed state, once
-// each. Failures are logged and left for the next tick to retry — there's no
-// separate retry-count/backoff bookkeeping in this version.
+// Tick processes every provider_completed download whose next_retry_at has
+// passed (or was never set), once each. A failure is handled by
+// handleFailure — backed off and retried, or given up on — rather than left
+// to retry on every single tick forever.
 func (im *Importer) Tick(ctx context.Context) error {
-	rows, err := im.db.ListDownloadsByState(ctx, database.StateProviderCompleted)
+	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("list provider_completed downloads: %w", err)
+		return fmt.Errorf("list downloads due for retry: %w", err)
 	}
 	for _, d := range rows {
 		if err := im.processDownload(ctx, d); err != nil {
-			slog.Error("importer: process download failed", "id", d.ID, "name", d.Name, "error", err)
+			im.handleFailure(ctx, d, err)
 		}
 	}
 	return nil
+}
+
+// handleFailure records a failed attempt: either schedules the next retry
+// with exponential backoff, or — once maxRetries is reached — gives up and
+// moves the download to StateError so it stops being retried and shows up as
+// failed rather than stuck forever in provider_completed.
+func (im *Importer) handleFailure(ctx context.Context, d *database.Download, procErr error) {
+	attempt := d.RetryCount + 1
+
+	if attempt >= im.maxRetries {
+		if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateError, d.Progress, d.SizeBytes, nil, procErr.Error()); err != nil {
+			slog.Error("importer: mark error failed", "id", d.ID, "error", err)
+			return
+		}
+		slog.Error("importer: giving up after max retries", "id", d.ID, "name", d.Name, "attempts", attempt, "error", procErr)
+		return
+	}
+
+	nextRetryAt := time.Now().UTC().Add(im.backoff(attempt))
+	if err := im.db.UpdateDownloadRetry(ctx, d.ID, attempt, nextRetryAt, procErr.Error()); err != nil {
+		slog.Error("importer: update retry failed", "id", d.ID, "error", err)
+		return
+	}
+	slog.Warn("importer: process download failed, will retry",
+		"id", d.ID, "name", d.Name, "attempt", attempt, "max_retries", im.maxRetries,
+		"next_retry_at", nextRetryAt, "error", procErr)
+}
+
+// backoff returns interval*2^attempt, capped at maxBackoff — the shift
+// itself is also capped so a very large maxRetries configuration can't
+// overflow the calculation before the maxBackoff clamp would apply anyway.
+func (im *Importer) backoff(attempt int) time.Duration {
+	const maxShift = 10 // 2^10 = 1024x — already far past any sane maxBackoff
+	shift := attempt
+	if shift > maxShift {
+		shift = maxShift
+	}
+	d := im.interval * time.Duration(int64(1)<<uint(shift))
+	if d <= 0 || d > maxBackoff {
+		return maxBackoff
+	}
+	return d
 }
 
 func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {

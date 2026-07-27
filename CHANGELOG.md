@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `internal/importer`: fetch failures now back off exponentially
+  (`retry_count`/`next_retry_at` on the `downloads` row, base
+  `import_interval_seconds`, capped at one hour) and give up after
+  `import_max_retries` (default 5, new config key) instead of retrying forever
+  on every tick. Surfaced on `GET /api/v1/downloads[/{id}]` and in the web UI.
+- Web UI: a per-download detail view (`DownloadDetail.tsx`) — click a row to see
+  full metadata, retry status, and the file list, backed by the `files` array
+  `GET /api/v1/downloads/{id}` already returned
 - Repo bootstrap: README, LICENSE (GPL-3.0), ROADMAP, CI workflow, docs skeleton
 - `internal/config` and `internal/database` (SQLite, embedded migrations)
 - `internal/debrid`: `TorrentProvider` / `UsenetProvider` interfaces, TorBox
