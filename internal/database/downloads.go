@@ -116,6 +116,27 @@ func (db *DB) ListDownloads(ctx context.Context, kind Kind) ([]*Download, error)
 	return out, rows.Err()
 }
 
+// ListAllDownloads returns every download regardless of kind, most recently
+// added first — backs the native API's GET /api/v1/downloads (see
+// internal/api), which is kind-agnostic unlike either compat shim.
+func (db *DB) ListAllDownloads(ctx context.Context) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+downloadColumns+` FROM downloads ORDER BY added_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list all downloads: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // ListDownloadsByState returns every download (either kind) currently in the
 // given state, oldest first — used by internal/importer to find downloads
 // the provider has finished but that haven't been fetched to local disk yet.

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +99,17 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 	if ver["version"] == "" {
 		t.Error("sabnzbd version response missing version field")
 	}
+
+	// Embedded web UI mounted at the root.
+	resp, err = http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / error = %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `<div id="root">`) {
+		t.Errorf("GET / status=%d body=%q, want the built index.html", resp.StatusCode, body)
+	}
 }
 
 // TestBuildHandler_NoProviderConfigured proves the compat shims simply don't
@@ -124,9 +137,14 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/v2/app/webapiVersion error = %v", err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status = %d, want 404 (qbittorrent shim should not be mounted)", resp.StatusCode)
+	// Nothing under /api/v2 is registered when no torrent provider is
+	// configured, so the request falls through to the embedded web UI's
+	// catch-all SPA route — the qBittorrent shim's real plaintext response
+	// ("2.9.3") is what must NOT appear, rather than a specific status code.
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), "2.9.3") {
+		t.Errorf("status=%d body=%q — expected the UI's SPA fallback, not the qBittorrent shim's response", resp.StatusCode, body)
 	}
 }
 

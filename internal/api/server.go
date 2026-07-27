@@ -1,13 +1,15 @@
-// Package api implements AcerviNode's own versioned REST API (/api/v1),
-// deliberately thin in this vertical slice — health, version, and provider
-// status are enough to prove the server is up and configured correctly.
-// Richer endpoints (download listing/management, matching what a future UI
-// would use) are tracked as Phase 2 on the roadmap.
+// Package api implements AcerviNode's own versioned REST API (/api/v1) —
+// health, version, provider status, and download listing/management, the
+// same API the embedded web UI (internal/webui) is built on.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 // ProviderStatus summarizes one configured debrid provider for
@@ -18,19 +20,37 @@ type ProviderStatus struct {
 	UsenetCapable  bool   `json:"usenet_capable"`
 }
 
+// deleter is the subset of debrid.TorrentProvider/debrid.UsenetProvider that
+// DELETE /api/v1/downloads/{id} needs — same narrow-interface approach as
+// internal/importer's fileResolver.
+type deleter interface {
+	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
+}
+
 // Server is AcerviNode's native API.
 type Server struct {
-	apiKey    string
-	version   string
-	providers []ProviderStatus
-	mux       *http.ServeMux
+	apiKey          string
+	version         string
+	providers       []ProviderStatus
+	db              *database.DB
+	torrentProvider deleter // nil if no torrent-capable provider is configured
+	usenetProvider  deleter // nil if no usenet-capable provider is configured
+	mux             *http.ServeMux
 }
 
 // NewServer builds the native API server. version is a free-form build
 // identifier; providers describes whatever was actually wired up in
-// cmd/acervinode/main.go.
-func NewServer(apiKey, version string, providers []ProviderStatus) *Server {
-	s := &Server{apiKey: apiKey, version: version, providers: providers}
+// cmd/acervinode/main.go. torrentProvider/usenetProvider may be nil.
+func NewServer(apiKey, version string, providers []ProviderStatus, db *database.DB, torrentProvider deleter, usenetProvider deleter) *Server {
+	if providers == nil {
+		// A nil slice marshals to JSON null, not []; every caller of this
+		// list-shaped endpoint (including the embedded UI) expects an array.
+		providers = []ProviderStatus{}
+	}
+	s := &Server{
+		apiKey: apiKey, version: version, providers: providers, db: db,
+		torrentProvider: torrentProvider, usenetProvider: usenetProvider,
+	}
 	s.mux = http.NewServeMux()
 	s.routes()
 	return s
@@ -46,6 +66,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/v1/version", s.requireAuth(s.handleVersion))
 	s.mux.HandleFunc("GET /api/v1/providers", s.requireAuth(s.handleProviders))
+	s.mux.HandleFunc("GET /api/v1/downloads", s.requireAuth(s.handleListDownloads))
+	s.mux.HandleFunc("GET /api/v1/downloads/{id}", s.requireAuth(s.handleGetDownload))
+	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

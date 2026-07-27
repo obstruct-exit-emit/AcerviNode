@@ -16,8 +16,8 @@ AcerviNode speaks the qBittorrent Web API and the SABnzbd API, so your *arr apps
 > 🚧 **Pre-1.0.** TorBox is the only wired provider so far, but the full pipeline
 > works end to end against it: point Sonarr's qBittorrent client or its SABnzbd
 > client at AcerviNode and it adds, tracks, resolves, and downloads real files to
-> disk where Sonarr's own import step expects them. Real-Debrid and other
-> providers, and the embedded web UI, aren't built yet. See the
+> disk where Sonarr's own import step expects them — and there's a web UI to watch
+> it happen. Real-Debrid and other providers aren't built yet. See the
 > [roadmap](ROADMAP.md).
 
 ---
@@ -64,6 +64,13 @@ the storage layer.
   normal download client does, just sourced from a debrid CDN link instead of
   BitTorrent/NNTP. No FUSE, no Linux-only mount — this runs the same on Windows.
 
+**🖥️ Native API + web UI**
+
+- Versioned REST API (`/api/v1`): health, version, provider status, download
+  listing/management — API-key authenticated, the exact API the UI itself uses
+- A React (Vite) single-page dashboard, embedded into the binary — download table
+  with live state/progress, provider status, one-click delete
+
 **🗄️ Storage**
 
 - SQLite (pure Go, no cgo) — one `downloads` table shared by both shims, tracking
@@ -77,8 +84,8 @@ go build ./cmd/acervinode
 ./acervinode
 ```
 
-Then open `http://localhost:7846`. Full steps, including pointing Sonarr at
-AcerviNode as either a qBittorrent or a SABnzbd client:
+Then open `http://localhost:7846` for the dashboard. Full steps, including
+pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
 [Installation](docs/installation.md) · [Quickstart](docs/quickstart.md).
 
 > Docker and packaged Windows builds are on hold for now (see the
@@ -93,6 +100,7 @@ AcerviNode as either a qBittorrent or a SABnzbd client:
 | [Quickstart](docs/quickstart.md) | First-run walkthrough, both compat shims |
 | [Configuration](docs/configuration.md) | config.yaml, providers, ports |
 | [Providers](docs/providers.md) | The provider interfaces, TorBox specifics, adding a new provider |
+| [API](docs/api.md) | The native `/api/v1` — everything the web UI does is scriptable |
 | [qBittorrent API](docs/qbittorrent-api.md) | Which qBittorrent Web API surface is emulated, and why |
 | [SABnzbd API](docs/sabnzbd-api.md) | Which SABnzbd API surface is emulated, and how NZB adds map onto TorBox's usenet service |
 | [Development](docs/development.md) | Building, layout, contributing |
@@ -108,18 +116,21 @@ AcerviNode as either a qBittorrent or a SABnzbd client:
   real \*arr download-client protocol onto the provider interfaces
 - **Completed Download Handling:** `internal/importer` fetches finished downloads'
   files to local disk over plain HTTP — no FUSE, no Linux-only mount
+- **Native API + UI:** `internal/api` (`/api/v1`) backs `web/`, a React (Vite)
+  single-page app embedded into the binary via `go:embed`
 - **Default port:** `7846` · **License:** GPL-3.0
 
 ## Security
 
-API-key auth on the native API, credential redaction in error and log output. For
-remote access, run behind a TLS reverse proxy.
+API-key auth on the native API (and, by default, on both compat shims — the same
+key). For remote access, run behind a TLS reverse proxy.
 
 ## Development
 
 ```sh
-go build ./cmd/acervinode   # backend (Go 1.25+)
-./acervinode                # http://localhost:7846
+cd web && npm install && npm run build && cd ..   # frontend (Node 22+)
+go build ./cmd/acervinode                          # backend (Go 1.25+)
+./acervinode                                       # http://localhost:7846
 go test ./...
 go vet ./...
 ```

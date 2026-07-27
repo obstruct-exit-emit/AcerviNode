@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   download's files over plain HTTP to `save_path`/`download_dir`, so *arr apps'
   import step has real files to find; `download_dir` and
   `import_interval_seconds` config keys
+- `internal/api`: `GET /api/v1/downloads`, `GET /api/v1/downloads/{id}`,
+  `DELETE /api/v1/downloads/{id}` — kind-agnostic download listing/management
+- `web/`: React 19 + Vite single-page dashboard (downloads table, provider status,
+  API-key gate), embedded into the binary via `go:embed` (`web/webui.go`), served
+  at `/` alongside the API and both compat shims
 
 ### Fixed
 
@@ -30,3 +35,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - TorBox's `mylist`/`usenet/mylist` responses are now requested with
   `bypass_cache=true` — without it, TorBox serves up to a 600-second-stale cache,
   making freshly added downloads invisible to polling
+- `internal/api`'s `NewServer` no longer lets a `nil` providers slice marshal to
+  JSON `null` (found while manually verifying the new web UI — its
+  `providers.length` check would have thrown on that)

@@ -1,8 +1,7 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–2 are complete and
-verified against the real TorBox API, not just unit-tested. The fine-grained
-record of every change lives in the [CHANGELOG](CHANGELOG.md).
+Where the project has been and where it's going. Phases 0–3 are complete. The
+fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
 **Legend:** ✅ complete · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
@@ -13,7 +12,7 @@ record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [0 — Foundation](#phase-0--foundation-) | Repo, config, database, CI | ✅ |
 | [1 — TorBox vertical slice](#phase-1--torbox-vertical-slice-) | TorBox provider, qBittorrent shim, SABnzbd shim | ✅ |
 | [2 — Completed Download Handling](#phase-2--completed-download-handling-) | Fetch resolved files to local disk once a download is done | ✅ |
-| [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | 💡 |
+| [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | ✅ |
 | [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
 | [5 — Hardening & release](#phase-5--hardening--release-) | Packaging, systemd unit, Docker, release automation | 💡 |
 
@@ -69,13 +68,24 @@ CDN link instead of BitTorrent/NNTP.
   invisible to every poll for as long as the cache window lasted. See
   [Providers](docs/providers.md#completed-download-handling).
 
-## Phase 3 — Native API & UI 💡
+## Phase 3 — Native API & UI ✅
 
-- Versioned REST API (`/api/v1`) beyond health/status: provider config, download
-  listing/management, same API a future UI would use
-- Embedded web UI (framework TBD — LibriNode uses React/Vite; likely the same for
-  family consistency), one binary, one port
-- API-key auth on the native API, matching LibriNode's convention
+- Versioned REST API (`/api/v1`) beyond health/status: `GET /downloads`,
+  `GET /downloads/{id}` (detail + files), `DELETE /downloads/{id}` — kind-agnostic,
+  backed by the same `database`/`debrid` layers everything else uses
+- Embedded web UI: React 19 + Vite, matching LibriNode's own stack exactly, built
+  into `web/dist` and embedded into the binary via `go:embed` (`web/webui.go`) — one
+  binary, one port, SPA-fallback routing
+- A single dashboard view: downloads table (name, kind, category, state badge,
+  progress bar, size, added-when, delete), provider status badges — deliberately
+  one well-built view rather than a half-built multi-page app
+- API-key auth on the native API (the UI prompts for it once, keeps it in
+  `localStorage`), matching LibriNode's convention
+- Built and design-judgment-called autonomously (UI has no live feedback loop from
+  the user by nature — explicitly authorized rather than deferred)
+- Found and fixed a real bug during manual verification: a `nil` `providers` slice
+  marshaled to JSON `null` instead of `[]`, which would have thrown in the UI's
+  `providers.length` check — `NewServer` now normalizes it, with a regression test
 
 ## Phase 4 — Multi-provider ⏳
 

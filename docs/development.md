@@ -1,13 +1,26 @@
 # Development
 
-Go 1.25+, no other runtime dependencies. SQLite via `modernc.org/sqlite` (pure Go,
-no cgo).
+Go 1.25+ backend, React 19 + Vite frontend (Node 22+) — matching LibriNode's own
+stack exactly, embedded into the same binary via `go:embed`.
 
 ```sh
-go run ./cmd/acervinode     # starts on http://localhost:7846
+cd web && npm install && npm run build && cd ..   # frontend — only needed after UI changes
+go run ./cmd/acervinode                            # starts on http://localhost:7846
 go test ./...
 go vet ./...
-go build ./cmd/acervinode
+go build ./cmd/acervinode                          # embeds web/dist if present
+```
+
+A committed `web/dist/.gitkeep` keeps `go build` working on a fresh clone even
+before `npm run build` has ever run — you'll just get an empty `/` until it has.
+
+Frontend-only iteration (Node 22+):
+
+```sh
+cd web
+npm install
+npm run dev      # Vite dev server on its own port, proxies /api to :7846
+npm run build    # production build into web/dist, embedded on the next go build
 ```
 
 > **Windows note:** developed on Windows day to day; the backend is plain Go and
@@ -28,7 +41,8 @@ internal/importer/        Completed Download Handling: fetches provider_complete
                             downloads' files to local disk over plain HTTP
 internal/qbittorrent/     qBittorrent Web API compat shim (torrent-shaped adds)
 internal/sabnzbd/          SABnzbd API compat shim (NZB-shaped adds)
-internal/api/               native versioned REST API (/api/v1)
+internal/api/               native versioned REST API (/api/v1), what the UI runs on
+web/                          React SPA (embedded via go:embed — see web/webui.go)
 docs/                        this documentation
 ```
 

@@ -9,6 +9,11 @@
 *.out
 /vendor/
 
+# Frontend (dist is embedded via go:embed; only .gitkeep is committed)
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+
 # Runtime data (never commit a live database or config)
 *.db
 *.db-wal

@@ -66,11 +66,14 @@ Grab an NZB-eligible release. You should see a `downloads` row with
 `kind = 'usenet'`, tracked through TorBox's usenet service the same way, with files
 fetched to disk by `internal/importer` the same way once TorBox reports it done.
 
+## The web UI
+
+Open `http://localhost:7846` in a browser, enter your `api_key` once (it's
+remembered), and watch the same downloads table update live — same data as
+`curl`-ing [`/api/v1/downloads`](api.md), just rendered.
+
 ## What this doesn't do yet
 
-Completed Download Handling ([Providers](providers.md#completed-download-handling))
-closes the gap that used to be here — AcerviNode now places resolved files on local
-disk itself, over plain HTTP, so Sonarr's normal import step has something real to
-find. What's still not built: multi-provider support beyond TorBox (Real-Debrid and
-others, see [Phase 4](../ROADMAP.md#phase-4--multi-provider-)) and the native web
-UI ([Phase 3](../ROADMAP.md#phase-3--native-api--ui-)).
+Multi-provider support beyond TorBox — Real-Debrid and others are on
+[Phase 4](../ROADMAP.md#phase-4--multi-provider-), currently blocked on having an
+account to verify against.

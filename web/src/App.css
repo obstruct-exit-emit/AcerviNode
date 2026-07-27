@@ -1,0 +1,248 @@
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.app-header h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.version {
+  font-family: var(--mono);
+}
+
+.logout-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  padding: 4px 10px;
+}
+
+.logout-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.provider-badge-none {
+  color: var(--state-error);
+  border-color: var(--state-error);
+}
+
+.provider-badge .cap {
+  font-family: var(--mono);
+  opacity: 0.7;
+}
+
+.load-error {
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+  color: var(--state-error);
+  border: 1px solid var(--state-error);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 48px 0;
+}
+
+table.downloads {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+table.downloads th,
+table.downloads td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+
+table.downloads th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+table.downloads tbody tr:last-child td {
+  border-bottom: none;
+}
+
+table.downloads tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.name-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.error-message {
+  color: var(--state-error);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.badge-queued {
+  background: var(--state-queued);
+}
+.badge-downloading {
+  background: var(--state-downloading);
+}
+.badge-provider_completed {
+  background: var(--state-fetching);
+}
+.badge-ready_for_import {
+  background: var(--state-ready);
+}
+.badge-error {
+  background: var(--state-error);
+}
+
+.progress-track {
+  display: inline-block;
+  width: 90px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
+.delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.delete-btn:hover {
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 10%, transparent);
+}
+
+/* ApiKeyGate */
+.gate {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.gate-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  text-align: center;
+}
+
+.gate-card h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.gate-card p {
+  color: var(--text-muted);
+  font-size: 13.5px;
+  margin: 0 0 16px;
+}
+
+.gate-card input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  margin-bottom: 12px;
+}
+
+.gate-card input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.gate-error {
+  color: var(--state-error) !important;
+  margin-bottom: 12px !important;
+}
+
+.gate-card button {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+}

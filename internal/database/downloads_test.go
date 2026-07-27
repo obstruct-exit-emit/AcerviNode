@@ -95,6 +95,14 @@ func TestListDownloads_FiltersByKind(t *testing.T) {
 	if len(usenetDownloads) != 1 || usenetDownloads[0].ID != usenet.ID {
 		t.Errorf("ListDownloads(usenet) = %+v, want only %s", usenetDownloads, usenet.ID)
 	}
+
+	all, err := db.ListAllDownloads(ctx)
+	if err != nil {
+		t.Fatalf("ListAllDownloads() error = %v", err)
+	}
+	if len(all) != 2 {
+		t.Errorf("ListAllDownloads() = %d rows, want 2 (both kinds)", len(all))
+	}
 }
 
 func TestUpdateDownloadStatus(t *testing.T) {

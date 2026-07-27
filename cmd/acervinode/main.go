@@ -22,6 +22,7 @@ import (
 	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
 	"github.com/acervinode/acervinode/internal/sabnzbd"
+	"github.com/acervinode/acervinode/web"
 )
 
 // version is a free-form build identifier — not stamped via ldflags yet
@@ -112,7 +113,7 @@ func buildHandler(cfg *config.Config, db *database.DB) (http.Handler, []api.Prov
 	torrentProvider, usenetProvider, providers := buildProviders(cfg)
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", api.NewServer(cfg.APIKey, version, providers))
+	mux.Handle("/api/v1/", api.NewServer(cfg.APIKey, version, providers, db, torrentProvider, usenetProvider))
 
 	if torrentProvider != nil {
 		mux.Handle("/api/v2/", qbittorrent.NewServer(torrentProvider, db, cfg.APIKey))
@@ -120,6 +121,14 @@ func buildHandler(cfg *config.Config, db *database.DB) (http.Handler, []api.Prov
 	if usenetProvider != nil {
 		// SABnzbd's real API is a single fixed endpoint, not a subtree.
 		mux.Handle("/api", sabnzbd.NewServer(usenetProvider, db, cfg.APIKey))
+	}
+
+	// The embedded web UI is the lowest-priority route — it only ever
+	// receives requests the API/compat-shim patterns above didn't claim.
+	if uiHandler, err := web.Handler(); err != nil {
+		slog.Error("failed to build embedded web UI handler", "error", err)
+	} else {
+		mux.Handle("/", uiHandler)
 	}
 
 	return mux, providers
