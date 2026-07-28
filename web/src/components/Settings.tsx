@@ -318,21 +318,23 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
             </div>
             <div>
               <h3>Usenet</h3>
-              {categories.usenet.length === 0 ? (
-                <p className="text-muted">None yet</p>
-              ) : (
-                <ul className="category-list">
-                  {categories.usenet.map((c) =>
-                    c === '*' ? (
-                      <li key={c} title="SABnzbd's default catch-all category — always exists">
-                        Default
-                      </li>
-                    ) : (
+              {(() => {
+                // "*" is SABnzbd's built-in catch-all category — every real
+                // SABnzbd install always reports it (part of the protocol
+                // this shim mimics for *arr apps), not something anyone
+                // declared or manages, so it's filtered out here rather than
+                // shown as if it were a real category.
+                const shown = categories.usenet.filter((c) => c !== '*')
+                return shown.length === 0 ? (
+                  <p className="text-muted">None yet</p>
+                ) : (
+                  <ul className="category-list">
+                    {shown.map((c) => (
                       <li key={c}>{c}</li>
-                    ),
-                  )}
-                </ul>
-              )}
+                    ))}
+                  </ul>
+                )
+              })()}
             </div>
           </div>
         )}
