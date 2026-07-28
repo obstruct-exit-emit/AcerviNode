@@ -242,6 +242,14 @@ CDN link instead of BitTorrent/NNTP.
   picker, so — unlike the rest of this session's features — it can't be
   verified headlessly via `curl`; confirmed only that the app serves the
   updated bundle and builds/tests pass clean.
+- 💡 **Streamline the download UX**: four download paths now exist (per-file
+  link, per-row "download all" individually/to-folder, per-download zip),
+  added incrementally as separate follow-ons rather than designed together.
+  Needs a pass to consolidate them into one coherent, discoverable flow (e.g.
+  a single "Download" control with a small set of clear choices instead of
+  several separate buttons scattered across the table row and detail view),
+  and to make the folder-write path (currently Chromium-only) feel first-class
+  rather than a fallback-having bolt-on.
 
 ## Phase 4 — Multi-provider ⏳
 
