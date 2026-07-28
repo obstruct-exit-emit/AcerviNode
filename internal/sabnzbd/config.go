@@ -10,17 +10,24 @@ import (
 // this on "Test" but don't require a specific value.
 const fakeVersion = "4.3.1"
 
+// defaultCategory is seeded into every fresh categoryStore, alongside the
+// protocol-mandated "*" below — see internal/qbittorrent's identical
+// default, kept as the same name across both protocols deliberately.
+const defaultCategory = "AcerviNode"
+
 // categoryStore tracks categories *arr apps have declared, purely so
 // mode=get_config has something to report back — AcerviNode doesn't
 // interpret categories itself (see docs/configuration.md). The "*" default
-// category always exists, matching a real SABnzbd install.
+// category always exists, matching a real SABnzbd install — a protocol
+// requirement, not a user-visible one (see Server.Categories, which filters
+// it back out for the settings UI).
 type categoryStore struct {
 	mu    sync.Mutex
 	names map[string]bool
 }
 
 func newCategoryStore() *categoryStore {
-	return &categoryStore{names: map[string]bool{"*": true}}
+	return &categoryStore{names: map[string]bool{"*": true, defaultCategory: true}}
 }
 
 func (c *categoryStore) add(name string) {
@@ -46,8 +53,20 @@ func (c *categoryStore) list() []string {
 // Categories lists every category name currently known, including the
 // always-present "*" default — populated reactively as *arr apps declare
 // them, or manually via AddCategory (see the settings API).
+// Categories lists every category name currently known, excluding the
+// always-present "*" — that's a protocol requirement every real SABnzbd
+// install reports (see categoryStore's doc comment), not something anyone
+// declared or manages, so callers of this API shouldn't have to know to
+// filter it back out themselves.
 func (s *Server) Categories() []string {
-	return s.categories.list()
+	names := s.categories.list()
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "*" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // AddCategory manually registers a category name, the same way an *arr

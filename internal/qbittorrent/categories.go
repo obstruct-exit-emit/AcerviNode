@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+// defaultCategory is seeded into every fresh categoryStore so there's always
+// a sensible category to point Sonarr/Radarr at without having to think
+// about it first, and so the settings UI's category list is never just
+// empty out of the box — see sabnzbd's identical default, kept as the same
+// name across both protocols deliberately.
+const defaultCategory = "AcerviNode"
+
 // categoryStore tracks categories *arr apps have declared, purely so
 // /api/v2/torrents/categories has something to report back — AcerviNode
 // doesn't interpret categories itself (see docs/configuration.md).
@@ -16,7 +23,7 @@ type categoryStore struct {
 }
 
 func newCategoryStore() *categoryStore {
-	return &categoryStore{names: map[string]string{}}
+	return &categoryStore{names: map[string]string{defaultCategory: ""}}
 }
 
 func (c *categoryStore) add(name, savePath string) {

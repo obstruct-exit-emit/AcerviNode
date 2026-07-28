@@ -419,8 +419,11 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	}
 
 	torrentCats, usenetCats := settings.Categories()
-	if len(torrentCats) != 1 || torrentCats[0] != "movies" {
-		t.Errorf("torrent categories = %v, want [movies]", torrentCats)
+	// Both shims seed a default "AcerviNode" category, so "movies" is
+	// additive, not the only entry — see internal/qbittorrent's
+	// defaultCategory.
+	if len(torrentCats) != 2 || torrentCats[0] != "AcerviNode" || torrentCats[1] != "movies" {
+		t.Errorf("torrent categories = %v, want [AcerviNode movies] (sorted)", torrentCats)
 	}
 	found := false
 	for _, c := range usenetCats {
