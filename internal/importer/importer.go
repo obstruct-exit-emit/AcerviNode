@@ -48,13 +48,15 @@ type Importer struct {
 	usenetProvider  provider // nil if no usenet-capable provider is configured
 	httpClient      *http.Client
 
-	// mu guards downloadDir/interval/maxRetries, which SetConfig can change
-	// live (see cmd/acervinode's liveSettings) — everything else on Importer
-	// is set once at construction and never mutated afterward.
-	mu          sync.Mutex
-	downloadDir string
-	interval    time.Duration // also the backoff base: attempt N waits ~interval*2^N
-	maxRetries  int
+	// mu guards downloadDir/interval/maxRetries/categoryPaths, which
+	// SetConfig/SetCategoryPaths can change live (see cmd/acervinode's
+	// liveSettings) — everything else on Importer is set once at
+	// construction and never mutated afterward.
+	mu            sync.Mutex
+	downloadDir   string
+	interval      time.Duration // also the backoff base: attempt N waits ~interval*2^N
+	maxRetries    int
+	categoryPaths map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
 	// live SetConfig call can reset the ticker without Run having to poll
@@ -82,6 +84,7 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		downloadDir:     downloadDir,
 		interval:        interval,
 		maxRetries:      maxRetries,
+		categoryPaths:   map[string]string{},
 		httpClient:      &http.Client{Timeout: 10 * time.Minute}, // files can be large
 		intervalChanged: make(chan time.Duration, 1),
 	}
@@ -119,6 +122,40 @@ func (im *Importer) getConfig() (downloadDir string, interval time.Duration, max
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	return im.downloadDir, im.interval, im.maxRetries
+}
+
+// SetCategoryPaths replaces the live category->override-dir map wholesale —
+// the next processDownload for any category takes the new mapping
+// immediately, no restart needed. A nil map is treated the same as empty.
+func (im *Importer) SetCategoryPaths(paths map[string]string) {
+	if paths == nil {
+		paths = map[string]string{}
+	}
+	im.mu.Lock()
+	im.categoryPaths = paths
+	im.mu.Unlock()
+}
+
+// categoryPath reports category's override directory, if one is set.
+func (im *Importer) categoryPath(category string) (string, bool) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	dir, ok := im.categoryPaths[category]
+	return dir, ok && dir != ""
+}
+
+// CategoryPaths reports the current live category->override-dir map — the
+// exported counterpart of categoryPath, for callers outside this package
+// that need to confirm a SetCategoryPaths call actually took (see
+// cmd/acervinode's settings tests).
+func (im *Importer) CategoryPaths() map[string]string {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	out := make(map[string]string, len(im.categoryPaths))
+	for k, v := range im.categoryPaths {
+		out[k] = v
+	}
+	return out
 }
 
 // Config reports the current live downloadDir/interval/maxRetries — the
@@ -277,8 +314,12 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 
 	destDir := d.SavePath
 	if destDir == "" {
-		downloadDir, _, _ := im.getConfig()
-		destDir = filepath.Join(downloadDir, d.Category, d.Name)
+		if override, ok := im.categoryPath(d.Category); ok {
+			destDir = filepath.Join(override, d.Name)
+		} else {
+			downloadDir, _, _ := im.getConfig()
+			destDir = filepath.Join(downloadDir, d.Category, d.Name)
+		}
 	}
 
 	for _, f := range files {

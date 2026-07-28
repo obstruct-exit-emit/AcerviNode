@@ -148,6 +148,10 @@ type fakeSettings struct {
 	usenetCategories  []string
 	addCategoryCalls  []addCategoryRequest
 	addCategoryErr    error
+
+	categoryPaths       map[string]string
+	setCategoryPathCall *setCategoryPathRequest
+	setCategoryPathErr  error
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -205,6 +209,27 @@ func (f *fakeSettings) Categories() (torrent []string, usenet []string) {
 func (f *fakeSettings) AddCategory(protocol, name string) error {
 	f.addCategoryCalls = append(f.addCategoryCalls, addCategoryRequest{Protocol: protocol, Name: name})
 	return f.addCategoryErr
+}
+
+func (f *fakeSettings) CategoryPaths() map[string]string {
+	return f.categoryPaths
+}
+
+func (f *fakeSettings) SetCategoryPath(_ context.Context, category, path string) error {
+	req := setCategoryPathRequest{Category: category, Path: path}
+	f.setCategoryPathCall = &req
+	if f.setCategoryPathErr != nil {
+		return f.setCategoryPathErr
+	}
+	if f.categoryPaths == nil {
+		f.categoryPaths = map[string]string{}
+	}
+	if path == "" {
+		delete(f.categoryPaths, category)
+	} else {
+		f.categoryPaths[category] = path
+	}
+	return nil
 }
 
 func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
@@ -606,6 +631,65 @@ func TestHandleAddCategory_RejectsInvalid(t *testing.T) {
 func TestHandleAddCategory_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/categories", strings.NewReader(`{"protocol":"torrent","name":"x"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleGetCategories_IncludesPaths(t *testing.T) {
+	settings := &fakeSettings{categoryPaths: map[string]string{"movies": "/mnt/movies"}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/categories"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got categoriesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Paths["movies"] != "/mnt/movies" {
+		t.Errorf("got.Paths = %v, want movies -> /mnt/movies", got.Paths)
+	}
+}
+
+func TestHandleSetCategoryPath(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/categories/path", strings.NewReader(`{"category":"movies","path":"/mnt/movies"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if settings.setCategoryPathCall == nil || settings.setCategoryPathCall.Category != "movies" || settings.setCategoryPathCall.Path != "/mnt/movies" {
+		t.Errorf("SetCategoryPath call = %+v", settings.setCategoryPathCall)
+	}
+}
+
+func TestHandleSetCategoryPath_RejectsInvalid(t *testing.T) {
+	settings := &fakeSettings{setCategoryPathErr: errors.New("category must not be empty")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/categories/path", strings.NewReader(`{"category":"","path":"/mnt/x"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleSetCategoryPath_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/categories/path", strings.NewReader(`{"category":"movies","path":"/mnt/movies"}`))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

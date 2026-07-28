@@ -38,6 +38,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Per-category save-path overrides: `config.yaml`'s new `category_paths` map
+  lets a category (e.g. "movies") route its Completed Download Handling
+  output to a specific directory — a different disk or mount, say — instead
+  of the default `download_dir/<category>`. New `PUT
+  /api/v1/settings/categories/path` (body `{"category", "path"}`, empty path
+  clears it), applied live to `internal/importer` with no restart and
+  persisted to `config.yaml`. `GET /api/v1/settings/categories`'s response
+  gained a `paths` field reporting current overrides. Web UI: a "Save path
+  overrides" list in Settings → Categories, one row per known category.
+- A "Default 'Download all' behavior" preference (individual files vs. a
+  single zip archive) in Settings → Downloads, controlling the downloads
+  table's per-row button — both options remain available per-download in the
+  detail view regardless of this default. Purely client-side (localStorage,
+  `web/src/preferences.ts`), not a server setting: it's about how this
+  browser behaves, not AcerviNode itself, and the underlying zip vs.
+  individual-files behavior already existed (see the previous two entries in
+  this file) — this just lets the row button's default match whichever the
+  user actually prefers instead of always defaulting to individual files.
 - `GET /api/v1/downloads/{id}/files/{fileId}/link` — resolves a direct,
   provider-hosted download URL for one file, for downloading straight
   through a browser instead of (or alongside) AcerviNode fetching it to

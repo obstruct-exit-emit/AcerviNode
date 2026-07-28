@@ -84,14 +84,15 @@ func (s *Server) handleUpdateGeneralSettings(w http.ResponseWriter, r *http.Requ
 }
 
 type categoriesResponse struct {
-	Torrent []string `json:"torrent"`
-	Usenet  []string `json:"usenet"`
+	Torrent []string          `json:"torrent"`
+	Usenet  []string          `json:"usenet"`
+	Paths   map[string]string `json:"paths"`
 }
 
 // handleGetCategories implements GET /api/v1/settings/categories.
 func (s *Server) handleGetCategories(w http.ResponseWriter, r *http.Request) {
 	torrent, usenet := s.settings.Categories()
-	writeJSON(w, categoriesResponse{Torrent: torrent, Usenet: usenet})
+	writeJSON(w, categoriesResponse{Torrent: torrent, Usenet: usenet, Paths: s.settings.CategoryPaths()})
 }
 
 type addCategoryRequest struct {
@@ -108,6 +109,28 @@ func (s *Server) handleAddCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.settings.AddCategory(req.Protocol, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type setCategoryPathRequest struct {
+	Category string `json:"category"`
+	Path     string `json:"path"`
+}
+
+// handleSetCategoryPath implements PUT /api/v1/settings/categories/path — sets
+// (or, with an empty path, clears) a per-category override directory that
+// internal/importer uses instead of download_dir/<category> for downloads in
+// that category. Applies immediately, no restart needed.
+func (s *Server) handleSetCategoryPath(w http.ResponseWriter, r *http.Request) {
+	var req setCategoryPathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := s.settings.SetCategoryPath(r.Context(), req.Category, req.Path); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

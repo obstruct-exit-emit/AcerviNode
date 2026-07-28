@@ -8,6 +8,7 @@ import {
   getStoredApiKey,
   getProviders,
   getVersion,
+  getZipLink,
   listDownloads,
   retryDownload,
   storeApiKey,
@@ -21,6 +22,7 @@ import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
 import { pickDirectory, supportsDirectoryPicker, writeFileToDirectory } from './fsAccess'
+import { getDownloadMode } from './preferences'
 import './App.css'
 
 const POLL_INTERVAL_MS = 4000
@@ -106,14 +108,40 @@ export default function App() {
     }
   }
 
-  // Downloads every file individually — the default, no-archive "download
-  // all" action (a single provider-zipped archive is a separate, explicit
-  // opt-in in the detail view — see DownloadDetail's "Download all (zip)").
-  // In a browser that supports it (Chromium-based; not Firefox/Safari),
-  // files are streamed straight into a folder the user picks, with no
-  // per-file tab/download popup at all. Elsewhere, it falls back to opening
-  // each file's link in its own tab.
+  // The per-row "Download all" button's entry point — dispatches on the
+  // user's Settings > Downloads preference (see preferences.getDownloadMode).
+  // 'zip' resolves the whole download as one provider-zipped archive; the
+  // default 'individual' fetches every file separately (see
+  // handleDownloadAllIndividual). Either way, the detail view's own explicit
+  // "Download all (zip)"/per-file buttons remain available regardless of
+  // this preference — it only controls the row button's default action.
   async function handleDownloadAll(d: Download) {
+    if (!apiKey) return
+    if (getDownloadMode() === 'zip') {
+      await handleDownloadAllZip(d)
+    } else {
+      await handleDownloadAllIndividual(d)
+    }
+  }
+
+  async function handleDownloadAllZip(d: Download) {
+    if (!apiKey) return
+    setDownloadingAllId(d.id)
+    try {
+      const { url } = await getZipLink(apiKey, d.id)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloadingAllId(null)
+    }
+  }
+
+  // Downloads every file individually. In a browser that supports it
+  // (Chromium-based; not Firefox/Safari), files are streamed straight into a
+  // folder the user picks, with no per-file tab/download popup at all.
+  // Elsewhere, it falls back to opening each file's link in its own tab.
+  async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
 
     // Must happen first, before any other await — the picker needs the

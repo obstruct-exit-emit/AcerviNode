@@ -124,6 +124,13 @@ type Settings interface {
 	// AddCategory manually registers a category name for the given
 	// protocol ("torrent" or "usenet").
 	AddCategory(protocol, name string) error
+	// CategoryPaths reports the current category-name -> override-directory
+	// map, applied by internal/importer in place of download_dir/<category>
+	// for downloads in that category (see SetCategoryPath).
+	CategoryPaths() map[string]string
+	// SetCategoryPath sets (or, if path is empty, clears) category's
+	// override destination directory, applies it live, and persists it.
+	SetCategoryPath(ctx context.Context, category, path string) error
 }
 
 // Server is AcerviNode's native API.
@@ -179,6 +186,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAuth(s.handleRegenerateAPIKey))
 	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAuth(s.handleGetCategories))
 	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAuth(s.handleAddCategory))
+	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAuth(s.handleSetCategoryPath))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

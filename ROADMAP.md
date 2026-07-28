@@ -249,7 +249,20 @@ CDN link instead of BitTorrent/NNTP.
   a single "Download" control with a small set of clear choices instead of
   several separate buttons scattered across the table row and detail view),
   and to make the folder-write path (currently Chromium-only) feel first-class
-  rather than a fallback-having bolt-on.
+  rather than a fallback-having bolt-on. Partial progress: a client-side
+  "default 'Download all' behavior" preference (Settings → Downloads) now
+  lets the per-row button default to either individual files or zip, so at
+  least the row's *default* action matches what a given user actually wants
+  — the full consolidation into one control is still outstanding.
+- **Settings surfaced/reorganized** (follow-on, from user feedback that
+  Settings should expose everything that makes sense to expose): audited
+  every `config.yaml` field against the Settings UI and found all of them
+  already surfaced — nothing was hidden. Added two settings that didn't
+  exist as config before: per-category save-path overrides
+  (`category_paths`, Settings → Categories → "Save path overrides") and the
+  download-mode preference above. Explicitly kept as sections rather than
+  reorganizing into tabs — three-and-a-bit sections still fits one screen
+  without much scrolling; revisit if Settings keeps growing.
 
 ## Phase 4 — Multi-provider ⏳
 

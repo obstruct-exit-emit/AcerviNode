@@ -593,6 +593,51 @@ func TestSetConfig_DownloadDirAppliesLive(t *testing.T) {
 	}
 }
 
+// TestSetCategoryPaths_OverridesDownloadDir proves a category with a
+// configured override directory lands there instead of under
+// downloadDir/<category>, and that a category with no override still falls
+// back to the downloadDir/<category> behavior.
+func TestSetCategoryPaths_OverridesDownloadDir(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("movie bytes"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "movie.mkv", SizeBytes: int64(len("movie bytes"))}},
+	}
+
+	d := &database.Download{
+		ID: "dl-catpath", Provider: "fake", ProviderDownloadID: "provider-catpath", Kind: database.KindTorrent,
+		Hash: "catpath1", Name: "Some Movie", Category: "movies", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	downloadDir := t.TempDir()
+	moviesOverride := t.TempDir()
+	im := New(db, provider, nil, downloadDir, time.Minute, 5)
+	im.SetCategoryPaths(map[string]string{"movies": moviesOverride})
+
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	want := filepath.Join(moviesOverride, "Some Movie", "movie.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected file at the category override dir %s, stat error = %v", want, err)
+	}
+	notWant := filepath.Join(downloadDir, "movies", "Some Movie", "movie.mkv")
+	if _, err := os.Stat(notWant); err == nil {
+		t.Errorf("file also landed at the unused default location %s, want only the override", notWant)
+	}
+}
+
 // TestSetConfig_MaxRetriesAppliesLive proves a maxRetries change from
 // SetConfig takes effect on the very next handleFailure call.
 func TestSetConfig_MaxRetriesAppliesLive(t *testing.T) {

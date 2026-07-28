@@ -311,6 +311,57 @@
   font-size: 12px;
 }
 
+.category-paths {
+  margin: 16px 0;
+}
+
+.category-paths h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+  color: var(--text-muted);
+}
+
+.category-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.category-path-name {
+  flex: 0 0 120px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-path-row input {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.category-path-row button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.category-path-row button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .add-category-form {
   display: flex;
   gap: 8px;

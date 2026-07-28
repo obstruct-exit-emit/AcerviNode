@@ -41,6 +41,17 @@ type Config struct {
 	// ImportIntervalSeconds) before giving up and moving the download to
 	// StateError.
 	ImportMaxRetries int `yaml:"import_max_retries"`
+
+	// CategoryPaths overrides DownloadDir on a per-category basis: a download
+	// in category "movies" mapped to "/mnt/movies" lands directly under that
+	// path (still namespaced by the download's own name) instead of under
+	// DownloadDir/movies. Only consulted when a download has no explicit
+	// save_path of its own (see internal/importer) — an *arr app supplying
+	// its own save_path always wins, the same as DownloadDir's fallback role
+	// today. Keyed by category name only, not per-protocol: the same
+	// category name means the same destination whether it came from the
+	// qBittorrent or SABnzbd compat shim.
+	CategoryPaths map[string]string `yaml:"category_paths"`
 }
 
 var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
@@ -54,6 +65,7 @@ func defaults() *Config {
 		DownloadDir:           "./downloads",
 		ImportIntervalSeconds: 10,
 		ImportMaxRetries:      5,
+		CategoryPaths:         map[string]string{},
 	}
 }
 
@@ -79,6 +91,9 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderConfig{}
+	}
+	if cfg.CategoryPaths == nil {
+		cfg.CategoryPaths = map[string]string{}
 	}
 
 	applyEnv(cfg)

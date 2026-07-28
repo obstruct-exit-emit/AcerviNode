@@ -435,3 +435,57 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 		t.Errorf("usenet categories = %v, want it to include tv", usenetCats)
 	}
 }
+
+// TestLiveSettings_SetCategoryPath proves a category path override applies
+// live to the wired Importer, persists to config.yaml, and can be cleared
+// again by setting an empty path.
+func TestLiveSettings_SetCategoryPath(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, time.Minute, 5)
+	settings.SetImporter(imp)
+
+	ctx := context.Background()
+	if err := settings.SetCategoryPath(ctx, "movies", "/mnt/movies"); err != nil {
+		t.Fatalf("SetCategoryPath() error = %v", err)
+	}
+	if err := settings.SetCategoryPath(ctx, "", "/mnt/anything"); err == nil {
+		t.Error("SetCategoryPath with an empty category: expected an error, got nil")
+	}
+
+	if got := settings.CategoryPaths(); got["movies"] != "/mnt/movies" {
+		t.Errorf("CategoryPaths() = %v, want movies -> /mnt/movies", got)
+	}
+	if got := imp.CategoryPaths(); got["movies"] != "/mnt/movies" {
+		t.Errorf("importer CategoryPaths() = %v, want movies -> /mnt/movies applied live", got)
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() reload error = %v", err)
+	}
+	if reloaded.CategoryPaths["movies"] != "/mnt/movies" {
+		t.Errorf("persisted config category_paths = %v, want movies -> /mnt/movies", reloaded.CategoryPaths)
+	}
+
+	// Clearing with an empty path removes the override entirely.
+	if err := settings.SetCategoryPath(ctx, "movies", ""); err != nil {
+		t.Fatalf("SetCategoryPath() clear error = %v", err)
+	}
+	if got := settings.CategoryPaths(); got["movies"] != "" {
+		t.Errorf("CategoryPaths() after clear = %v, want no movies entry", got)
+	}
+	if got := imp.CategoryPaths(); got["movies"] != "" {
+		t.Errorf("importer CategoryPaths() after clear = %v, want no movies entry applied live", got)
+	}
+}

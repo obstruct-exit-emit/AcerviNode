@@ -51,11 +51,16 @@ func (s *liveSettings) SetLevelVar(levelVar *slog.LevelVar) {
 
 // SetImporter wires in the Importer built in run(), once it exists — see
 // UpdateGeneral, which calls its SetConfig to apply download_dir/
-// import_interval_seconds/import_max_retries changes live.
+// import_interval_seconds/import_max_retries changes live. Also pushes
+// whatever category path overrides config.yaml already had at startup, so a
+// value set through the UI on a previous run is live again immediately,
+// without waiting for a SetCategoryPath call.
 func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	s.mu.Lock()
 	s.imp = imp
+	categoryPaths := copyCategoryPaths(s.cfg.CategoryPaths)
 	s.mu.Unlock()
+	imp.SetCategoryPaths(categoryPaths)
 }
 
 // SetShimServers wires in the compat shim servers built in buildHandler,
@@ -232,4 +237,50 @@ func (s *liveSettings) AddCategory(protocol, name string) error {
 		return fmt.Errorf("unknown protocol %q: must be torrent or usenet", protocol)
 	}
 	return nil
+}
+
+// CategoryPaths reports the current category->override-dir map — see
+// config.Config.CategoryPaths.
+func (s *liveSettings) CategoryPaths() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return copyCategoryPaths(s.cfg.CategoryPaths)
+}
+
+// SetCategoryPath sets or clears (path == "") category's override
+// destination directory, applies it live via the Importer, and persists it
+// to config.yaml — the same live-swap-then-save pattern as SetTorBoxAPIKey.
+func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string) error {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return fmt.Errorf("category must not be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cfg.CategoryPaths == nil {
+		s.cfg.CategoryPaths = map[string]string{}
+	}
+	if path == "" {
+		delete(s.cfg.CategoryPaths, category)
+	} else {
+		s.cfg.CategoryPaths[category] = path
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+
+	if s.imp != nil {
+		s.imp.SetCategoryPaths(copyCategoryPaths(s.cfg.CategoryPaths))
+	}
+	return nil
+}
+
+func copyCategoryPaths(src map[string]string) map[string]string {
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }

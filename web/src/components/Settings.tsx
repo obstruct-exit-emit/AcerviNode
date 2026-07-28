@@ -5,6 +5,7 @@ import {
   getGeneralSettings,
   getProviderSettings,
   regenerateApiKey,
+  setCategoryPath,
   setTorBoxApiKey,
   testTorBoxConnection,
   updateGeneralSettings,
@@ -14,6 +15,50 @@ import {
   type GeneralUpdateInput,
   type ProviderSettings,
 } from '../api'
+import { getDownloadMode, setDownloadMode, type DownloadMode } from '../preferences'
+
+// One row of the "Save path overrides" list — kept as its own component,
+// keyed by category name, so an in-progress edit in one row survives a
+// `load()` triggered by saving a different row (see Settings' onSaved).
+function CategoryPathRow({ name, currentPath, apiKey, onSaved }: { name: string; currentPath: string; apiKey: string; onSaved: () => void }) {
+  const [path, setPath] = useState(currentPath)
+  const [savedPath, setSavedPath] = useState(currentPath)
+  const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
+
+  async function handleSave() {
+    const trimmed = path.trim()
+    setStatus({ kind: 'saving' })
+    try {
+      await setCategoryPath(apiKey, name, trimmed)
+      setPath(trimmed)
+      setSavedPath(trimmed)
+      setStatus({ kind: 'saved' })
+      onSaved()
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  return (
+    <div className="category-path-row">
+      <span className="category-path-name">{name}</span>
+      <input
+        type="text"
+        placeholder="Default: download_dir/<category>/<name>"
+        value={path}
+        onChange={(e) => {
+          setPath(e.target.value)
+          if (status.kind !== 'idle') setStatus({ kind: 'idle' })
+        }}
+      />
+      <button type="button" onClick={handleSave} disabled={status.kind === 'saving' || path.trim() === savedPath}>
+        {status.kind === 'saving' ? 'Saving…' : 'Save'}
+      </button>
+      {status.kind === 'saved' && <span className="settings-success">Saved</span>}
+      {status.kind === 'error' && <span className="settings-error">{status.message}</span>}
+    </div>
+  )
+}
 
 interface Props {
   apiKey: string
@@ -44,6 +89,7 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
   const [newCategory, setNewCategory] = useState('')
   const [newCategoryProtocol, setNewCategoryProtocol] = useState<'torrent' | 'usenet'>('torrent')
   const [categoryStatus, setCategoryStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
+  const [downloadMode, setDownloadModeState] = useState<DownloadMode>(() => getDownloadMode())
 
   async function load() {
     try {
@@ -330,6 +376,28 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
             </div>
           </div>
         )}
+        {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
+          <div className="category-paths">
+            <h3>Save path overrides</h3>
+            <p className="settings-help">
+              Optional — redirect a category's completed downloads to a specific directory
+              instead of the default <code>download_dir/&lt;category&gt;</code> (e.g. to route it
+              to a different disk or mount). Leave blank to use the default.
+            </p>
+            {Array.from(new Set([...categories.torrent, ...categories.usenet]))
+              .sort()
+              .map((name) => (
+                <CategoryPathRow
+                  key={name}
+                  name={name}
+                  currentPath={categories.paths[name] ?? ''}
+                  apiKey={apiKey}
+                  onSaved={load}
+                />
+              ))}
+          </div>
+        )}
+
         <form className="add-category-form" onSubmit={handleAddCategory}>
           <select value={newCategoryProtocol} onChange={(e) => setNewCategoryProtocol(e.target.value as 'torrent' | 'usenet')}>
             <option value="torrent">Torrent</option>
@@ -341,6 +409,33 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
           </button>
         </form>
         {categoryStatus.kind === 'error' && <p className="settings-error">Failed to add: {categoryStatus.message}</p>}
+      </section>
+
+      <section className="settings-card">
+        <h2>Downloads</h2>
+        <div className="general-form">
+          <label>
+            Default "Download all" behavior
+            <select
+              value={downloadMode}
+              onChange={(e) => {
+                const mode = e.target.value as DownloadMode
+                setDownloadMode(mode)
+                setDownloadModeState(mode)
+              }}
+            >
+              <option value="individual">Individual files</option>
+              <option value="zip">Single zip archive</option>
+            </select>
+          </label>
+        </div>
+        <p className="settings-help">
+          Individual files are streamed straight into a folder you pick (Chromium-based browsers
+          only — Firefox/Safari open one tab per file instead). Zip resolves the whole download as
+          one provider-zipped archive. Either way, both options stay available per-download in the
+          detail view — this only sets the per-row button's default. Stored in this browser only,
+          not on the server.
+        </p>
       </section>
     </div>
   )

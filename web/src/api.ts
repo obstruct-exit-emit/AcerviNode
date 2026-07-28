@@ -222,6 +222,9 @@ export function testTorBoxConnection(apiKey: string): Promise<{ ok: boolean; lat
 export interface Categories {
   torrent: string[]
   usenet: string[]
+  // paths maps a category name to its override destination directory (see
+  // setCategoryPath) — only categories with an override set have an entry.
+  paths: Record<string, string>
 }
 
 export function getCategories(apiKey: string): Promise<Categories> {
@@ -233,5 +236,17 @@ export function addCategory(apiKey: string, protocol: 'torrent' | 'usenet', name
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ protocol, name }),
+  })
+}
+
+// setCategoryPath sets category's override destination directory — internal/
+// importer uses it instead of download_dir/<category> for downloads in that
+// category. Pass an empty path to clear a previously set override. Applies
+// immediately, no restart needed.
+export function setCategoryPath(apiKey: string, category: string, path: string): Promise<void> {
+  return request('/api/v1/settings/categories/path', apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category, path }),
   })
 }
