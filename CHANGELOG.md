@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GET /api/v1/downloads/{id}/files/{fileId}/link` — resolves a direct,
+  provider-hosted download URL for one file, for downloading straight
+  through a browser instead of (or alongside) AcerviNode fetching it to
+  local disk. The exact same call `internal/importer` itself makes, not
+  cached or proxied. Web UI: a "Download" button per file in the detail
+  view's file table. Building this surfaced a real, previously-unnoticed
+  bug — see Fixed below — since it needed `GET /api/v1/downloads/{id}`'s
+  file list to actually work first. Verified live: resolved a real TorBox
+  CDN link and confirmed it served the exact file (`Content-Length` matched
+  the known size exactly).
 - `POST /api/v1/downloads/{id}/readd` — retry's stronger sibling, for when
   the *original* provider-side download is gone entirely (expired from the
   provider's own list), not just a transient fetch failure. New `downloads.
@@ -147,6 +157,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `GET /api/v1/downloads/{id}` always returned `files: []`, even for a fully
+  `ready_for_import` download with real files on local disk — the
+  `download_files` table it read from was defined but never actually
+  populated by anything (`ReplaceDownloadFiles` had no real caller). Found
+  while building manual download links, which needed a working file list to
+  attach a per-file "Download" button to. Fixed by querying the provider
+  live instead — the same approach `internal/qbittorrent`'s own file listing
+  already used successfully — rather than fixing the unused local cache.
+  Confirmed live: a real completed download that had shown `files: []` for
+  this entire session now correctly lists all 3 of its actual files.
 - `internal/debrid/torbox`: `createusenetdownload`'s `usenetdownload_id` is
   decoded as a JSON number now, not a string — the official SDK's docs say
   string, but a real account's response doesn't match that, and adding an NZB

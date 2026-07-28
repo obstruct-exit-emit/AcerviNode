@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -44,6 +46,9 @@ type downloadResponse struct {
 type downloadFileResponse struct {
 	Path      string `json:"path"`
 	SizeBytes int64  `json:"size_bytes"`
+	// ProviderFileID is what GET .../files/{fileId}/link needs to resolve a
+	// direct download URL for this specific file (see handleGetFileLink).
+	ProviderFileID string `json:"provider_file_id,omitempty"`
 }
 
 const timeFormat = "2006-01-02T15:04:05Z07:00"
@@ -95,25 +100,98 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetDownload implements GET /api/v1/downloads/{id} — detail plus its
-// file list.
+// file list, queried live from the provider (the same as
+// internal/qbittorrent's own handleFiles) rather than a local cache: a
+// download's files aren't knowable until the provider has actually
+// processed it, and there's nowhere in AcerviNode that persists them
+// locally otherwise. A provider error here (e.g. still queued, nothing to
+// list yet) isn't a hard failure — it just means an empty file list, not a
+// broken download page.
 func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.downloadByID(w, r)
 	if !ok {
 		return
 	}
-	files, err := s.db.ListDownloadFiles(r.Context(), d.ID)
+	files, err := s.filesForDownload(r.Context(), d)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		files = nil
 	}
 	fileResp := make([]downloadFileResponse, len(files))
 	for i, f := range files {
-		fileResp[i] = downloadFileResponse{Path: f.Path, SizeBytes: f.SizeBytes}
+		fileResp[i] = downloadFileResponse{Path: f.Path, SizeBytes: f.SizeBytes, ProviderFileID: f.ProviderFileID}
 	}
 	writeJSON(w, struct {
 		downloadResponse
 		Files []downloadFileResponse `json:"files"`
 	}{toDownloadResponse(d), fileResp})
+}
+
+// filesForDownload queries the provider for a download's current file list —
+// shared by handleGetDownload and handleGetFileLink.
+func (s *Server) filesForDownload(ctx context.Context, d *database.Download) ([]debrid.DownloadFile, error) {
+	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
+	switch d.Kind {
+	case database.KindTorrent:
+		if s.torrentProvider == nil {
+			return nil, debrid.ErrNoProvider
+		}
+		return s.torrentProvider.Files(ctx, id)
+	case database.KindUsenet:
+		if s.usenetProvider == nil {
+			return nil, debrid.ErrNoProvider
+		}
+		return s.usenetProvider.Files(ctx, id)
+	default:
+		return nil, fmt.Errorf("unknown download kind %q", d.Kind)
+	}
+}
+
+// handleGetFileLink implements GET /api/v1/downloads/{id}/files/{fileId}/link
+// — resolves a direct, provider-hosted download URL for one file, so it can
+// be downloaded straight through the browser instead of (or in addition to)
+// AcerviNode fetching it to local disk. The URL comes straight from the
+// provider (see debrid.TorrentProvider/UsenetProvider.RequestDownloadLink,
+// the same call internal/importer itself makes) — AcerviNode doesn't proxy
+// or cache it.
+func (s *Server) handleGetFileLink(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	d, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+	fileID := r.PathValue("fileId")
+	if fileID == "" {
+		http.Error(w, "file id is required", http.StatusBadRequest)
+		return
+	}
+
+	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
+	var (
+		url string
+		err error
+	)
+	switch d.Kind {
+	case database.KindTorrent:
+		if s.torrentProvider == nil {
+			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.torrentProvider.RequestDownloadLink(ctx, id, fileID)
+	case database.KindUsenet:
+		if s.usenetProvider == nil {
+			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.usenetProvider.RequestDownloadLink(ctx, id, fileID)
+	default:
+		http.Error(w, "unknown download kind", http.StatusInternalServerError)
+		return
+	}
+	if err != nil {
+		writeProviderError(w, string(d.Kind), err)
+		return
+	}
+	writeJSON(w, map[string]string{"url": url})
 }
 
 // handleDeleteDownload implements DELETE /api/v1/downloads/{id}?deleteFiles=true.

@@ -29,6 +29,7 @@ export interface Download {
 export interface DownloadFile {
   path: string
   size_bytes: number
+  provider_file_id?: string
 }
 
 export interface DownloadDetail extends Download {
@@ -84,6 +85,16 @@ export function listDownloads(apiKey: string): Promise<Download[]> {
 
 export function getDownload(apiKey: string, id: string): Promise<DownloadDetail> {
   return request(`/api/v1/downloads/${encodeURIComponent(id)}`, apiKey)
+}
+
+// getFileLink resolves a direct, provider-hosted download URL for one file
+// — resolved fresh on every call (not cached), matching what
+// internal/importer itself does when fetching a file to local disk.
+export function getFileLink(apiKey: string, downloadId: string, providerFileId: string): Promise<{ url: string }> {
+  return request(
+    `/api/v1/downloads/${encodeURIComponent(downloadId)}/files/${encodeURIComponent(providerFileId)}/link`,
+    apiKey,
+  )
 }
 
 export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean): Promise<void> {

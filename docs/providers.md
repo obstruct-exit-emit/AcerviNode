@@ -160,6 +160,19 @@ as a genuinely new add, then points the local row at the new
 `provider_download_id`. The web UI shows both "Retry" and "Re-add" side by
 side once a download is in `error` state.
 
+A download's files don't need to be fetched to local disk at all to be
+usable: `GET /api/v1/downloads/{id}/files/{fileId}/link` resolves a direct,
+provider-hosted URL for one file — the exact same `RequestDownloadLink` call
+`fetchFile` above makes, just handed straight back to the caller instead of
+being streamed to disk. Always a live provider call, never cached — see
+[API](api.md#manual-downloads). This also meant `GET /api/v1/downloads/{id}`
+needed a real file list to attach a link to, which surfaced a genuine
+pre-existing bug: the local `download_files` table it read from was defined
+but nothing ever populated it, so `files` was always `[]` in practice, even
+for a fully completed download. Fixed by having it query the provider live
+too, the same way `internal/qbittorrent`'s own file listing already did —
+see CHANGELOG.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

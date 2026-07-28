@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ApiError, getDownload, reAddDownload, retryDownload, type DownloadDetail as DownloadDetailData } from '../api'
+import {
+  ApiError,
+  getDownload,
+  getFileLink,
+  reAddDownload,
+  retryDownload,
+  type DownloadDetail as DownloadDetailData,
+} from '../api'
 import { formatBytes, formatRelativeTime } from '../format'
 import { StateBadge } from './StateBadge'
 
@@ -16,6 +23,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
   const [error, setError] = useState<string | undefined>(undefined)
   const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
   const [readdStatus, setReaddStatus] = useState<{ kind: 'idle' | 'readding' | 'error'; message?: string }>({ kind: 'idle' })
+  const [resolvingPath, setResolvingPath] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -72,6 +80,22 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
+
+  async function handleDownloadFile(f: { path: string; provider_file_id?: string }) {
+    if (!f.provider_file_id) return
+    setResolvingPath(f.path)
+    try {
+      const { url } = await getFileLink(apiKey, id, f.provider_file_id)
+      // A resolved link is the provider's own CDN URL, not one of ours — no
+      // Authorization header needed (or sendable) for this second
+      // navigation, unlike every other call in this app.
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : String(err))
+    } finally {
+      setResolvingPath(null)
+    }
+  }
 
   return (
     <div className="detail-overlay" onClick={onClose}>
@@ -173,6 +197,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                   <tr>
                     <th>Path</th>
                     <th>Size</th>
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -180,6 +205,19 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                     <tr key={f.path}>
                       <td className="mono">{f.path}</td>
                       <td>{formatBytes(f.size_bytes)}</td>
+                      <td>
+                        {f.provider_file_id && (
+                          <button
+                            type="button"
+                            className="download-file-btn"
+                            onClick={() => handleDownloadFile(f)}
+                            disabled={resolvingPath === f.path}
+                            title="Download directly from the provider"
+                          >
+                            {resolvingPath === f.path ? 'Resolving…' : 'Download'}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

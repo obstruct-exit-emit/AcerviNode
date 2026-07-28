@@ -26,7 +26,8 @@ server logs or `config.yaml`.
 | `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first |
 | `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category`. Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
 | `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
-| `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view |
+| `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
+| `GET` | `/api/v1/downloads/{id}/files/{fileId}/link` | Resolves a direct, provider-hosted download URL for one file — `fileId` is a file's `provider_file_id` from the download's `files` array. Fresh on every call, not cached; the URL is the provider's own CDN link, good for a browser to download straight from (no `Authorization` header needed for that second request — it's not one of ours). `503` if the relevant provider isn't configured; `502` for any other provider-side failure |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `POST` | `/api/v1/downloads/{id}/retry` | Manually retries a download that gave up after exhausting `import_max_retries` — resets `state` back to `provider_completed` and clears `retry_count`/`error_message`, so `internal/importer`'s very next tick attempts the fetch again from scratch. `409` if the download isn't currently in `error` state |
 | `POST` | `/api/v1/downloads/{id}/readd` | Stronger sibling of `retry`, for when the *original* provider-side download is gone (e.g. expired from the provider's own list) rather than a transient fetch failure. Resubmits the download's stored original magnet/NZB URL to the provider as a brand new add, then points the local row at the new `provider_download_id` (best-effort delete of the old one first). `400` if no source was stored (added via file upload — nothing to resubmit); `409` if not in `error` state, or if the fresh add happens to dedupe back to a different already-tracked download |
@@ -76,8 +77,13 @@ provider ID.
 a download has failed at least once — see
 [Providers](providers.md#completed-download-handling) for what sets them.
 `GET /api/v1/downloads/{id}` additionally embeds a `files` array
-(`[{"path": "...", "size_bytes": ...}]`), which the list endpoint omits since it
-would mean an extra query per row for something the table view doesn't show.
+(`[{"path": "...", "size_bytes": ..., "provider_file_id": "..."}]`), which the
+list endpoint omits since it would mean an extra provider query per row for
+something the table view doesn't show. `provider_file_id` is what
+`.../files/{fileId}/link` needs to resolve a direct download URL for that
+specific file — see [Manual downloads](#manual-downloads) below. This is a
+live query against the provider on every call, not a local cache — a queued
+or still-processing download simply has an empty `files` array, not an error.
 
 ## Adding downloads directly
 
@@ -101,6 +107,26 @@ usually has the provider's real name/hash/size right away — same
 provider-status-not-indexed-yet fallback (using the magnet/URL/filename
 instead) as both compat shims already do on their own adds; see
 [qBittorrent API](qbittorrent-api.md) and [SABnzbd API](sabnzbd-api.md).
+
+## Manual downloads
+
+`GET /api/v1/downloads/{id}/files/{fileId}/link` resolves a direct,
+provider-hosted URL for one file — for downloading straight through a
+browser instead of (or in addition to) `internal/importer` fetching it to
+AcerviNode's own local disk. It's the exact same call `internal/importer`
+itself makes when fetching a file (see
+[Providers](providers.md#completed-download-handling)) — AcerviNode doesn't
+proxy, cache, or otherwise sit in the middle of the actual transfer, it just
+hands back what the provider gave it. The web UI's detail view shows a
+"Download" button per file once `provider_file_id` is available.
+
+Two auth models meet at this boundary, deliberately: the `link` call itself
+needs AcerviNode's own `Authorization: Bearer <api_key>` like every other
+endpoint here, but the URL it returns is the provider's own — a plain
+browser navigation to *that* URL needs no header at all. A raw `<a href>`
+pointing straight at `.../link` wouldn't work (a browser navigation can't
+attach a custom header), so a client has to `fetch` it first, then navigate
+to the URL in the response.
 
 ## What's thin here (see [Providers](providers.md) for why)
 

@@ -728,10 +728,30 @@ table.detail-files td {
   font-size: 13px;
 }
 
+table.detail-files td:nth-child(2),
+table.detail-files th:nth-child(2),
 table.detail-files td:last-child,
 table.detail-files th:last-child {
   white-space: nowrap;
   text-align: right;
+}
+
+.download-file-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.download-file-btn:hover {
+  border-color: var(--accent);
+}
+
+.download-file-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 table.detail-files td.mono {

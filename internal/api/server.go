@@ -31,13 +31,18 @@ type deleter interface {
 // torrent-capable debrid provider — enough to add a torrent directly
 // (magnet or an uploaded .torrent file), mirroring internal/qbittorrent's
 // own add flow, plus Delete so one field on Server covers everything the
-// native API does with a torrent provider.
+// native API does with a torrent provider. Files/RequestDownloadLink back
+// GET /api/v1/downloads/{id}'s file list and the manual download-link
+// endpoint (see handleGetFileLink) — queried live from the provider, the
+// same as internal/qbittorrent's own handleFiles, rather than a local cache.
 type torrentAdder interface {
 	deleter
 	Name() string
 	AddMagnet(ctx context.Context, magnetURI string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	AddTorrentFile(ctx context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
+	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
+	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 }
 
 // usenetAdder is torrentAdder's usenet counterpart, backing
@@ -48,6 +53,8 @@ type usenetAdder interface {
 	AddNZBURL(ctx context.Context, link string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	AddNZBFile(ctx context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
+	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
+	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 }
 
 // GeneralInfo is AcerviNode's own runtime configuration, as reported to the
@@ -160,6 +167,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/retry", s.requireAuth(s.handleRetryDownload))
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/readd", s.requireAuth(s.handleReAddDownload))
+	s.mux.HandleFunc("GET /api/v1/downloads/{id}/files/{fileId}/link", s.requireAuth(s.handleGetFileLink))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAuth(s.handleTestTorBoxConnection))

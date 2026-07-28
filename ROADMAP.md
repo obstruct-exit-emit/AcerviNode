@@ -199,6 +199,20 @@ CDN link instead of BitTorrent/NNTP.
   different already-tracked row (409, no mutation) rather than corrupting
   either — verified live, since re-adding a well-cached test magnet did
   exactly that on the real account.
+- **Manual download links**: `GET /api/v1/downloads/{id}/files/{fileId}/link`
+  resolves a direct provider-hosted URL for one file, so it can be
+  downloaded straight through a browser without AcerviNode fetching it to
+  local disk at all. Building it required a real, working file list first —
+  which surfaced a genuine, previously-unnoticed bug: `GET
+  /api/v1/downloads/{id}`'s `files` array had been `[]` this entire session,
+  every single time, because the local `download_files` table it read from
+  was defined but never actually populated by anything. Fixed by querying
+  the provider live instead (matching `internal/qbittorrent`'s own file
+  listing), rather than fixing the dead local cache. Verified live twice: the
+  files bug fix (a real completed download's file list went from `[]` to all
+  3 real files) and the link itself (resolved a real TorBox CDN URL and
+  confirmed via `curl -I` that its `Content-Length` matched the file's known
+  size exactly).
 
 ## Phase 4 — Multi-provider ⏳
 

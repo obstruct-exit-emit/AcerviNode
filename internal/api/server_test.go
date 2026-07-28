@@ -37,6 +37,13 @@ type fakeProvider struct {
 
 	statusResp debrid.DownloadStatus
 	statusErr  error
+
+	filesResp []debrid.DownloadFile
+	filesErr  error
+
+	linkResp      string
+	linkErr       error
+	linkRequested string // fileID RequestDownloadLink was last called with
 }
 
 func (f *fakeProvider) Name() string {
@@ -92,6 +99,21 @@ func (f *fakeProvider) Status(_ context.Context, _ debrid.ProviderDownloadID) (d
 		return debrid.DownloadStatus{}, f.statusErr
 	}
 	return f.statusResp, nil
+}
+
+func (f *fakeProvider) Files(_ context.Context, _ debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
+	if f.filesErr != nil {
+		return nil, f.filesErr
+	}
+	return f.filesResp, nil
+}
+
+func (f *fakeProvider) RequestDownloadLink(_ context.Context, _ debrid.ProviderDownloadID, fileID string) (string, error) {
+	f.linkRequested = fileID
+	if f.linkErr != nil {
+		return "", f.linkErr
+	}
+	return f.linkResp, nil
 }
 
 type fakeSettings struct {
@@ -621,13 +643,15 @@ func TestHandleListDownloads_RequiresAuth(t *testing.T) {
 }
 
 func TestHandleGetDownload(t *testing.T) {
-	srv, db := newTestServer(t, nil, nil, nil)
+	// Files come from a live provider query now (see filesForDownload), not
+	// a local cache — found via a real bug: the local download_files table
+	// was defined but never actually populated anywhere, so GET
+	// /api/v1/downloads/{id} always returned files: [] in production.
+	provider := &fakeProvider{filesResp: []debrid.DownloadFile{
+		{ProviderFileID: "f1", Path: "movie.mkv", SizeBytes: 1024},
+	}}
+	srv, db := newTestServer(t, provider, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
-	if err := db.ReplaceDownloadFiles(context.Background(), d.ID, []*database.DownloadFile{
-		{ID: "f1", Path: "movie.mkv", SizeBytes: 1024},
-	}); err != nil {
-		t.Fatalf("ReplaceDownloadFiles() error = %v", err)
-	}
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
@@ -644,7 +668,7 @@ func TestHandleGetDownload(t *testing.T) {
 	if got.ID != d.ID {
 		t.Errorf("ID = %q, want %q", got.ID, d.ID)
 	}
-	if len(got.Files) != 1 || got.Files[0].Path != "movie.mkv" {
+	if len(got.Files) != 1 || got.Files[0].Path != "movie.mkv" || got.Files[0].ProviderFileID != "f1" {
 		t.Errorf("files = %+v", got.Files)
 	}
 }
@@ -684,6 +708,109 @@ func TestHandleGetDownload_NotFound(t *testing.T) {
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/does-not-exist"))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestHandleGetDownload_FilesUnavailableIsNotAHardError proves a provider
+// error while listing files (e.g. still queued, nothing to list yet)
+// degrades to an empty file list rather than failing the whole download
+// detail response.
+func TestHandleGetDownload_FilesUnavailableIsNotAHardError(t *testing.T) {
+	provider := &fakeProvider{filesErr: errors.New("torbox: torrent not found")}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		downloadResponse
+		Files []downloadFileResponse `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Files == nil || len(got.Files) != 0 {
+		t.Errorf("files = %v, want an empty (not null) array", got.Files)
+	}
+}
+
+func TestHandleGetFileLink(t *testing.T) {
+	provider := &fakeProvider{linkResp: "https://cdn.torbox.app/movie.mkv"}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.linkRequested != "f1" {
+		t.Errorf("RequestDownloadLink called with fileID %q, want f1", provider.linkRequested)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["url"] != "https://cdn.torbox.app/movie.mkv" {
+		t.Errorf("url = %q", got["url"])
+	}
+}
+
+func TestHandleGetFileLink_Usenet(t *testing.T) {
+	provider := &fakeProvider{linkResp: "https://cdn.torbox.app/episode.mkv"}
+	srv, db := newTestServer(t, nil, provider, nil)
+	d := seedDownload(t, db, database.KindUsenet, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGetFileLink_ProviderError(t *testing.T) {
+	provider := &fakeProvider{linkErr: errors.New("torbox: link expired")}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link"))
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleGetFileLink_NoProviderConfigured(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleGetFileLink_DownloadNotFound(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/does-not-exist/files/f1/link"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleGetFileLink_RequiresAuth(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
 
