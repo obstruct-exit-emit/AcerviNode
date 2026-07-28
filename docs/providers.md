@@ -220,6 +220,19 @@ unmarshal number into Go struct field ...usenetdownload_id of type string`) — 
 numeric shape as a torrent's `torrent_id`, and now decoded/formatted the same way
 (`CreateUsenetDownload`).
 
+`requestdl` also has an undocumented `zip_link=true` parameter — omit
+`file_id` and add it, and TorBox returns a single URL that zips every file
+in the torrent/usenet download server-side. Not mentioned in the official
+SDK or public docs; found by testing directly against a real account, then
+confirmed the returned URL actually serves a real `.zip`
+(`Content-Type: application/zip`, correct total size) via `curl -I`. Backs
+`RequestZipDownloadLink` and `GET /api/v1/downloads/{id}/zip-link` — see
+[API](api.md#manual-downloads). The torrent side is directly verified live;
+the usenet side (`RequestUsenetZipDownloadLink`) mirrors the same shape but
+wasn't independently confirmed — by the time it was written, every usenet
+download on the test account had expired from `mylist` (0 items), leaving
+nothing live to test `zip_link` against on that side specifically.
+
 ## Adding a new provider
 
 1. New subpackage under `internal/debrid/<name>/`.

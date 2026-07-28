@@ -44,6 +44,10 @@ type fakeProvider struct {
 	linkResp      string
 	linkErr       error
 	linkRequested string // fileID RequestDownloadLink was last called with
+
+	zipLinkResp string
+	zipLinkErr  error
+	zipLinkID   debrid.ProviderDownloadID // id RequestZipDownloadLink was last called with
 }
 
 func (f *fakeProvider) Name() string {
@@ -114,6 +118,14 @@ func (f *fakeProvider) RequestDownloadLink(_ context.Context, _ debrid.ProviderD
 		return "", f.linkErr
 	}
 	return f.linkResp, nil
+}
+
+func (f *fakeProvider) RequestZipDownloadLink(_ context.Context, id debrid.ProviderDownloadID) (string, error) {
+	f.zipLinkID = id
+	if f.zipLinkErr != nil {
+		return "", f.zipLinkErr
+	}
+	return f.zipLinkResp, nil
 }
 
 type fakeSettings struct {
@@ -809,6 +821,83 @@ func TestHandleGetFileLink_RequiresAuth(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/files/f1/link", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleGetZipLink(t *testing.T) {
+	provider := &fakeProvider{zipLinkResp: "https://cdn.torbox.app/all.zip"}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/zip-link"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.zipLinkID != "p1" {
+		t.Errorf("RequestZipDownloadLink called with id %q, want p1", provider.zipLinkID)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["url"] != "https://cdn.torbox.app/all.zip" {
+		t.Errorf("url = %q", got["url"])
+	}
+}
+
+func TestHandleGetZipLink_Usenet(t *testing.T) {
+	provider := &fakeProvider{zipLinkResp: "https://cdn.torbox.app/all.zip"}
+	srv, db := newTestServer(t, nil, provider, nil)
+	d := seedDownload(t, db, database.KindUsenet, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/zip-link"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGetZipLink_ProviderError(t *testing.T) {
+	provider := &fakeProvider{zipLinkErr: errors.New("torbox: zip generation failed")}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/zip-link"))
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleGetZipLink_NoProviderConfigured(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/zip-link"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleGetZipLink_DownloadNotFound(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/does-not-exist/zip-link"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleGetZipLink_RequiresAuth(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID+"/zip-link", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

@@ -194,6 +194,49 @@ func (s *Server) handleGetFileLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"url": url})
 }
 
+// handleGetZipLink implements GET /api/v1/downloads/{id}/zip-link — resolves
+// one URL for every file in the download at once, zipped provider-side (see
+// debrid.TorrentProvider/UsenetProvider.RequestZipDownloadLink). An explicit
+// opt-in alternative to downloading files individually (see
+// handleGetFileLink and the web UI's per-row "Download all" button, which
+// downloads files individually by default) — some people want one archive,
+// some don't.
+func (s *Server) handleGetZipLink(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	d, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+
+	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
+	var (
+		url string
+		err error
+	)
+	switch d.Kind {
+	case database.KindTorrent:
+		if s.torrentProvider == nil {
+			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.torrentProvider.RequestZipDownloadLink(ctx, id)
+	case database.KindUsenet:
+		if s.usenetProvider == nil {
+			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.usenetProvider.RequestZipDownloadLink(ctx, id)
+	default:
+		http.Error(w, "unknown download kind", http.StatusInternalServerError)
+		return
+	}
+	if err != nil {
+		writeProviderError(w, string(d.Kind), err)
+		return
+	}
+	writeJSON(w, map[string]string{"url": url})
+}
+
 // handleDeleteDownload implements DELETE /api/v1/downloads/{id}?deleteFiles=true.
 // Mirrors internal/qbittorrent's delete: the provider call is best-effort —
 // a failure there (e.g. the provider already forgot about it) doesn't stop

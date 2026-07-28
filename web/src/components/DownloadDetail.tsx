@@ -3,6 +3,7 @@ import {
   ApiError,
   getDownload,
   getFileLink,
+  getZipLink,
   reAddDownload,
   retryDownload,
   type DownloadDetail as DownloadDetailData,
@@ -24,6 +25,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
   const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
   const [readdStatus, setReaddStatus] = useState<{ kind: 'idle' | 'readding' | 'error'; message?: string }>({ kind: 'idle' })
   const [resolvingPath, setResolvingPath] = useState<string | null>(null)
+  const [zipStatus, setZipStatus] = useState<{ kind: 'idle' | 'resolving' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +96,19 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
       alert(err instanceof ApiError ? err.message : String(err))
     } finally {
       setResolvingPath(null)
+    }
+  }
+
+  // Opt-in alternative to downloading files individually — one archive
+  // instead of one browser download per file.
+  async function handleDownloadZip() {
+    setZipStatus({ kind: 'resolving' })
+    try {
+      const { url } = await getZipLink(apiKey, id)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setZipStatus({ kind: 'idle' })
+    } catch (err) {
+      setZipStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -188,7 +203,15 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
               </div>
             )}
 
-            <h3>Files</h3>
+            <div className="files-header">
+              <h3>Files</h3>
+              {detail.files.length > 0 && (
+                <button type="button" className="zip-btn" onClick={handleDownloadZip} disabled={zipStatus.kind === 'resolving'}>
+                  {zipStatus.kind === 'resolving' ? 'Resolving…' : 'Download all (zip)'}
+                </button>
+              )}
+            </div>
+            {zipStatus.kind === 'error' && <p className="settings-error">Failed to resolve zip: {zipStatus.message}</p>}
             {detail.files.length === 0 ? (
               <p className="empty">No files yet.</p>
             ) : (

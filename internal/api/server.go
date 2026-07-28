@@ -43,6 +43,7 @@ type torrentAdder interface {
 	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
+	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
 }
 
 // usenetAdder is torrentAdder's usenet counterpart, backing
@@ -55,6 +56,7 @@ type usenetAdder interface {
 	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
+	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
 }
 
 // GeneralInfo is AcerviNode's own runtime configuration, as reported to the
@@ -168,6 +170,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/retry", s.requireAuth(s.handleRetryDownload))
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/readd", s.requireAuth(s.handleReAddDownload))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}/files/{fileId}/link", s.requireAuth(s.handleGetFileLink))
+	s.mux.HandleFunc("GET /api/v1/downloads/{id}/zip-link", s.requireAuth(s.handleGetZipLink))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAuth(s.handleTestTorBoxConnection))

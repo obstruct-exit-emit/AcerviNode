@@ -3,6 +3,8 @@ import {
   ApiError,
   clearStoredApiKey,
   deleteDownload,
+  getDownload,
+  getFileLink,
   getStoredApiKey,
   getProviders,
   getVersion,
@@ -34,6 +36,7 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [downloadingAllId, setDownloadingAllId] = useState<string | null>(null)
 
   const handleUnauthorized = useCallback(() => {
     clearStoredApiKey()
@@ -102,6 +105,35 @@ export default function App() {
     }
   }
 
+  // Downloads every file individually (one browser download/tab per file) —
+  // the default, no-archive "download all" action. Resolving a zip instead
+  // is a separate, explicit opt-in in the detail view (see
+  // DownloadDetail's "Download all (zip)").
+  async function handleDownloadAll(d: Download) {
+    if (!apiKey) return
+    setDownloadingAllId(d.id)
+    try {
+      const detail = await getDownload(apiKey, d.id)
+      const files = detail.files.filter((f) => f.provider_file_id)
+      if (files.length === 0) {
+        alert('No files available to download yet.')
+        return
+      }
+      for (const f of files) {
+        try {
+          const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
+          window.open(url, '_blank', 'noopener,noreferrer')
+        } catch (err) {
+          console.error(`Failed to resolve a download link for ${f.path}`, err)
+        }
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloadingAllId(null)
+    }
+  }
+
   if (!apiKey) {
     return <ApiKeyGate onSubmit={handleKeySubmit} error={gateError} />
   }
@@ -140,7 +172,14 @@ export default function App() {
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
         {view === 'downloads' ? (
-          <DownloadsTable downloads={downloads} onDelete={handleDelete} onRetry={handleRetry} onSelect={(d) => setSelectedId(d.id)} />
+          <DownloadsTable
+            downloads={downloads}
+            onDelete={handleDelete}
+            onRetry={handleRetry}
+            onDownloadAll={handleDownloadAll}
+            downloadingAllId={downloadingAllId}
+            onSelect={(d) => setSelectedId(d.id)}
+          />
         ) : (
           <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />
         )}

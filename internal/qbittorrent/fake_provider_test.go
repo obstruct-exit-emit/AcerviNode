@@ -114,6 +114,10 @@ func (f *fakeProvider) RequestDownloadLink(_ context.Context, id debrid.Provider
 	return fmt.Sprintf("https://fake-cdn.test/%s/%s", id, fileID), nil
 }
 
+func (f *fakeProvider) RequestZipDownloadLink(_ context.Context, id debrid.ProviderDownloadID) (string, error) {
+	return fmt.Sprintf("https://fake-cdn.test/%s/all.zip", id), nil
+}
+
 func (f *fakeProvider) Delete(_ context.Context, id debrid.ProviderDownloadID, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

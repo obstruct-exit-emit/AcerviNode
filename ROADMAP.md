@@ -213,6 +213,22 @@ CDN link instead of BitTorrent/NNTP.
   3 real files) and the link itself (resolved a real TorBox CDN URL and
   confirmed via `curl -I` that its `Content-Length` matched the file's known
   size exactly).
+- **Batch/zip download** (immediate follow-on): a per-row "Download all"
+  button in the downloads table resolves and opens every file in a download
+  individually — no new endpoint needed, just looping the per-file `link`
+  call from the previous item. Zip was explicitly scoped out as the
+  *default* per user feedback ("zip should be optional opt in... should
+  just batch download the files") and added instead as a separate opt-in:
+  `GET /api/v1/downloads/{id}/zip-link` + a "Download all (zip)" button in
+  the detail view. Discovered TorBox supports this via an undocumented
+  `zip_link=true` parameter on the same `requestdl` endpoint (not in the
+  SDK or public docs anywhere) by testing directly against the real
+  account, then confirmed live that the resulting URL serves a real
+  `.zip` with the correct `Content-Type` and total size. The usenet side of
+  this (`RequestUsenetZipDownloadLink`) mirrors the same shape but isn't
+  independently confirmed — every usenet download on the test account had
+  expired from `mylist` by the time this shipped, leaving nothing live to
+  test it against.
 
 ## Phase 4 — Multi-provider ⏳
 

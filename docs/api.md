@@ -28,6 +28,7 @@ server logs or `config.yaml`.
 | `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
 | `GET` | `/api/v1/downloads/{id}/files/{fileId}/link` | Resolves a direct, provider-hosted download URL for one file — `fileId` is a file's `provider_file_id` from the download's `files` array. Fresh on every call, not cached; the URL is the provider's own CDN link, good for a browser to download straight from (no `Authorization` header needed for that second request — it's not one of ours). `503` if the relevant provider isn't configured; `502` for any other provider-side failure |
+| `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Manual downloads](#manual-downloads)). Same error shape as the per-file endpoint above |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `POST` | `/api/v1/downloads/{id}/retry` | Manually retries a download that gave up after exhausting `import_max_retries` — resets `state` back to `provider_completed` and clears `retry_count`/`error_message`, so `internal/importer`'s very next tick attempts the fetch again from scratch. `409` if the download isn't currently in `error` state |
 | `POST` | `/api/v1/downloads/{id}/readd` | Stronger sibling of `retry`, for when the *original* provider-side download is gone (e.g. expired from the provider's own list) rather than a transient fetch failure. Resubmits the download's stored original magnet/NZB URL to the provider as a brand new add, then points the local row at the new `provider_download_id` (best-effort delete of the old one first). `400` if no source was stored (added via file upload — nothing to resubmit); `409` if not in `error` state, or if the fresh add happens to dedupe back to a different already-tracked download |
@@ -127,6 +128,18 @@ browser navigation to *that* URL needs no header at all. A raw `<a href>`
 pointing straight at `.../link` wouldn't work (a browser navigation can't
 attach a custom header), so a client has to `fetch` it first, then navigate
 to the URL in the response.
+
+`GET /api/v1/downloads/{id}/zip-link` is the "download everything" version
+— one URL for the whole download, zipped provider-side, rather than
+resolving and downloading each file separately. It's an explicit opt-in,
+not the default: the web UI's per-row "Download all" button in the
+downloads table downloads files individually (calling the per-file `link`
+endpoint once per file), and `zip-link` is instead offered as a "Download
+all (zip)" button in the detail view, for whoever wants one archive
+instead of several browser downloads. TorBox supports this via an
+undocumented `zip_link=true` parameter on the same `requestdl` endpoint
+(confirmed live, not found in any published docs — see
+[Providers](providers.md#torbox-internaldebridtorbox)).
 
 ## What's thin here (see [Providers](providers.md) for why)
 

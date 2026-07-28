@@ -65,6 +65,11 @@ type TorrentProvider interface {
 	List(ctx context.Context) ([]DownloadStatus, error)
 	Files(ctx context.Context, id ProviderDownloadID) ([]DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id ProviderDownloadID, fileID string) (string, error)
+	// RequestZipDownloadLink resolves one URL for every file in a download at
+	// once, zipped provider-side — for a "download all" action that doesn't
+	// need per-file requests. Providers without a native zip endpoint may
+	// return a not-implemented-style error rather than faking it locally.
+	RequestZipDownloadLink(ctx context.Context, id ProviderDownloadID) (string, error)
 	Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error
 	// CheckCached reports, per hash, whether the torrent is already cached on
 	// the provider's side. Providers without a cache-check endpoint may

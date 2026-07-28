@@ -124,6 +124,14 @@ func (p *UsenetProvider) RequestDownloadLink(ctx context.Context, id debrid.Prov
 	return url, nil
 }
 
+func (p *UsenetProvider) RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error) {
+	url, err := p.client.RequestUsenetZipDownloadLink(ctx, string(id))
+	if err != nil {
+		return "", fmt.Errorf("torbox: usenet request zip download link: %w", err)
+	}
+	return url, nil
+}
+
 func (p *UsenetProvider) Delete(ctx context.Context, id debrid.ProviderDownloadID, _ bool) error {
 	if err := p.client.ControlUsenetDownload(ctx, string(id), OpDelete); err != nil {
 		return fmt.Errorf("torbox: usenet delete: %w", err)

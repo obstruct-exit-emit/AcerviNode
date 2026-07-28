@@ -29,11 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   through a browser instead of (or alongside) AcerviNode fetching it to
   local disk. The exact same call `internal/importer` itself makes, not
   cached or proxied. Web UI: a "Download" button per file in the detail
-  view's file table. Building this surfaced a real, previously-unnoticed
-  bug — see Fixed below — since it needed `GET /api/v1/downloads/{id}`'s
-  file list to actually work first. Verified live: resolved a real TorBox
-  CDN link and confirmed it served the exact file (`Content-Length` matched
-  the known size exactly).
+  view's file table, plus a per-row "Download all" button in the downloads
+  table that resolves and opens every file in a download individually.
+  Building this surfaced a real, previously-unnoticed bug — see Fixed below
+  — since it needed `GET /api/v1/downloads/{id}`'s file list to actually
+  work first. Verified live: resolved a real TorBox CDN link and confirmed
+  it served the exact file (`Content-Length` matched the known size
+  exactly).
+- `GET /api/v1/downloads/{id}/zip-link` — "download all" as a single
+  provider-zipped archive, an explicit opt-in alongside the individual-files
+  default above (a "Download all (zip)" button in the detail view). Backed
+  by an undocumented TorBox `zip_link=true` parameter on `requestdl`, not
+  mentioned in the SDK or public docs — found by testing directly, then
+  confirmed live: the returned URL served a real `.zip`
+  (`Content-Type: application/zip`, correct total size).
 - `POST /api/v1/downloads/{id}/readd` — retry's stronger sibling, for when
   the *original* provider-side download is gone entirely (expired from the
   provider's own list), not just a transient fetch failure. New `downloads.

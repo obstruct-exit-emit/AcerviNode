@@ -133,6 +133,34 @@ func TestRequestTorrentDownloadLink(t *testing.T) {
 	}
 }
 
+// TestRequestTorrentZipDownloadLink pins the query shape confirmed live
+// against a real TorBox account: omitting file_id and adding
+// zip_link=true (undocumented, found by testing directly) returns a
+// working .zip URL for the whole torrent.
+func TestRequestTorrentZipDownloadLink(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/torrents/requestdl" {
+			t.Errorf("path = %s", got)
+		}
+		q := r.URL.Query()
+		if q.Get("torrent_id") != "42" || q.Get("zip_link") != "true" || q.Get("file_id") != "" {
+			t.Errorf("query = %v, want torrent_id=42 zip_link=true no file_id", q)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    "https://cdn.torbox.app/zip/abc",
+		})
+	})
+
+	url, err := client.RequestTorrentZipDownloadLink(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("RequestTorrentZipDownloadLink() error = %v", err)
+	}
+	if url != "https://cdn.torbox.app/zip/abc" {
+		t.Errorf("url = %q", url)
+	}
+}
+
 func TestListTorrents(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/v1/api/torrents/mylist" {
@@ -252,6 +280,33 @@ func TestCreateUsenetDownload_Link(t *testing.T) {
 	}
 	if hash != "nzbhash" {
 		t.Errorf("hash = %q", hash)
+	}
+}
+
+// TestRequestUsenetZipDownloadLink pins the query shape RequestUsenetZipDownloadLink
+// sends — mirrors the torrent side's confirmed-live shape, but this specific
+// usenet call is NOT itself confirmed live (see the method's doc comment).
+func TestRequestUsenetZipDownloadLink(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/usenet/requestdl" {
+			t.Errorf("path = %s", got)
+		}
+		q := r.URL.Query()
+		if q.Get("usenet_id") != "99" || q.Get("zip_link") != "true" || q.Get("file_id") != "" {
+			t.Errorf("query = %v, want usenet_id=99 zip_link=true no file_id", q)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    "https://cdn.torbox.app/zip/nzb",
+		})
+	})
+
+	url, err := client.RequestUsenetZipDownloadLink(context.Background(), "99")
+	if err != nil {
+		t.Fatalf("RequestUsenetZipDownloadLink() error = %v", err)
+	}
+	if url != "https://cdn.torbox.app/zip/nzb" {
+		t.Errorf("url = %q", url)
 	}
 }
 

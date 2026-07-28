@@ -6,10 +6,16 @@ interface Props {
   downloads: Download[]
   onDelete: (d: Download) => void
   onRetry: (d: Download) => void
+  onDownloadAll: (d: Download) => void
+  downloadingAllId: string | null
   onSelect: (d: Download) => void
 }
 
-export function DownloadsTable({ downloads, onDelete, onRetry, onSelect }: Props) {
+// States a download's files are actually resolvable in — matches what
+// filesForDownload (backend) can query live from the provider.
+const HAS_FILES_STATES = new Set(['provider_completed', 'ready_for_import'])
+
+export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect }: Props) {
   if (downloads.length === 0) {
     return <p className="empty">No downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly.</p>
   }
@@ -59,6 +65,19 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onSelect }: Props
                   title="Retry"
                 >
                   ↻
+                </button>
+              )}
+              {HAS_FILES_STATES.has(d.state) && (
+                <button
+                  className="download-all-btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDownloadAll(d)
+                  }}
+                  disabled={downloadingAllId === d.id}
+                  title="Download all files individually, straight from the provider"
+                >
+                  {downloadingAllId === d.id ? '…' : '⬇'}
                 </button>
               )}
               <button

@@ -79,6 +79,28 @@ func (c *Client) RequestTorrentDownloadLink(ctx context.Context, torrentID, file
 	return env.Data, nil
 }
 
+// RequestTorrentZipDownloadLink resolves a single URL for every file in a
+// torrent at once, zipped server-side by TorBox — confirmed live against a
+// real account: omitting file_id and adding zip_link=true returns a working
+// .zip URL (Content-Type: application/zip, correct total size), not
+// documented anywhere we found, discovered by testing directly against the
+// real API.
+func (c *Client) RequestTorrentZipDownloadLink(ctx context.Context, torrentID string) (string, error) {
+	q := url.Values{
+		"token":      {c.apiKey},
+		"torrent_id": {torrentID},
+		"zip_link":   {"true"},
+	}
+	var env envelope[string]
+	if err := c.doGet(ctx, "/torrents/requestdl", q, &env); err != nil {
+		return "", err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return "", err
+	}
+	return env.Data, nil
+}
+
 // TorrentFile is one file within a torrent, per mylist's embedded file list.
 type TorrentFile struct {
 	ID   float64 `json:"id"`
@@ -206,6 +228,30 @@ func (c *Client) RequestUsenetDownloadLink(ctx context.Context, usenetID, fileID
 		"token":     {c.apiKey},
 		"usenet_id": {usenetID},
 		"file_id":   {fileID},
+	}
+	var env envelope[string]
+	if err := c.doGet(ctx, "/usenet/requestdl", q, &env); err != nil {
+		return "", err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return "", err
+	}
+	return env.Data, nil
+}
+
+// RequestUsenetZipDownloadLink is RequestTorrentZipDownloadLink's usenet
+// counterpart. Unlike the torrent version, this specific call is NOT
+// confirmed live — by the time it was written, every usenet download on the
+// test account had expired from mylist entirely (0 items), leaving nothing
+// to test zip_link against. It mirrors the torrent endpoint's exact shape,
+// which every other usenet/torrent pair in this client has matched so far
+// (see docs/providers.md), but treat it as unverified until confirmed
+// against a real, live usenet download.
+func (c *Client) RequestUsenetZipDownloadLink(ctx context.Context, usenetID string) (string, error) {
+	q := url.Values{
+		"token":     {c.apiKey},
+		"usenet_id": {usenetID},
+		"zip_link":  {"true"},
 	}
 	var env envelope[string]
 	if err := c.doGet(ctx, "/usenet/requestdl", q, &env); err != nil {

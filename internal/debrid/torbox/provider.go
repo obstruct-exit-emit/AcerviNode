@@ -107,6 +107,14 @@ func (p *Provider) RequestDownloadLink(ctx context.Context, id debrid.ProviderDo
 	return url, nil
 }
 
+func (p *Provider) RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error) {
+	url, err := p.client.RequestTorrentZipDownloadLink(ctx, string(id))
+	if err != nil {
+		return "", fmt.Errorf("torbox: request zip download link: %w", err)
+	}
+	return url, nil
+}
+
 func (p *Provider) Delete(ctx context.Context, id debrid.ProviderDownloadID, _ bool) error {
 	if err := p.client.ControlTorrent(ctx, string(id), OpDelete); err != nil {
 		return fmt.Errorf("torbox: delete: %w", err)

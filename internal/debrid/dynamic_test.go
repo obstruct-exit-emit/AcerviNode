@@ -30,6 +30,9 @@ func (s *stubTorrentProvider) Files(context.Context, ProviderDownloadID) ([]Down
 func (s *stubTorrentProvider) RequestDownloadLink(context.Context, ProviderDownloadID, string) (string, error) {
 	return "https://example.test/file", nil
 }
+func (s *stubTorrentProvider) RequestZipDownloadLink(context.Context, ProviderDownloadID) (string, error) {
+	return "https://example.test/all.zip", nil
+}
 func (s *stubTorrentProvider) Delete(context.Context, ProviderDownloadID, bool) error { return nil }
 func (s *stubTorrentProvider) CheckCached(context.Context, []string) (map[string]bool, error) {
 	return nil, nil
@@ -105,6 +108,9 @@ func (s *stubUsenetProvider) Files(context.Context, ProviderDownloadID) ([]Downl
 }
 func (s *stubUsenetProvider) RequestDownloadLink(context.Context, ProviderDownloadID, string) (string, error) {
 	return "https://example.test/nzb", nil
+}
+func (s *stubUsenetProvider) RequestZipDownloadLink(context.Context, ProviderDownloadID) (string, error) {
+	return "https://example.test/all.zip", nil
 }
 func (s *stubUsenetProvider) Delete(context.Context, ProviderDownloadID, bool) error { return nil }
 

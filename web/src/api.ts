@@ -97,6 +97,14 @@ export function getFileLink(apiKey: string, downloadId: string, providerFileId: 
   )
 }
 
+// getZipLink resolves one URL for every file in a download at once, zipped
+// provider-side — an explicit opt-in alternative to downloading files
+// individually (see getFileLink and DownloadsTable's per-row "Download all",
+// which downloads files individually by default).
+export function getZipLink(apiKey: string, downloadId: string): Promise<{ url: string }> {
+  return request(`/api/v1/downloads/${encodeURIComponent(downloadId)}/zip-link`, apiKey)
+}
+
 export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean): Promise<void> {
   return request(`/api/v1/downloads/${encodeURIComponent(id)}?deleteFiles=${deleteFiles}`, apiKey, {
     method: 'DELETE',

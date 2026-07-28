@@ -102,6 +102,14 @@ func (d *DynamicTorrentProvider) RequestDownloadLink(ctx context.Context, id Pro
 	return p.RequestDownloadLink(ctx, id, fileID)
 }
 
+func (d *DynamicTorrentProvider) RequestZipDownloadLink(ctx context.Context, id ProviderDownloadID) (string, error) {
+	p, err := d.current()
+	if err != nil {
+		return "", err
+	}
+	return p.RequestZipDownloadLink(ctx, id)
+}
+
 func (d *DynamicTorrentProvider) Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error {
 	p, err := d.current()
 	if err != nil {
@@ -199,6 +207,14 @@ func (d *DynamicUsenetProvider) RequestDownloadLink(ctx context.Context, id Prov
 		return "", err
 	}
 	return p.RequestDownloadLink(ctx, id, fileID)
+}
+
+func (d *DynamicUsenetProvider) RequestZipDownloadLink(ctx context.Context, id ProviderDownloadID) (string, error) {
+	p, err := d.current()
+	if err != nil {
+		return "", err
+	}
+	return p.RequestZipDownloadLink(ctx, id)
 }
 
 func (d *DynamicUsenetProvider) Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error {

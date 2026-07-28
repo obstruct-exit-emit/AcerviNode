@@ -521,6 +521,25 @@ table.downloads tbody tr:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.download-all-btn-sm {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.download-all-btn-sm:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.download-all-btn-sm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ApiKeyGate */
 .gate {
   min-height: 100svh;
@@ -713,6 +732,36 @@ table.downloads tbody tr:hover {
 .detail-panel h3 {
   font-size: 14px;
   margin: 0 0 8px;
+}
+
+.files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.files-header h3 {
+  margin: 0 0 8px;
+}
+
+.zip-btn {
+  margin-bottom: 8px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.zip-btn:hover {
+  border-color: var(--accent);
+}
+
+.zip-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 table.detail-files {
