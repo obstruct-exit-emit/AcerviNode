@@ -182,6 +182,12 @@ CDN link instead of BitTorrent/NNTP.
   missing entirely, so every field except `port` would have silently
   decoded to its zero value on every real request — a test asserting the
   decoded values matched what was sent caught it immediately.
+- **Manual retry** (follow-on): a download that gave up after exhausting
+  `import_max_retries` had no way back except deleting and re-adding it.
+  `POST /api/v1/downloads/{id}/retry` + a "Retry" button in the web UI's
+  detail view. Verified live against a real download that had failed on an
+  actual TorBox rate limit (`429`) — retrying reset it and the importer
+  picked it up on its very next tick.
 
 ## Phase 4 — Multi-provider ⏳
 

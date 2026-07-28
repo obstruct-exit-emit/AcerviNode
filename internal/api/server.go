@@ -158,6 +158,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/downloads/usenet", s.requireAuth(s.handleAddUsenet))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}", s.requireAuth(s.handleGetDownload))
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
+	s.mux.HandleFunc("POST /api/v1/downloads/{id}/retry", s.requireAuth(s.handleRetryDownload))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAuth(s.handleTestTorBoxConnection))

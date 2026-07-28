@@ -270,6 +270,72 @@ func TestUpdateDownloadRetry(t *testing.T) {
 	}
 }
 
+// TestRetryDownload proves the manual retry path resets a download that
+// gave up back to a state internal/importer will pick up on its very next
+// tick — the counterpart to TestUpdateDownloadRetry's automatic path.
+func TestRetryDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	pastRetry := time.Now().Add(-time.Hour).UTC()
+	if err := db.UpdateDownloadRetry(ctx, d.ID, 5, pastRetry, "gave up: connection refused"); err != nil {
+		t.Fatalf("seed UpdateDownloadRetry() error = %v", err)
+	}
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateError, 0, 0, nil, "gave up: connection refused"); err != nil {
+		t.Fatalf("seed UpdateDownloadStatus() error = %v", err)
+	}
+
+	if err := db.RetryDownload(ctx, d.ID); err != nil {
+		t.Fatalf("RetryDownload() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateProviderCompleted {
+		t.Errorf("State = %q, want provider_completed", got.State)
+	}
+	if got.RetryCount != 0 {
+		t.Errorf("RetryCount = %d, want 0", got.RetryCount)
+	}
+	if got.NextRetryAt != nil {
+		t.Errorf("NextRetryAt = %v, want nil (cleared)", got.NextRetryAt)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("ErrorMessage = %q, want cleared", got.ErrorMessage)
+	}
+
+	// The whole point: it must now actually be due for retry.
+	due, err := db.ListDownloadsDueForRetry(ctx, StateProviderCompleted, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ListDownloadsDueForRetry() error = %v", err)
+	}
+	found := false
+	for _, row := range due {
+		if row.ID == d.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("retried download not found in ListDownloadsDueForRetry results")
+	}
+}
+
+func TestRetryDownload_NotFound(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	if err := db.RetryDownload(ctx, "does-not-exist"); err == nil {
+		t.Error("RetryDownload() for a nonexistent id: expected an error, got nil")
+	}
+}
+
 func TestListDownloadsDueForRetry(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

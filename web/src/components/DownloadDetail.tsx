@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ApiError, getDownload, type DownloadDetail as DownloadDetailData } from '../api'
+import { ApiError, getDownload, retryDownload, type DownloadDetail as DownloadDetailData } from '../api'
 import { formatBytes, formatRelativeTime } from '../format'
 import { StateBadge } from './StateBadge'
 
@@ -14,6 +14,7 @@ interface Props {
 export function DownloadDetail({ apiKey, id, onClose }: Props) {
   const [detail, setDetail] = useState<DownloadDetailData | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
+  const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
     let cancelled = false
@@ -37,6 +38,17 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
       clearInterval(interval)
     }
   }, [apiKey, id])
+
+  async function handleRetry() {
+    setRetryStatus({ kind: 'retrying' })
+    try {
+      const updated = await retryDownload(apiKey, id)
+      setDetail((d) => (d ? { ...d, ...updated } : d))
+      setRetryStatus({ kind: 'idle' })
+    } catch (err) {
+      setRetryStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -123,6 +135,15 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
             </dl>
 
             {detail.error_message && <p className="detail-error-message">{detail.error_message}</p>}
+
+            {detail.state === 'error' && (
+              <div className="detail-retry">
+                <button type="button" className="retry-btn" onClick={handleRetry} disabled={retryStatus.kind === 'retrying'}>
+                  {retryStatus.kind === 'retrying' ? 'Retrying…' : 'Retry'}
+                </button>
+                {retryStatus.kind === 'error' && <p className="settings-error">Failed to retry: {retryStatus.message}</p>}
+              </div>
+            )}
 
             <h3>Files</h3>
             {detail.files.length === 0 ? (

@@ -92,6 +92,14 @@ export function deleteDownload(apiKey: string, id: string, deleteFiles: boolean)
   })
 }
 
+// retryDownload resets a download that gave up (state error) back to
+// provider_completed with retry_count cleared, so internal/importer's very
+// next tick attempts the fetch again — only valid while the download is
+// actually in the error state.
+export function retryDownload(apiKey: string, id: string): Promise<Download> {
+  return request(`/api/v1/downloads/${encodeURIComponent(id)}/retry`, apiKey, { method: 'POST' })
+}
+
 export function addTorrent(
   apiKey: string,
   input: { magnet: string; category?: string } | { file: File; category?: string },

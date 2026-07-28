@@ -687,6 +687,68 @@ func TestHandleGetDownload_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandleRetryDownload(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+	if err := db.UpdateDownloadRetry(context.Background(), d.ID, 5, time.Now().Add(-time.Hour), "gave up"); err != nil {
+		t.Fatalf("seed UpdateDownloadRetry() error = %v", err)
+	}
+	if err := db.UpdateDownloadStatus(context.Background(), d.ID, database.StateError, 0, 0, nil, "gave up"); err != nil {
+		t.Fatalf("seed UpdateDownloadStatus() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/retry"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.State != database.StateProviderCompleted {
+		t.Errorf("state = %q, want provider_completed", got.State)
+	}
+	if got.RetryCount != 0 {
+		t.Errorf("retry_count = %d, want 0", got.RetryCount)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("error_message = %q, want cleared", got.ErrorMessage)
+	}
+}
+
+func TestHandleRetryDownload_RejectsNonErrorState(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1") // seedDownload defaults to StateDownloading
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/retry"))
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestHandleRetryDownload_NotFound(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/does-not-exist/retry"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleRetryDownload_RequiresAuth(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/retry", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
 func TestHandleDeleteDownload(t *testing.T) {
 	torrentDeleter := &fakeProvider{}
 	srv, db := newTestServer(t, torrentDeleter, nil, nil)

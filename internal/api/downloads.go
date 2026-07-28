@@ -149,6 +149,31 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleRetryDownload implements POST /api/v1/downloads/{id}/retry — the
+// manual counterpart to internal/importer's automatic retry/backoff. Only
+// valid for a download that has actually given up (StateError); anything
+// else is rejected rather than silently reprocessed out of turn.
+func (s *Server) handleRetryDownload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	d, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+	if d.State != database.StateError {
+		http.Error(w, "download is not in error state", http.StatusConflict)
+		return
+	}
+	if err := s.db.RetryDownload(ctx, d.ID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	updated, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, toDownloadResponse(updated))
+}
+
 func (s *Server) downloadByID(w http.ResponseWriter, r *http.Request) (*database.Download, bool) {
 	id := r.PathValue("id")
 	d, err := s.db.GetDownloadByID(r.Context(), id)

@@ -648,6 +648,25 @@ table.downloads tbody tr:hover {
   margin: 0 0 16px;
 }
 
+.detail-retry {
+  margin: 0 0 16px;
+}
+
+.retry-btn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.retry-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .detail-panel h3 {
   font-size: 14px;
   margin: 0 0 8px;

@@ -223,6 +223,27 @@ func (db *DB) UpdateDownloadRetry(ctx context.Context, id string, retryCount int
 	return checkRowsAffected(res, id)
 }
 
+// RetryDownload resets a download that gave up after exhausting
+// import_max_retries (StateError) back to StateProviderCompleted, with
+// retry_count cleared and next_retry_at unset, so internal/importer's very
+// next tick picks it up and attempts the fetch again from scratch — the
+// manual counterpart to the automatic retry/backoff in internal/importer.
+// Callers are expected to have already checked the row is actually in
+// StateError (see internal/api's handleRetryDownload); this doesn't guard
+// against retrying a download in some other state.
+func (db *DB) RetryDownload(ctx context.Context, id string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET state = ?, retry_count = 0, next_retry_at = NULL, error_message = NULL, updated_at = ?
+		WHERE id = ?`,
+		StateProviderCompleted, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("retry download %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // UpdateDownloadStatus updates a download's local state machine fields,
 // including size_bytes — a magnet-only add starts with no size info (magnet
 // URIs don't carry it), so this is what backfills the real value once the

@@ -142,6 +142,14 @@ occupying a retry slot forever rather than silently never finishing. Both fields
 are surfaced on `GET /api/v1/downloads/{id}` — see [API](api.md) — and shown in
 the web UI's detail view.
 
+A download that gave up isn't stuck forever, though: `POST
+/api/v1/downloads/{id}/retry` resets it back to `provider_completed` with
+`retry_count` cleared, so the next tick attempts it again from scratch — the
+manual counterpart to the automatic backoff above, for when the underlying
+cause (a transient rate limit, the provider being briefly down) has since
+cleared. The web UI's detail view shows a "Retry" button once a download is
+in `error` state.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

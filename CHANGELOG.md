@@ -24,6 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `POST /api/v1/downloads/{id}/retry` — manually retries a download that gave
+  up after exhausting `import_max_retries`, resetting it back to
+  `provider_completed` with `retry_count` cleared so `internal/importer`'s
+  next tick attempts it again from scratch. `409` if the download isn't
+  actually in `error` state. Web UI: a "Retry" button in the detail view.
+  Verified live against a real download that had failed on a genuine TorBox
+  rate limit — retrying picked it back up on the very next importer tick.
 - `internal/api`: `POST /api/v1/downloads/torrent` and `POST
   /api/v1/downloads/usenet` add a magnet/`.torrent`/NZB URL/`.nzb` file
   directly, without needing Sonarr/Radarr or faking being one against a
