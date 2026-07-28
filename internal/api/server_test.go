@@ -749,6 +749,173 @@ func TestHandleRetryDownload_RequiresAuth(t *testing.T) {
 	}
 }
 
+// seedErroredDownload seeds a download in StateError with a non-empty
+// Source, the precondition for both retry and re-add — mirrors seedDownload
+// but gives the caller control over Source and Kind, since re-add tests
+// need it.
+func seedErroredDownload(t *testing.T, db *database.DB, kind database.Kind, providerDownloadID, source string) *database.Download {
+	t.Helper()
+	d := &database.Download{
+		ID: "dl-" + providerDownloadID, Provider: "torbox", ProviderDownloadID: providerDownloadID,
+		Kind: kind, Hash: "hash-" + providerDownloadID, Name: "Test Download",
+		Category: "tv-sonarr", SizeBytes: 1024, State: database.StateError, Progress: 1.0,
+		Source: source,
+	}
+	if err := db.InsertDownload(context.Background(), d); err != nil {
+		t.Fatalf("seed InsertDownload() error = %v", err)
+	}
+	return d
+}
+
+func TestHandleReAddDownload_Torrent(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "new-torrent-id"}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedErroredDownload(t, db, database.KindTorrent, "old-torrent-id", testMagnet)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedMagnet != testMagnet {
+		t.Errorf("AddMagnet called with %q, want %q", provider.addedMagnet, testMagnet)
+	}
+	if provider.deleteID != "old-torrent-id" {
+		t.Errorf("best-effort Delete called with %q, want old-torrent-id", provider.deleteID)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.State != database.StateQueued {
+		t.Errorf("state = %q, want queued", got.State)
+	}
+
+	row, err := db.GetDownloadByID(context.Background(), d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if row.ProviderDownloadID != "new-torrent-id" {
+		t.Errorf("ProviderDownloadID = %q, want new-torrent-id", row.ProviderDownloadID)
+	}
+}
+
+func TestHandleReAddDownload_Usenet(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "new-nzb-id"}
+	srv, db := newTestServer(t, nil, provider, nil)
+	const nzbURL = "https://example.com/release.nzb"
+	d := seedErroredDownload(t, db, database.KindUsenet, "old-nzb-id", nzbURL)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedURL != nzbURL {
+		t.Errorf("AddNZBURL called with %q, want %q", provider.addedURL, nzbURL)
+	}
+}
+
+func TestHandleReAddDownload_RejectsNonErrorState(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1") // seedDownload defaults to StateDownloading
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestHandleReAddDownload_RejectsEmptySource(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedErroredDownload(t, db, database.KindTorrent, "p1", "") // added via file upload, no source stored
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleReAddDownload_ProviderError(t *testing.T) {
+	provider := &fakeProvider{addErr: errors.New("torbox: rate limited")}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedErroredDownload(t, db, database.KindTorrent, "p1", testMagnet)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleReAddDownload_NoProviderConfigured(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedErroredDownload(t, db, database.KindTorrent, "p1", testMagnet)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleReAddDownload_ConflictsOnDedupedProviderID(t *testing.T) {
+	// The re-add resolves to a provider_download_id already tracked under a
+	// different local row — must not silently corrupt either row.
+	provider := &fakeProvider{providerName: "torbox", addID: "already-tracked-id"}
+	srv, db := newTestServer(t, provider, nil, nil)
+	// Must share the provider name ("torbox", matching provider.Name()) with
+	// the row under test — seedDownload hardcodes provider "fake", which
+	// wouldn't collide with anything since GetDownloadByProviderID keys on
+	// (provider, provider_download_id) together.
+	other := &database.Download{
+		ID: "dl-already-tracked", Provider: "torbox", ProviderDownloadID: "already-tracked-id",
+		Kind: database.KindTorrent, Hash: "hash-other", Name: "Other Download", State: database.StateDownloading,
+	}
+	if err := db.InsertDownload(context.Background(), other); err != nil {
+		t.Fatalf("seed InsertDownload(other) error = %v", err)
+	}
+	d := seedErroredDownload(t, db, database.KindTorrent, "old-id", testMagnet)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Neither row should have been mutated by the failed re-add.
+	row, err := db.GetDownloadByID(context.Background(), d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if row.ProviderDownloadID != "old-id" {
+		t.Errorf("ProviderDownloadID = %q, want unchanged old-id", row.ProviderDownloadID)
+	}
+}
+
+func TestHandleReAddDownload_NotFound(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/does-not-exist/readd"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleReAddDownload_RequiresAuth(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedErroredDownload(t, db, database.KindTorrent, "p1", testMagnet)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
 func TestHandleDeleteDownload(t *testing.T) {
 	torrentDeleter := &fakeProvider{}
 	srv, db := newTestServer(t, torrentDeleter, nil, nil)

@@ -669,6 +669,10 @@ table.downloads tbody tr:hover {
 }
 
 .detail-retry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
   margin: 0 0 16px;
 }
 
@@ -683,6 +687,25 @@ table.downloads tbody tr:hover {
 }
 
 .retry-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.readd-btn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.readd-btn:hover {
+  border-color: var(--accent);
+}
+
+.readd-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }

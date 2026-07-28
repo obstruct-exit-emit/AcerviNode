@@ -188,6 +188,17 @@ CDN link instead of BitTorrent/NNTP.
   detail view. Verified live against a real download that had failed on an
   actual TorBox rate limit (`429`) — retrying reset it and the importer
   picked it up on its very next tick.
+- **Manual re-add** (immediate follow-on to the above): retry alone can't
+  help when the *original* provider-side download is gone, not just
+  temporarily unfetchable — confirmed as a real, live scenario minutes
+  earlier when the exact download used to verify retry failed again with
+  "not found" after TorBox's own list stopped tracking it. Added a `source`
+  column (the original magnet/NZB URL, link-adds only) and `POST
+  /api/v1/downloads/{id}/readd`, which resubmits it as a brand new add and
+  repoints the local row. Guards against the fresh add deduping back to a
+  different already-tracked row (409, no mutation) rather than corrupting
+  either — verified live, since re-adding a well-cached test magnet did
+  exactly that on the real account.
 
 ## Phase 4 — Multi-provider ⏳
 

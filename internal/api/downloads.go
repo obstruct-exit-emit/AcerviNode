@@ -128,14 +128,7 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var provider deleter
-	switch d.Kind {
-	case database.KindTorrent:
-		provider = s.torrentProvider
-	case database.KindUsenet:
-		provider = s.usenetProvider
-	}
-	if provider != nil {
+	if provider := s.deleterForKind(d.Kind); provider != nil {
 		deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			slog.Error("api: provider delete failed", "id", d.ID, "error", err)

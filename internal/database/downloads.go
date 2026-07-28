@@ -56,6 +56,15 @@ type Download struct {
 	// to StateError instead.
 	RetryCount  int
 	NextRetryAt *time.Time
+	// Source is the original magnet URI (torrent) or NZB URL (usenet) this
+	// download was added with, if it was added via a link rather than an
+	// uploaded file — empty otherwise, since there's nothing to resubmit for
+	// a file upload without keeping the raw bytes around. What
+	// ReAddDownload resubmits to the provider when the original
+	// provider-side download has been lost (expired from the provider's own
+	// list, not just a transient fetch failure — see internal/api's
+	// handleReAddDownload).
+	Source string
 }
 
 // DownloadFile is a single file within a Download.
@@ -83,11 +92,11 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 		INSERT INTO downloads (
 			id, provider, provider_download_id, kind, hash, name, category,
 			save_path, size_bytes, state, progress, added_at, updated_at,
-			completed_at, error_message
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			completed_at, error_message, source
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Provider, d.ProviderDownloadID, string(d.Kind), nullable(d.Hash), d.Name,
 		nullable(d.Category), nullable(d.SavePath), d.SizeBytes, d.State, d.Progress,
-		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage),
+		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage), nullable(d.Source),
 	)
 	if err != nil {
 		return fmt.Errorf("insert download %s: %w", d.ID, err)
@@ -240,6 +249,31 @@ func (db *DB) RetryDownload(ctx context.Context, id string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("retry download %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
+// ReAddDownload points an existing local row at a brand new provider-side
+// download (newProviderDownloadID) and resets it back to a freshly-added
+// state — for when RetryDownload alone isn't enough because the *original*
+// provider-side download itself is gone (e.g. expired from the provider's
+// own list), not just a transient fetch failure. The local id/name/
+// category/hash/source are preserved; provider_download_id, state,
+// progress, size, retry bookkeeping, and completed_at are all reset as if
+// this were a fresh add. Callers are expected to have already resubmitted
+// source to the provider and obtained newProviderDownloadID (see
+// internal/api's handleReAddDownload) — this only updates the local row.
+func (db *DB) ReAddDownload(ctx context.Context, id, newProviderDownloadID string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET provider_download_id = ?, state = ?, progress = 0, size_bytes = 0,
+		    retry_count = 0, next_retry_at = NULL, error_message = NULL,
+		    completed_at = NULL, updated_at = ?
+		WHERE id = ?`,
+		newProviderDownloadID, StateQueued, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("re-add download %s: %w", id, err)
 	}
 	return checkRowsAffected(res, id)
 }
@@ -412,7 +446,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
 	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
-	retry_count, next_retry_at`
+	retry_count, next_retry_at, source`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, args...)
@@ -430,13 +464,13 @@ type rowScanner interface {
 
 func scanDownload(row rowScanner) (*Download, error) {
 	d := &Download{}
-	var hash, category, savePath, errorMessage sql.NullString
+	var hash, category, savePath, errorMessage, source sql.NullString
 	var kind string
 	if err := row.Scan(
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
-		&d.RetryCount, &d.NextRetryAt,
+		&d.RetryCount, &d.NextRetryAt, &source,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}
@@ -445,6 +479,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 	d.Category = category.String
 	d.SavePath = savePath.String
 	d.ErrorMessage = errorMessage.String
+	d.Source = source.String
 	return d, nil
 }
 

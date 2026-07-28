@@ -23,6 +23,7 @@ func newTestDownload(kind Kind) *Download {
 		SizeBytes:          1024,
 		State:              "queued",
 		Progress:           0,
+		Source:             "magnet:?xt=urn:btih:abc123&dn=Some.Release.Name",
 	}
 }
 
@@ -44,6 +45,9 @@ func TestInsertAndGetDownload(t *testing.T) {
 	}
 	if got.Name != d.Name || got.Provider != d.Provider || got.Kind != KindTorrent {
 		t.Errorf("GetDownloadByID() = %+v, want match for %+v", got, d)
+	}
+	if got.Source != d.Source {
+		t.Errorf("Source = %q, want %q", got.Source, d.Source)
 	}
 
 	byHash, err := db.GetDownloadByHash(ctx, d.Hash)
@@ -333,6 +337,70 @@ func TestRetryDownload_NotFound(t *testing.T) {
 
 	if err := db.RetryDownload(ctx, "does-not-exist"); err == nil {
 		t.Error("RetryDownload() for a nonexistent id: expected an error, got nil")
+	}
+}
+
+// TestReAddDownload proves re-add points the local row at a brand new
+// provider_download_id and resets everything else as if freshly added —
+// used when the *original* provider-side download is gone entirely, not
+// just a transient fetch failure (see TestRetryDownload).
+func TestReAddDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	d.ProviderDownloadID = "old-provider-id"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	if err := db.UpdateDownloadRetry(ctx, d.ID, 5, time.Now().Add(-time.Hour), "gave up: not found"); err != nil {
+		t.Fatalf("seed UpdateDownloadRetry() error = %v", err)
+	}
+	completedAt := time.Now().UTC()
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateError, 1.0, 2048, &completedAt, "gave up: not found"); err != nil {
+		t.Fatalf("seed UpdateDownloadStatus() error = %v", err)
+	}
+
+	if err := db.ReAddDownload(ctx, d.ID, "new-provider-id"); err != nil {
+		t.Fatalf("ReAddDownload() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.ProviderDownloadID != "new-provider-id" {
+		t.Errorf("ProviderDownloadID = %q, want new-provider-id", got.ProviderDownloadID)
+	}
+	if got.State != StateQueued {
+		t.Errorf("State = %q, want queued", got.State)
+	}
+	if got.Progress != 0 || got.SizeBytes != 0 {
+		t.Errorf("Progress/SizeBytes = %v/%v, want 0/0 (reset as if freshly added)", got.Progress, got.SizeBytes)
+	}
+	if got.RetryCount != 0 || got.NextRetryAt != nil {
+		t.Errorf("RetryCount/NextRetryAt = %v/%v, want 0/nil", got.RetryCount, got.NextRetryAt)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("ErrorMessage = %q, want cleared", got.ErrorMessage)
+	}
+	if got.CompletedAt != nil {
+		t.Errorf("CompletedAt = %v, want nil (not complete again yet)", got.CompletedAt)
+	}
+	// The local id, name, category, hash, and source must all survive —
+	// only the provider-side identity and progress reset.
+	if got.ID != d.ID || got.Name != d.Name || got.Category != d.Category || got.Hash != d.Hash || got.Source != d.Source {
+		t.Errorf("identity fields changed: got = %+v, want matching %+v", got, d)
+	}
+}
+
+func TestReAddDownload_NotFound(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	if err := db.ReAddDownload(ctx, "does-not-exist", "new-id"); err == nil {
+		t.Error("ReAddDownload() for a nonexistent id: expected an error, got nil")
 	}
 }
 

@@ -81,6 +81,9 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
+		// Source is the magnet itself for a magnet-based add, empty for a
+		// .torrent file upload — see database.Download.Source.
+		Source: magnet,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash
@@ -156,6 +159,9 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
+		// Source is the NZB URL itself for a URL-based add, empty for a
+		// .nzb file upload — see database.Download.Source.
+		Source: nzbURL,
 	}
 	d, existed, err := s.existingOrInsert(ctx, s.usenetProvider.Name(), string(id), d)
 	if err != nil {
@@ -164,6 +170,105 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAddResponse(w, d, existed)
+}
+
+// handleReAddDownload implements POST /api/v1/downloads/{id}/retry's
+// stronger sibling, POST /api/v1/downloads/{id}/readd — for when the
+// original provider-side download itself is gone (e.g. expired from the
+// provider's own list, as opposed to a transient fetch failure RetryDownload
+// alone can recover from). Resubmits the download's stored Source (the
+// original magnet/NZB URL) to the provider as a brand new add, then points
+// the local row at the new provider_download_id. Only valid for a download
+// that's actually given up (StateError) and was added via a link rather
+// than an uploaded file (Source is empty for file uploads — nothing to
+// resubmit without the raw bytes).
+func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	d, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+	if d.State != database.StateError {
+		http.Error(w, "download is not in error state", http.StatusConflict)
+		return
+	}
+	if d.Source == "" {
+		http.Error(w, "no original source stored for this download (it was added via file upload) — cannot re-add automatically", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		newID    debrid.ProviderDownloadID
+		err      error
+		provName string
+	)
+	switch d.Kind {
+	case database.KindTorrent:
+		if s.torrentProvider == nil {
+			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		provName = s.torrentProvider.Name()
+		newID, err = s.torrentProvider.AddMagnet(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+	case database.KindUsenet:
+		if s.usenetProvider == nil {
+			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		provName = s.usenetProvider.Name()
+		newID, err = s.usenetProvider.AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+	default:
+		http.Error(w, "unknown download kind", http.StatusInternalServerError)
+		return
+	}
+	if err != nil {
+		writeProviderError(w, string(d.Kind), err)
+		return
+	}
+
+	// Best-effort cleanup of the old, presumably-gone provider-side entry —
+	// matches handleDeleteDownload's "provider call is best-effort" stance;
+	// it's already lost to us either way.
+	if provider := s.deleterForKind(d.Kind); provider != nil {
+		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), false); err != nil {
+			slog.Warn("api: best-effort delete of old provider download failed during re-add", "id", d.ID, "error", err)
+		}
+	}
+
+	// A provider may dedupe by content and hand back an ID that's already
+	// tracked under a different local row (see existingOrInsert) — for
+	// re-add specifically, that's a conflict rather than something to
+	// silently resolve, since it would mean corrupting one row's identity
+	// into another's.
+	if existing, err := s.db.GetDownloadByProviderID(ctx, provName, string(newID)); err == nil && existing != nil && existing.ID != d.ID {
+		http.Error(w, "re-add resolved to an already-tracked download ("+existing.ID+")", http.StatusConflict)
+		return
+	}
+
+	if err := s.db.ReAddDownload(ctx, d.ID, string(newID)); err != nil {
+		slog.Error("api: re-add download failed", "id", d.ID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, ok := s.downloadByID(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, toDownloadResponse(updated))
+}
+
+// deleterForKind returns the deleter for a download's kind, mirroring
+// handleDeleteDownload's own switch.
+func (s *Server) deleterForKind(kind database.Kind) deleter {
+	switch kind {
+	case database.KindTorrent:
+		return s.torrentProvider
+	case database.KindUsenet:
+		return s.usenetProvider
+	default:
+		return nil
+	}
 }
 
 // existingOrInsert returns an already-tracked download for provider+id if

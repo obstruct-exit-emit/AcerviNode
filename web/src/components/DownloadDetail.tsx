@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ApiError, getDownload, retryDownload, type DownloadDetail as DownloadDetailData } from '../api'
+import { ApiError, getDownload, reAddDownload, retryDownload, type DownloadDetail as DownloadDetailData } from '../api'
 import { formatBytes, formatRelativeTime } from '../format'
 import { StateBadge } from './StateBadge'
 
@@ -15,6 +15,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
   const [detail, setDetail] = useState<DownloadDetailData | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
   const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
+  const [readdStatus, setReaddStatus] = useState<{ kind: 'idle' | 'readding' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
     let cancelled = false
@@ -47,6 +48,20 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
       setRetryStatus({ kind: 'idle' })
     } catch (err) {
       setRetryStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  async function handleReAdd() {
+    if (!confirm('Re-add this download as brand new? Use this when Retry alone doesn\'t help — e.g. the original torrent/NZB has expired on the provider\'s side.')) {
+      return
+    }
+    setReaddStatus({ kind: 'readding' })
+    try {
+      const updated = await reAddDownload(apiKey, id)
+      setDetail((d) => (d ? { ...d, ...updated } : d))
+      setReaddStatus({ kind: 'idle' })
+    } catch (err) {
+      setReaddStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -141,7 +156,11 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                 <button type="button" className="retry-btn" onClick={handleRetry} disabled={retryStatus.kind === 'retrying'}>
                   {retryStatus.kind === 'retrying' ? 'Retrying…' : 'Retry'}
                 </button>
+                <button type="button" className="readd-btn" onClick={handleReAdd} disabled={readdStatus.kind === 'readding'}>
+                  {readdStatus.kind === 'readding' ? 'Re-adding…' : 'Re-add'}
+                </button>
                 {retryStatus.kind === 'error' && <p className="settings-error">Failed to retry: {retryStatus.message}</p>}
+                {readdStatus.kind === 'error' && <p className="settings-error">Failed to re-add: {readdStatus.message}</p>}
               </div>
             )}
 

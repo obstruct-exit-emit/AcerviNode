@@ -150,6 +150,16 @@ cause (a transient rate limit, the provider being briefly down) has since
 cleared. The web UI's detail view shows a "Retry" button once a download is
 in `error` state.
 
+Sometimes retry alone isn't enough, though — confirmed live: a torrent that
+kept failing with "not found" turned out to have expired from TorBox's own
+`mylist` entirely, not a transient fetch problem retry could recover from.
+For that, `POST /api/v1/downloads/{id}/readd` resubmits the download's
+original magnet/NZB URL (stored as `Download.Source` at add time, for
+link-based adds only — nothing's kept for an uploaded file) to the provider
+as a genuinely new add, then points the local row at the new
+`provider_download_id`. The web UI shows both "Retry" and "Re-add" side by
+side once a download is in `error` state.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

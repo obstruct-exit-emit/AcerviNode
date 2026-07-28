@@ -32,7 +32,7 @@ func (s *Server) handleAddURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nzoID, err := s.storeNewDownload(ctx, id, displayName, category)
+	nzoID, err := s.storeNewDownload(ctx, id, displayName, category, nzbURL)
 	if err != nil {
 		slog.Error("sabnzbd: store new download failed", "error", err)
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
@@ -79,7 +79,7 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nzoID, err := s.storeNewDownload(ctx, id, displayName, category)
+	nzoID, err := s.storeNewDownload(ctx, id, displayName, category, "")
 	if err != nil {
 		slog.Error("sabnzbd: store new download failed", "error", err)
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
@@ -94,7 +94,7 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 // nzo_id handed back to the *arr app — SABnzbd's real nzo_id has no fixed
 // format, so there's nothing to preserve from the provider side (contrast
 // with the qBittorrent shim, which must expose a real infohash).
-func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, fallbackName, category string) (nzoID string, err error) {
+func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, fallbackName, category, source string) (nzoID string, err error) {
 	status, statusErr := s.provider.Status(ctx, id)
 	if statusErr != nil {
 		slog.Warn("sabnzbd: provider status not yet available after add, using fallback", "id", id, "error", statusErr)
@@ -114,6 +114,9 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
+		// Source is the NZB URL itself for a URL-based add, empty for a
+		// .nzb file upload — see database.Download.Source and ReAddDownload.
+		Source: source,
 	}
 	if err := s.db.InsertDownload(ctx, d); err != nil {
 		return "", err

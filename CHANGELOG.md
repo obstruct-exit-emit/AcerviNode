@@ -24,6 +24,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `POST /api/v1/downloads/{id}/readd` — retry's stronger sibling, for when
+  the *original* provider-side download is gone entirely (expired from the
+  provider's own list), not just a transient fetch failure. New `downloads.
+  source` column stores the original magnet/NZB URL at add time (link-based
+  adds only, nothing kept for uploaded files); readd resubmits it as a brand
+  new add, best-effort deletes the old provider-side entry, and points the
+  local row at the new `provider_download_id` — same local id/name/category/
+  hash, everything else reset as freshly added. `400` if no source was
+  stored; `409` if not in `error` state, or if the fresh add dedupes back to
+  a different already-tracked download (guarded, not silently corrupted).
+  Web UI: a "Re-add" button next to "Retry" in the detail view. Verified
+  live against the real TorBox account both ways: rejected cleanly with no
+  stored source on a download that predates this feature, and correctly
+  caught (409, no mutation) when a real re-add attempt deduped back to an
+  already-tracked row.
 - `POST /api/v1/downloads/{id}/retry` — manually retries a download that gave
   up after exhausting `import_max_retries`, resetting it back to
   `provider_completed` with `retry_count` cleared so `internal/importer`'s

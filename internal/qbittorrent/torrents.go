@@ -120,6 +120,10 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
+		// Source is the magnet itself for a magnet-based add, empty for a
+		// .torrent file upload (nothing to resubmit without keeping the raw
+		// bytes) — see database.Download.Source and ReAddDownload.
+		Source: magnet,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash

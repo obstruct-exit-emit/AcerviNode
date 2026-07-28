@@ -100,6 +100,15 @@ export function retryDownload(apiKey: string, id: string): Promise<Download> {
   return request(`/api/v1/downloads/${encodeURIComponent(id)}/retry`, apiKey, { method: 'POST' })
 }
 
+// reAddDownload resubmits a download's original source (magnet/NZB URL) to
+// the provider as a brand new add — for when retryDownload alone isn't
+// enough because the original provider-side download is gone entirely, not
+// just a transient fetch failure. Only valid in error state, and only if the
+// download was originally added via a link rather than an uploaded file.
+export function reAddDownload(apiKey: string, id: string): Promise<Download> {
+  return request(`/api/v1/downloads/${encodeURIComponent(id)}/readd`, apiKey, { method: 'POST' })
+}
+
 export function addTorrent(
   apiKey: string,
   input: { magnet: string; category?: string } | { file: File; category?: string },
