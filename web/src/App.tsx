@@ -20,6 +20,7 @@ import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
+import { pickDirectory, supportsDirectoryPicker, writeFileToDirectory } from './fsAccess'
 import './App.css'
 
 const POLL_INTERVAL_MS = 4000
@@ -105,12 +106,29 @@ export default function App() {
     }
   }
 
-  // Downloads every file individually (one browser download/tab per file) —
-  // the default, no-archive "download all" action. Resolving a zip instead
-  // is a separate, explicit opt-in in the detail view (see
-  // DownloadDetail's "Download all (zip)").
+  // Downloads every file individually — the default, no-archive "download
+  // all" action (a single provider-zipped archive is a separate, explicit
+  // opt-in in the detail view — see DownloadDetail's "Download all (zip)").
+  // In a browser that supports it (Chromium-based; not Firefox/Safari),
+  // files are streamed straight into a folder the user picks, with no
+  // per-file tab/download popup at all. Elsewhere, it falls back to opening
+  // each file's link in its own tab.
   async function handleDownloadAll(d: Download) {
     if (!apiKey) return
+
+    // Must happen first, before any other await — the picker needs the
+    // click's own user-activation, which an intervening API call consumes.
+    let dir: FileSystemDirectoryHandle | null = null
+    if (supportsDirectoryPicker()) {
+      try {
+        dir = await pickDirectory()
+        if (!dir) return // user cancelled the picker
+      } catch (err) {
+        alert(err instanceof Error ? err.message : String(err))
+        return
+      }
+    }
+
     setDownloadingAllId(d.id)
     try {
       const detail = await getDownload(apiKey, d.id)
@@ -119,13 +137,24 @@ export default function App() {
         alert('No files available to download yet.')
         return
       }
+      const failed: string[] = []
       for (const f of files) {
         try {
           const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
-          window.open(url, '_blank', 'noopener,noreferrer')
+          if (dir) {
+            const resp = await fetch(url)
+            if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+            await writeFileToDirectory(dir, f.path, resp)
+          } else {
+            window.open(url, '_blank', 'noopener,noreferrer')
+          }
         } catch (err) {
-          console.error(`Failed to resolve a download link for ${f.path}`, err)
+          console.error(`Failed to download ${f.path}`, err)
+          failed.push(f.path)
         }
+      }
+      if (failed.length > 0) {
+        alert(`${failed.length} of ${files.length} file(s) failed to download:\n${failed.join('\n')}`)
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))

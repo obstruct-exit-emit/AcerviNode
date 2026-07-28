@@ -22,6 +22,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and `database.LocalStateFromProvider`, one shared implementation both shims
   (and now `internal/importer`, see below) call instead of duplicating.
 
+### Changed
+
+- Web UI's per-row "Download all" button now writes files straight into a
+  local folder the user picks (via the File System Access API's
+  `showDirectoryPicker()`), instead of opening one new browser tab per file.
+  Each file is streamed straight to disk (`fetch` response body piped into a
+  `FileSystemWritableFileStream`), never buffered whole in memory, which
+  matters for multi-gigabyte video files. Chromium-only API (not Firefox/
+  Safari) — unsupported browsers fall back to the previous one-tab-per-file
+  behavior automatically. Confirmed via `curl -sI -H 'Origin: ...'` against a
+  resolved TorBox CDN URL that it echoes `access-control-allow-origin` back
+  to match, which is what makes fetching those URLs from the web UI's own
+  JS legal in the first place.
+
 ### Added
 
 - `GET /api/v1/downloads/{id}/files/{fileId}/link` — resolves a direct,

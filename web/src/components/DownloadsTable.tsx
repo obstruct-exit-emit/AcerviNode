@@ -1,6 +1,11 @@
 import type { Download } from '../api'
+import { supportsDirectoryPicker } from '../fsAccess'
 import { formatBytes, formatRelativeTime } from '../format'
 import { StateBadge } from './StateBadge'
+
+const DOWNLOAD_ALL_TITLE = supportsDirectoryPicker()
+  ? 'Download all files into a folder you pick, straight from the provider'
+  : 'Download all files individually, straight from the provider (opens one tab per file)'
 
 interface Props {
   downloads: Download[]
@@ -75,7 +80,7 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
                     onDownloadAll(d)
                   }}
                   disabled={downloadingAllId === d.id}
-                  title="Download all files individually, straight from the provider"
+                  title={DOWNLOAD_ALL_TITLE}
                 >
                   {downloadingAllId === d.id ? '…' : '⬇'}
                 </button>

@@ -229,6 +229,19 @@ CDN link instead of BitTorrent/NNTP.
   independently confirmed — every usenet download on the test account had
   expired from `mylist` by the time this shipped, leaving nothing live to
   test it against.
+- **Batch download writes to a folder** (immediate follow-on): per user
+  feedback that opening one browser tab per file was unwieldy, "Download
+  all" now streams every file straight into a local folder the user picks
+  (`window.showDirectoryPicker()` + `FileSystemWritableFileStream`,
+  `web/src/fsAccess.ts`), instead of opening a tab per file. Chromium-only
+  API — Firefox/Safari fall back to the original one-tab-per-file behavior.
+  Confirmed via `curl -sI -H 'Origin: ...'` against a resolved TorBox CDN
+  URL that `access-control-allow-origin` echoes the request's Origin, which
+  is what makes fetching those URLs from the web UI's own JS legal. Purely
+  client-side browser behavior requiring a real user click and OS folder
+  picker, so — unlike the rest of this session's features — it can't be
+  verified headlessly via `curl`; confirmed only that the app serves the
+  updated bundle and builds/tests pass clean.
 
 ## Phase 4 — Multi-provider ⏳
 
