@@ -5,10 +5,11 @@ import { StateBadge } from './StateBadge'
 interface Props {
   downloads: Download[]
   onDelete: (d: Download) => void
+  onRetry: (d: Download) => void
   onSelect: (d: Download) => void
 }
 
-export function DownloadsTable({ downloads, onDelete, onSelect }: Props) {
+export function DownloadsTable({ downloads, onDelete, onRetry, onSelect }: Props) {
   if (downloads.length === 0) {
     return <p className="empty">No downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly.</p>
   }
@@ -47,7 +48,19 @@ export function DownloadsTable({ downloads, onDelete, onSelect }: Props) {
             </td>
             <td>{formatBytes(d.size_bytes)}</td>
             <td title={d.added_at}>{formatRelativeTime(d.added_at)}</td>
-            <td>
+            <td className="actions-cell">
+              {d.state === 'error' && (
+                <button
+                  className="retry-btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRetry(d)
+                  }}
+                  title="Retry"
+                >
+                  ↻
+                </button>
+              )}
               <button
                 className="delete-btn"
                 onClick={(e) => {

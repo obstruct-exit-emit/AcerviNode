@@ -7,6 +7,7 @@ import {
   getProviders,
   getVersion,
   listDownloads,
+  retryDownload,
   storeApiKey,
   type Download,
   type ProviderStatus,
@@ -91,6 +92,16 @@ export default function App() {
     }
   }
 
+  async function handleRetry(d: Download) {
+    if (!apiKey) return
+    try {
+      await retryDownload(apiKey, d.id)
+      refresh(apiKey)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   if (!apiKey) {
     return <ApiKeyGate onSubmit={handleKeySubmit} error={gateError} />
   }
@@ -129,7 +140,7 @@ export default function App() {
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
         {view === 'downloads' ? (
-          <DownloadsTable downloads={downloads} onDelete={handleDelete} onSelect={(d) => setSelectedId(d.id)} />
+          <DownloadsTable downloads={downloads} onDelete={handleDelete} onRetry={handleRetry} onSelect={(d) => setSelectedId(d.id)} />
         ) : (
           <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />
         )}
