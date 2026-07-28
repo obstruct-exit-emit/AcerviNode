@@ -48,15 +48,18 @@ type Importer struct {
 	usenetProvider  provider // nil if no usenet-capable provider is configured
 	httpClient      *http.Client
 
-	// mu guards downloadDir/interval/maxRetries/categoryPaths, which
-	// SetConfig/SetCategoryPaths can change live (see cmd/acervinode's
-	// liveSettings) — everything else on Importer is set once at
-	// construction and never mutated afterward.
+	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
+	// fetchTimeout, which SetConfig/SetCategoryPaths/SetMaxConcurrent/
+	// SetFetchTimeout can change live (see cmd/acervinode's liveSettings) —
+	// everything else on Importer is set once at construction and never
+	// mutated afterward.
 	mu            sync.Mutex
 	downloadDir   string
 	interval      time.Duration // also the backoff base: attempt N waits ~interval*2^N
 	maxRetries    int
 	categoryPaths map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
+	maxConcurrent int               // how many downloads Tick fetches to disk at once
+	fetchTimeout  time.Duration     // per-file fetch deadline — see fetchFile
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
 	// live SetConfig call can reset the ticker without Run having to poll
@@ -76,6 +79,11 @@ type Importer struct {
 // status-refresh cadence — see refreshStatuses); maxRetries is how many
 // failed attempts a download gets before it's moved to StateError instead of
 // retried again. All three can be changed later, live, via SetConfig.
+// maxConcurrent starts at 1 (Tick processes its due downloads strictly one
+// at a time) and fetchTimeout at 10 minutes — both changeable live via
+// SetMaxConcurrent/SetFetchTimeout, which cmd/acervinode's liveSettings
+// applies right after construction to match the configured values (mirroring
+// how it already does for category paths — see SetCategoryPaths).
 func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
 	return &Importer{
 		db:              db,
@@ -85,7 +93,9 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		interval:        interval,
 		maxRetries:      maxRetries,
 		categoryPaths:   map[string]string{},
-		httpClient:      &http.Client{Timeout: 10 * time.Minute}, // files can be large
+		maxConcurrent:   1,
+		fetchTimeout:    10 * time.Minute,
+		httpClient:      &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
 		intervalChanged: make(chan time.Duration, 1),
 	}
 }
@@ -158,6 +168,53 @@ func (im *Importer) CategoryPaths() map[string]string {
 	return out
 }
 
+// SetMaxConcurrent updates how many provider_completed downloads Tick fetches
+// to disk at once, live — the next Tick uses the new value immediately. n < 1
+// is clamped to 1 rather than rejected, since 0 or negative would deadlock
+// Tick's semaphore.
+func (im *Importer) SetMaxConcurrent(n int) {
+	if n < 1 {
+		n = 1
+	}
+	im.mu.Lock()
+	im.maxConcurrent = n
+	im.mu.Unlock()
+}
+
+func (im *Importer) getMaxConcurrent() int {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.maxConcurrent
+}
+
+// MaxConcurrent is the exported counterpart of getMaxConcurrent, for callers
+// outside this package confirming a SetMaxConcurrent call took (see
+// cmd/acervinode's settings tests).
+func (im *Importer) MaxConcurrent() int {
+	return im.getMaxConcurrent()
+}
+
+// SetFetchTimeout updates the per-file fetch deadline live — the next fetch
+// (in-flight ones keep whatever deadline they already started with) uses the
+// new value immediately.
+func (im *Importer) SetFetchTimeout(d time.Duration) {
+	im.mu.Lock()
+	im.fetchTimeout = d
+	im.mu.Unlock()
+}
+
+func (im *Importer) getFetchTimeout() time.Duration {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.fetchTimeout
+}
+
+// FetchTimeout is the exported counterpart of getFetchTimeout, for callers
+// outside this package confirming a SetFetchTimeout call took.
+func (im *Importer) FetchTimeout() time.Duration {
+	return im.getFetchTimeout()
+}
+
 // Config reports the current live downloadDir/interval/maxRetries — the
 // exported counterpart of getConfig, for callers outside this package that
 // need to confirm a SetConfig call actually took (see
@@ -190,9 +247,15 @@ func (im *Importer) Run(ctx context.Context) {
 // whose next_retry_at has passed (or was never set), once each — including
 // any row refreshStatuses itself just moved into provider_completed this
 // same tick, so a download that finishes between polls is fetched within one
-// tick instead of waiting for the next one. A failure is handled by
-// handleFailure — backed off and retried, or given up on — rather than left
-// to retry on every single tick forever.
+// tick instead of waiting for the next one. Up to getMaxConcurrent downloads
+// are fetched in parallel (a semaphore-bounded goroutine per download); Tick
+// itself still blocks until every one of this batch has finished, whether it
+// succeeded or not. A failure is handled by handleFailure — backed off and
+// retried, or given up on — rather than left to retry on every single tick
+// forever. Each download's own db writes are independent (keyed by its own
+// ID), and database.DB's connection pool is capped to one connection, so
+// concurrent goroutines here can't corrupt anything — they just serialize on
+// that one connection for the brief moment any of them touches it.
 func (im *Importer) Tick(ctx context.Context) error {
 	im.refreshStatuses(ctx)
 
@@ -200,11 +263,21 @@ func (im *Importer) Tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list downloads due for retry: %w", err)
 	}
+
+	sem := make(chan struct{}, im.getMaxConcurrent())
+	var wg sync.WaitGroup
 	for _, d := range rows {
-		if err := im.processDownload(ctx, d); err != nil {
-			im.handleFailure(ctx, d, err)
-		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(d *database.Download) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := im.processDownload(ctx, d); err != nil {
+				im.handleFailure(ctx, d, err)
+			}
+		}(d)
 	}
+	wg.Wait()
 	return nil
 }
 
@@ -359,7 +432,13 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("resolve download link: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	// A per-request deadline rather than the client's own Timeout field,
+	// since fetchTimeout can change live (SetFetchTimeout) — the client
+	// itself is built once at construction. Covers the whole transfer, not
+	// just connecting, so it needs headroom for large files.
+	fetchCtx, cancel := context.WithTimeout(ctx, im.getFetchTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, link, nil)
 	if err != nil {
 		return fmt.Errorf("build download request: %w", err)
 	}

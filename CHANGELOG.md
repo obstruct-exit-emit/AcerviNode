@@ -38,6 +38,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Two new settings addressing a real, observed problem — TorBox `rate limit
+  exceeded (status 429)` errors seen live earlier this session from every
+  add going straight to the provider with no local throttling:
+  `max_concurrent_downloads` (default 3) bounds how many `provider_completed`
+  downloads `internal/importer` fetches to local disk at once — previously
+  hardcoded to strictly one at a time, with no way to change it, regardless
+  of how many finished around the same time. `import_fetch_timeout_seconds`
+  (default 600, matching the previous hardcoded value) bounds how long a
+  single file's whole transfer may run before it's treated as a failed
+  attempt — now enforced per-request via a context deadline instead of a
+  fixed `http.Client.Timeout`, since it needed to change live. Both apply
+  immediately (no restart) via the existing `PUT /api/v1/settings/general`
+  alongside the other importer-tuning fields, and both are covered by tests
+  proving real parallelism (not just serial timing luck) and real timeout
+  enforcement (a CDN that never responds is given up on around the
+  configured deadline, not left to hang).
 - Per-category save-path overrides: `config.yaml`'s new `category_paths` map
   lets a category (e.g. "movies") route its Completed Download Handling
   output to a specific directory — a different disk or mount, say — instead

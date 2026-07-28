@@ -263,6 +263,19 @@ CDN link instead of BitTorrent/NNTP.
   download-mode preference above. Explicitly kept as sections rather than
   reorganizing into tabs — three-and-a-bit sections still fits one screen
   without much scrolling; revisit if Settings keeps growing.
+- **Concurrent download limit + fetch timeout** (immediate follow-on, from
+  the same settings conversation): `internal/importer` previously fetched
+  provider_completed downloads strictly one at a time with a hardcoded
+  10-minute-per-file timeout, neither configurable. Real motivation, not
+  hypothetical: this same session's WSL log already showed live TorBox `rate
+  limit exceeded (status 429)` errors from unthrottled adds. Added
+  `max_concurrent_downloads` (bounded worker-pool concurrency in `Tick`, via
+  a semaphore) and `import_fetch_timeout_seconds` (a per-request `context`
+  deadline, replacing the old fixed `http.Client.Timeout` so it can change
+  live) — both in Settings → General alongside the other importer knobs,
+  both apply immediately. Verified with tests that force genuine overlap
+  (not just serial timing luck) and genuine timeout enforcement (a CDN that
+  never responds), not just that the config values round-trip.
 
 ## Phase 4 — Multi-provider ⏳
 

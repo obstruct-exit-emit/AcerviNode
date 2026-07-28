@@ -177,6 +177,8 @@ export interface GeneralSettings {
   log_level: string
   import_interval_seconds: number
   import_max_retries: number
+  max_concurrent_downloads: number
+  import_fetch_timeout_seconds: number
 }
 
 export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
@@ -197,12 +199,14 @@ export interface GeneralUpdateInput {
   log_level: string
   import_interval_seconds: number
   import_max_retries: number
+  max_concurrent_downloads: number
+  import_fetch_timeout_seconds: number
 }
 
-// updateGeneralSettings applies download_dir/log_level/import_interval_seconds/
-// import_max_retries immediately, no restart needed. port/data_dir are saved
-// too, but only take effect after a restart — restart_required in the
-// response reflects whether either of those changed.
+// updateGeneralSettings applies everything except port/data_dir immediately,
+// no restart needed. port/data_dir are saved too, but only take effect after
+// a restart — restart_required in the response reflects whether either of
+// those changed.
 export function updateGeneralSettings(apiKey: string, update: GeneralUpdateInput): Promise<{ restart_required: boolean }> {
   return request('/api/v1/settings/general', apiKey, {
     method: 'PUT',

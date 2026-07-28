@@ -67,28 +67,32 @@ type usenetAdder interface {
 // Sonarr/Radarr) can see it without digging through server logs or
 // config.yaml.
 type GeneralInfo struct {
-	APIKey                string `json:"api_key"`
-	Port                  int    `json:"port"`
-	DataDir               string `json:"data_dir"`
-	DownloadDir           string `json:"download_dir"`
-	LogLevel              string `json:"log_level"`
-	ImportIntervalSeconds int    `json:"import_interval_seconds"`
-	ImportMaxRetries      int    `json:"import_max_retries"`
+	APIKey                    string `json:"api_key"`
+	Port                      int    `json:"port"`
+	DataDir                   string `json:"data_dir"`
+	DownloadDir               string `json:"download_dir"`
+	LogLevel                  string `json:"log_level"`
+	ImportIntervalSeconds     int    `json:"import_interval_seconds"`
+	ImportMaxRetries          int    `json:"import_max_retries"`
+	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
+	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 }
 
 // GeneralUpdate is a candidate change to AcerviNode's general configuration
 // (everything in GeneralInfo except the API key, which has its own
 // regenerate flow). Port/DataDir take effect only after a restart — binding
 // a new port or reopening the database live is out of scope for now — while
-// DownloadDir/LogLevel/ImportIntervalSeconds/ImportMaxRetries apply
-// immediately; see Settings.UpdateGeneral's RestartRequired return value.
+// every other field applies immediately; see Settings.UpdateGeneral's
+// RestartRequired return value.
 type GeneralUpdate struct {
-	Port                  int    `json:"port"`
-	DataDir               string `json:"data_dir"`
-	DownloadDir           string `json:"download_dir"`
-	LogLevel              string `json:"log_level"`
-	ImportIntervalSeconds int    `json:"import_interval_seconds"`
-	ImportMaxRetries      int    `json:"import_max_retries"`
+	Port                      int    `json:"port"`
+	DataDir                   string `json:"data_dir"`
+	DownloadDir               string `json:"download_dir"`
+	LogLevel                  string `json:"log_level"`
+	ImportIntervalSeconds     int    `json:"import_interval_seconds"`
+	ImportMaxRetries          int    `json:"import_max_retries"`
+	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
+	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 }
 
 // Settings lets the API read and change configuration live, without a

@@ -171,7 +171,8 @@ func TestLiveSettings_General_ReflectsConfig(t *testing.T) {
 
 	if got.APIKey != cfg.APIKey || got.Port != cfg.Port || got.DataDir != cfg.DataDir ||
 		got.DownloadDir != cfg.DownloadDir || got.LogLevel != cfg.LogLevel ||
-		got.ImportIntervalSeconds != cfg.ImportIntervalSeconds || got.ImportMaxRetries != cfg.ImportMaxRetries {
+		got.ImportIntervalSeconds != cfg.ImportIntervalSeconds || got.ImportMaxRetries != cfg.ImportMaxRetries ||
+		got.MaxConcurrentDownloads != cfg.MaxConcurrentDownloads || got.ImportFetchTimeoutSeconds != cfg.ImportFetchTimeoutSeconds {
 		t.Errorf("General() = %+v, want it to mirror cfg (%+v)", got, cfg)
 	}
 }
@@ -268,8 +269,9 @@ func TestSettingsAPI_RegenerateAPIKey_OldKeyStopsWorkingNewKeyWorks(t *testing.T
 }
 
 // TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists proves
-// download_dir/log_level/import_interval_seconds/import_max_retries take
-// effect on the live Importer/levelVar immediately, not just in config.yaml.
+// download_dir/log_level/import_interval_seconds/import_max_retries/
+// max_concurrent_downloads/import_fetch_timeout_seconds take effect on the
+// live Importer/levelVar immediately, not just in config.yaml.
 func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg, err := config.Load(configPath)
@@ -296,6 +298,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		Port: cfg.Port, DataDir: cfg.DataDir, // unchanged — no restart needed
 		DownloadDir: newDownloadDir, LogLevel: "debug",
 		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
+		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -317,13 +320,20 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if gotMaxRetries != 9 {
 		t.Errorf("importer maxRetries = %d, want 9 applied live", gotMaxRetries)
 	}
+	if got := imp.MaxConcurrent(); got != 7 {
+		t.Errorf("importer MaxConcurrent() = %d, want 7 applied live", got)
+	}
+	if got := imp.FetchTimeout(); got != 120*time.Second {
+		t.Errorf("importer FetchTimeout() = %v, want 120s applied live", got)
+	}
 
 	reloaded, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
 	if reloaded.DownloadDir != newDownloadDir || reloaded.LogLevel != "debug" ||
-		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 {
+		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 ||
+		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
 	}
 }
@@ -342,6 +352,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.
 	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port + 1, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
 		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -365,6 +376,7 @@ func TestLiveSettings_UpdateGeneral_RejectsInvalidValues(t *testing.T) {
 	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
 		LogLevel: "not-a-real-level", ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
 	})
 	if err == nil {
 		t.Fatal("UpdateGeneral() with an invalid log_level: expected an error, got nil")

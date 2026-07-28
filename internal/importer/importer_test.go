@@ -3,10 +3,12 @@ package importer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,16 +20,22 @@ import (
 // fakeProvider is a minimal provider backed by an httptest.Server standing
 // in for a debrid CDN — real HTTP round trips, no network.
 type fakeProvider struct {
-	cdn         *httptest.Server
-	files       []debrid.DownloadFile
-	failLinks   map[string]bool // fileID -> force RequestDownloadLink to fail
-	requestedAt []string        // fileIDs RequestDownloadLink was called for, in order
-	statuses    []debrid.DownloadStatus
-	listErr     error
+	cdn       *httptest.Server
+	files     []debrid.DownloadFile
+	failLinks map[string]bool // fileID -> force RequestDownloadLink to fail
+	statuses  []debrid.DownloadStatus
+	listErr   error
 	// listCalls is atomic because TestSetConfig_ResetsTickerInterval reads it
 	// from the test goroutine while Importer.Run's own goroutine calls List
 	// concurrently.
 	listCalls atomic.Int32
+
+	// requestedAtMu guards requestedAt: TestTick_RespectsMaxConcurrent runs
+	// multiple downloads' RequestDownloadLink calls concurrently against the
+	// same shared fakeProvider, which a plain unsynchronized append can't
+	// survive.
+	requestedAtMu sync.Mutex
+	requestedAt   []string // fileIDs RequestDownloadLink was called for, in order
 }
 
 func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) {
@@ -43,11 +51,19 @@ func (f *fakeProvider) Files(_ context.Context, _ debrid.ProviderDownloadID) ([]
 }
 
 func (f *fakeProvider) RequestDownloadLink(_ context.Context, _ debrid.ProviderDownloadID, fileID string) (string, error) {
+	f.requestedAtMu.Lock()
 	f.requestedAt = append(f.requestedAt, fileID)
+	f.requestedAtMu.Unlock()
 	if f.failLinks[fileID] {
 		return "", errors.New("provider: link resolution failed")
 	}
 	return f.cdn.URL + "/" + fileID, nil
+}
+
+func (f *fakeProvider) requestedCount() int {
+	f.requestedAtMu.Lock()
+	defer f.requestedAtMu.Unlock()
+	return len(f.requestedAt)
 }
 
 func openTestDB(t *testing.T) *database.DB {
@@ -192,8 +208,8 @@ func TestTick_SkipsAlreadyDownloadedFiles(t *testing.T) {
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
-	if len(provider.requestedAt) != 0 {
-		t.Errorf("RequestDownloadLink called for already-present file: %v", provider.requestedAt)
+	if n := provider.requestedCount(); n != 0 {
+		t.Errorf("RequestDownloadLink called for already-present file: %d calls", n)
 	}
 
 	got, err := db.GetDownloadByID(ctx, d.ID)
@@ -356,8 +372,8 @@ func TestTick_DoesNotRetryBeforeNextRetryAt(t *testing.T) {
 		t.Fatalf("Tick() error = %v", err)
 	}
 
-	if len(provider.requestedAt) != 0 {
-		t.Errorf("provider was contacted during backoff: %v", provider.requestedAt)
+	if n := provider.requestedCount(); n != 0 {
+		t.Errorf("provider was contacted during backoff: %d calls", n)
 	}
 }
 
@@ -635,6 +651,141 @@ func TestSetCategoryPaths_OverridesDownloadDir(t *testing.T) {
 	notWant := filepath.Join(downloadDir, "movies", "Some Movie", "movie.mkv")
 	if _, err := os.Stat(notWant); err == nil {
 		t.Errorf("file also landed at the unused default location %s, want only the override", notWant)
+	}
+}
+
+// TestTick_RespectsMaxConcurrent proves Tick actually runs up to
+// SetMaxConcurrent downloads' fetches in parallel (not a coincidence of
+// timing — the test blocks the CDN handler until it observes 2 requests in
+// flight simultaneously before releasing any of them), and never more than
+// that at once, across 4 downloads due at the same time.
+func TestTick_RespectsMaxConcurrent(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	var current, peak atomic.Int32
+	release := make(chan struct{})
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := current.Add(1)
+		defer current.Add(-1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		<-release
+		w.Write([]byte("bytes"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: int64(len("bytes"))}},
+	}
+
+	const numDownloads = 4
+	for i := 0; i < numDownloads; i++ {
+		d := &database.Download{
+			ID: fmt.Sprintf("dl-conc-%d", i), Provider: "fake", ProviderDownloadID: fmt.Sprintf("provider-conc-%d", i),
+			Kind: database.KindTorrent, Hash: fmt.Sprintf("conchash%d", i), Name: fmt.Sprintf("Release %d", i),
+			Category: "tv", State: database.StateProviderCompleted,
+		}
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetMaxConcurrent(2)
+	if got := im.MaxConcurrent(); got != 2 {
+		t.Fatalf("MaxConcurrent() = %d, want 2", got)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- im.Tick(ctx) }()
+
+	deadline := time.After(2 * time.Second)
+waitForConcurrency:
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("never observed 2 concurrent in-flight fetches")
+		default:
+			if current.Load() >= 2 {
+				break waitForConcurrency
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if got := peak.Load(); got > 2 {
+		t.Errorf("peak concurrent fetches = %d, want <= 2 (maxConcurrent)", got)
+	}
+	if got := peak.Load(); got < 2 {
+		t.Errorf("peak concurrent fetches = %d, want >= 2 (proves real parallelism happened)", got)
+	}
+}
+
+// TestFetchFile_TimesOutOnSlowTransfer proves SetFetchTimeout is actually
+// enforced per-request: a CDN that never finishes responding causes the
+// fetch to fail (and the download to be scheduled for retry) once the
+// configured timeout elapses, rather than hanging indefinitely.
+func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	blockForever := make(chan struct{})
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-blockForever // never responds within the test's lifetime
+	}))
+	// Cleanups run LIFO: unblock the handler (registered second, so it runs
+	// first) before cdn.Close (registered first, runs last) waits for that
+	// same handler goroutine to return — otherwise Close blocks forever.
+	t.Cleanup(cdn.Close)
+	t.Cleanup(func() { close(blockForever) })
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: 5}},
+	}
+
+	d := &database.Download{
+		ID: "dl-timeout", Provider: "fake", ProviderDownloadID: "provider-timeout", Kind: database.KindTorrent,
+		Hash: "timeouthash", Name: "Slow Release", Category: "tv", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFetchTimeout(50 * time.Millisecond)
+	if got := im.FetchTimeout(); got != 50*time.Millisecond {
+		t.Fatalf("FetchTimeout() = %v, want 50ms", got)
+	}
+
+	start := time.Now()
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Tick() took %v, want it to give up around the 50ms fetch timeout, not hang", elapsed)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateProviderCompleted {
+		t.Errorf("state = %q, want still provider_completed (scheduled for retry, not marked ready)", got.State)
+	}
+	if got.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1 (one failed attempt recorded)", got.RetryCount)
 	}
 }
 

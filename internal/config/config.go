@@ -41,6 +41,17 @@ type Config struct {
 	// ImportIntervalSeconds) before giving up and moving the download to
 	// StateError.
 	ImportMaxRetries int `yaml:"import_max_retries"`
+	// MaxConcurrentDownloads bounds how many provider_completed downloads
+	// internal/importer fetches to local disk at once — without this, every
+	// Tick processed its due downloads strictly one at a time, however many
+	// there were.
+	MaxConcurrentDownloads int `yaml:"max_concurrent_downloads"`
+	// ImportFetchTimeoutSeconds bounds how long a single file fetch may run
+	// before internal/importer gives up on it (counted as a failed attempt,
+	// subject to the same retry/backoff as any other fetch error) — covers
+	// the whole transfer, not just connecting, so it needs headroom for
+	// large files on a slow connection.
+	ImportFetchTimeoutSeconds int `yaml:"import_fetch_timeout_seconds"`
 
 	// CategoryPaths overrides DownloadDir on a per-category basis: a download
 	// in category "movies" mapped to "/mnt/movies" lands directly under that
@@ -58,14 +69,16 @@ var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, 
 
 func defaults() *Config {
 	return &Config{
-		Port:                  7846,
-		DataDir:               "./data",
-		LogLevel:              "info",
-		Providers:             map[string]ProviderConfig{},
-		DownloadDir:           "./downloads",
-		ImportIntervalSeconds: 10,
-		ImportMaxRetries:      5,
-		CategoryPaths:         map[string]string{},
+		Port:                      7846,
+		DataDir:                   "./data",
+		LogLevel:                  "info",
+		Providers:                 map[string]ProviderConfig{},
+		DownloadDir:               "./downloads",
+		ImportIntervalSeconds:     10,
+		ImportMaxRetries:          5,
+		MaxConcurrentDownloads:    3,
+		ImportFetchTimeoutSeconds: 600,
+		CategoryPaths:             map[string]string{},
 	}
 }
 
@@ -141,6 +154,16 @@ func applyEnv(cfg *Config) {
 			cfg.ImportMaxRetries = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_MAX_CONCURRENT_DOWNLOADS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.MaxConcurrentDownloads = n
+		}
+	}
+	if v := os.Getenv("ACERVINODE_IMPORT_FETCH_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ImportFetchTimeoutSeconds = n
+		}
+	}
 
 	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
 	const prefix = "ACERVINODE_PROVIDERS_"
@@ -182,6 +205,12 @@ func (c *Config) Validate() error {
 	}
 	if c.ImportMaxRetries < 1 {
 		return fmt.Errorf("import_max_retries must be at least 1")
+	}
+	if c.MaxConcurrentDownloads < 1 {
+		return fmt.Errorf("max_concurrent_downloads must be at least 1")
+	}
+	if c.ImportFetchTimeoutSeconds < 1 {
+		return fmt.Errorf("import_fetch_timeout_seconds must be at least 1")
 	}
 	return nil
 }

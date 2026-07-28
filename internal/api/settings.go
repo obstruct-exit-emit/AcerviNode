@@ -66,9 +66,9 @@ func (s *Server) handleGetGeneralSettings(w http.ResponseWriter, r *http.Request
 }
 
 // handleUpdateGeneralSettings implements PUT /api/v1/settings/general.
-// DownloadDir/LogLevel/ImportIntervalSeconds/ImportMaxRetries apply
-// immediately; Port/DataDir are persisted but only take effect after a
-// restart — see GeneralUpdate and the response's restart_required field.
+// Everything except Port/DataDir applies immediately; those two are
+// persisted but only take effect after a restart — see GeneralUpdate and the
+// response's restart_required field.
 func (s *Server) handleUpdateGeneralSettings(w http.ResponseWriter, r *http.Request) {
 	var req GeneralUpdate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

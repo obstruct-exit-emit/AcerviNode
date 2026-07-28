@@ -14,12 +14,18 @@ units without a mounted config file.
 | `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path`. Editable live (no restart) — `internal/importer.SetConfig` |
 | `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `10` | How often `internal/importer` ticks: proactively refreshes every tracked download's status from its provider (not just when an *arr app happens to poll — see [Providers](providers.md#proactive-status-refresh)) and checks for provider-completed downloads to fetch to local disk; also the base of its retry backoff (attempt *N* waits ~`import_interval_seconds`×2^*N*, capped at 1 hour). Editable live (no restart) — the running ticker resets to the new interval immediately rather than waiting out the old one |
 | `import_max_retries` | `ACERVINODE_IMPORT_MAX_RETRIES` | `5` | How many failed fetch attempts a download gets before `internal/importer` gives up and moves it to `error` instead of retrying again. Editable live (no restart) |
+| `max_concurrent_downloads` | `ACERVINODE_MAX_CONCURRENT_DOWNLOADS` | `3` | How many `provider_completed` downloads `internal/importer` fetches to local disk at once — previously always strictly one at a time, with no way to change it. Editable live (no restart); a value below 1 is clamped up to 1 rather than rejected |
+| `import_fetch_timeout_seconds` | `ACERVINODE_IMPORT_FETCH_TIMEOUT_SECONDS` | `600` | Deadline for a single file's whole fetch (not just connecting) before `internal/importer` gives up on it — same retry/backoff as any other fetch failure applies. Raise it if large files on a slow connection are failing partway through. Editable live (no restart); in-flight fetches keep whatever deadline they already started with |
 | `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings). `POST /api/v1/settings/providers/torbox/test` makes one real, live call to confirm the key actually works |
 | `category_paths.<category>` | *(none — set via API/UI, not env)* | *(none)* | Per-category override for `download_dir`, e.g. to route one category to a different disk/mount — see [Categories and save paths](#categories-and-save-paths) below. Editable live (no restart) via `PUT /api/v1/settings/categories/path` or the web UI's Settings tab |
 
-All seven live-editable fields above (everything except `port`/`data_dir`, which
-still persist but need a restart) can be changed together in one call via
-`PUT /api/v1/settings/general` — see [API](api.md).
+`download_dir`, `log_level`, `import_interval_seconds`, `import_max_retries`,
+`max_concurrent_downloads`, and `import_fetch_timeout_seconds` can all be
+changed together in one call via `PUT /api/v1/settings/general` (alongside
+`port`/`data_dir`, which persist but need a restart) — see [API](api.md).
+`api_key`, `providers.torbox.api_key`, and `category_paths` each have their
+own dedicated endpoint instead (regenerate, provider settings, and category
+paths respectively).
 
 ### Categories
 

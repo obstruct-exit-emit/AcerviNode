@@ -107,6 +107,8 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
         log_level: generalSettings.log_level,
         import_interval_seconds: generalSettings.import_interval_seconds,
         import_max_retries: generalSettings.import_max_retries,
+        max_concurrent_downloads: generalSettings.max_concurrent_downloads,
+        import_fetch_timeout_seconds: generalSettings.import_fetch_timeout_seconds,
       })
       setCategories(cats)
     } catch {
@@ -275,9 +277,30 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
                 onChange={(e) => setForm({ ...form, import_max_retries: Number(e.target.value) })}
               />
             </label>
+            <label>
+              Max concurrent downloads
+              <input
+                type="number"
+                min={1}
+                value={form.max_concurrent_downloads}
+                onChange={(e) => setForm({ ...form, max_concurrent_downloads: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              Import fetch timeout (seconds)
+              <input
+                type="number"
+                min={1}
+                value={form.import_fetch_timeout_seconds}
+                onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
+              />
+            </label>
 
             <p className="settings-help">
-              The four above apply immediately, no restart needed. Port and data dir need a restart to take effect —
+              The six above apply immediately, no restart needed. Max concurrent downloads bounds how many
+              provider_completed downloads are fetched to disk at once (previously always strictly one at a time).
+              The fetch timeout covers a single file's whole transfer, not just connecting — raise it if large files
+              on a slow connection are failing partway through. Port and data dir need a restart to take effect —
               edit them here to save the new value for next time.
             </p>
             <label>
