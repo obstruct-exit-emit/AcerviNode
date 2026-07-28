@@ -2,6 +2,7 @@ package sabnzbd
 
 import (
 	"net/http"
+	"sort"
 	"sync"
 )
 
@@ -38,7 +39,22 @@ func (c *categoryStore) list() []string {
 	for name := range c.names {
 		out = append(out, name)
 	}
+	sort.Strings(out)
 	return out
+}
+
+// Categories lists every category name currently known, including the
+// always-present "*" default — populated reactively as *arr apps declare
+// them, or manually via AddCategory (see the settings API).
+func (s *Server) Categories() []string {
+	return s.categories.list()
+}
+
+// AddCategory manually registers a category name, the same way an *arr
+// app's own mode=addurl/addfile "cat" field does implicitly — see
+// internal/qbittorrent's identical AddCategory for the rationale.
+func (s *Server) AddCategory(name string) {
+	s.categories.add(name)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {

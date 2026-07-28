@@ -168,6 +168,20 @@ CDN link instead of BitTorrent/NNTP.
   most likely traced to TorBox (or the network path to it) genuinely being
   slow at that moment — the WSL instance's own log showed sustained real
   `mylist` timeouts around the same time, unrelated to any AcerviNode code.
+- **Settings expansion** (follow-on): general config editable live
+  (`download_dir`/`log_level`/`import_interval_seconds`/`import_max_retries`
+  apply with no restart; `port`/`data_dir` persist but need one), a real
+  TorBox connection test, and category visibility/management for both compat
+  shims — see [Configuration](docs/configuration.md) and
+  [API](docs/api.md). Surfaced a pre-existing bug along the way: `log_level`
+  was validated at startup but never actually wired into anything — the
+  default logger always ran at its own default level regardless of what
+  config said. Fixed as part of making it live-editable; the log line format
+  changed as a visible side effect (see CHANGELOG). Also caught a real bug
+  in review before it shipped: `GeneralUpdate`'s JSON struct tags were
+  missing entirely, so every field except `port` would have silently
+  decoded to its zero value on every real request — a test asserting the
+  decoded values matched what was sent caught it immediately.
 
 ## Phase 4 — Multi-provider ⏳
 

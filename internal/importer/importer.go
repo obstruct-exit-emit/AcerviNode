@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
@@ -45,10 +46,22 @@ type Importer struct {
 	db              *database.DB
 	torrentProvider provider // nil if no torrent-capable provider is configured
 	usenetProvider  provider // nil if no usenet-capable provider is configured
-	downloadDir     string
-	interval        time.Duration // also the backoff base: attempt N waits ~interval*2^N
-	maxRetries      int
 	httpClient      *http.Client
+
+	// mu guards downloadDir/interval/maxRetries, which SetConfig can change
+	// live (see cmd/acervinode's liveSettings) — everything else on Importer
+	// is set once at construction and never mutated afterward.
+	mu          sync.Mutex
+	downloadDir string
+	interval    time.Duration // also the backoff base: attempt N waits ~interval*2^N
+	maxRetries  int
+
+	// intervalChanged carries a fresh interval into Run's select loop so a
+	// live SetConfig call can reset the ticker without Run having to poll
+	// for changes. Buffered 1: a SetConfig that lands while Run hasn't
+	// consumed the previous change just overwrites it — only the latest
+	// interval matters.
+	intervalChanged chan time.Duration
 }
 
 // New builds an Importer. Either provider may be nil if that capability
@@ -60,7 +73,7 @@ type Importer struct {
 // interval is the tick period (also the backoff base and the proactive
 // status-refresh cadence — see refreshStatuses); maxRetries is how many
 // failed attempts a download gets before it's moved to StateError instead of
-// retried again.
+// retried again. All three can be changed later, live, via SetConfig.
 func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
 	return &Importer{
 		db:              db,
@@ -70,17 +83,63 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		interval:        interval,
 		maxRetries:      maxRetries,
 		httpClient:      &http.Client{Timeout: 10 * time.Minute}, // files can be large
+		intervalChanged: make(chan time.Duration, 1),
 	}
+}
+
+// SetConfig updates downloadDir/interval/maxRetries live, with no restart —
+// the next Tick (and every one after) uses the new downloadDir/maxRetries
+// immediately, and Run's ticker is reset to the new interval right away
+// rather than waiting out whatever's left of the old one.
+func (im *Importer) SetConfig(downloadDir string, interval time.Duration, maxRetries int) {
+	im.mu.Lock()
+	im.downloadDir = downloadDir
+	im.maxRetries = maxRetries
+	changed := interval != im.interval
+	im.interval = interval
+	im.mu.Unlock()
+
+	if !changed {
+		return
+	}
+	select {
+	case im.intervalChanged <- interval:
+	default:
+		// A previous change is still waiting for Run to consume it — drain
+		// it and replace with this newer one rather than blocking.
+		select {
+		case <-im.intervalChanged:
+		default:
+		}
+		im.intervalChanged <- interval
+	}
+}
+
+func (im *Importer) getConfig() (downloadDir string, interval time.Duration, maxRetries int) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.downloadDir, im.interval, im.maxRetries
+}
+
+// Config reports the current live downloadDir/interval/maxRetries — the
+// exported counterpart of getConfig, for callers outside this package that
+// need to confirm a SetConfig call actually took (see
+// cmd/acervinode's settings tests).
+func (im *Importer) Config() (downloadDir string, interval time.Duration, maxRetries int) {
+	return im.getConfig()
 }
 
 // Run blocks, calling Tick every interval until ctx is done.
 func (im *Importer) Run(ctx context.Context) {
-	ticker := time.NewTicker(im.interval)
+	_, interval, _ := im.getConfig()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case newInterval := <-im.intervalChanged:
+			ticker.Reset(newInterval)
 		case <-ticker.C:
 			if err := im.Tick(ctx); err != nil {
 				slog.Error("importer: tick failed", "error", err)
@@ -157,9 +216,10 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 // moves the download to StateError so it stops being retried and shows up as
 // failed rather than stuck forever in provider_completed.
 func (im *Importer) handleFailure(ctx context.Context, d *database.Download, procErr error) {
+	_, _, maxRetries := im.getConfig()
 	attempt := d.RetryCount + 1
 
-	if attempt >= im.maxRetries {
+	if attempt >= maxRetries {
 		if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateError, d.Progress, d.SizeBytes, nil, procErr.Error()); err != nil {
 			slog.Error("importer: mark error failed", "id", d.ID, "error", err)
 			return
@@ -174,7 +234,7 @@ func (im *Importer) handleFailure(ctx context.Context, d *database.Download, pro
 		return
 	}
 	slog.Warn("importer: process download failed, will retry",
-		"id", d.ID, "name", d.Name, "attempt", attempt, "max_retries", im.maxRetries,
+		"id", d.ID, "name", d.Name, "attempt", attempt, "max_retries", maxRetries,
 		"next_retry_at", nextRetryAt, "error", procErr)
 }
 
@@ -187,7 +247,8 @@ func (im *Importer) backoff(attempt int) time.Duration {
 	if shift > maxShift {
 		shift = maxShift
 	}
-	d := im.interval * time.Duration(int64(1)<<uint(shift))
+	_, interval, _ := im.getConfig()
+	d := interval * time.Duration(int64(1)<<uint(shift))
 	if d <= 0 || d > maxBackoff {
 		return maxBackoff
 	}
@@ -216,7 +277,8 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 
 	destDir := d.SavePath
 	if destDir == "" {
-		destDir = filepath.Join(im.downloadDir, d.Category, d.Name)
+		downloadDir, _, _ := im.getConfig()
+		destDir = filepath.Join(downloadDir, d.Category, d.Name)
 	}
 
 	for _, f := range files {

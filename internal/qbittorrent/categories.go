@@ -3,6 +3,7 @@ package qbittorrent
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"sync"
 )
 
@@ -25,6 +26,31 @@ func (c *categoryStore) add(name, savePath string) {
 	c.mu.Lock()
 	c.names[name] = savePath
 	c.mu.Unlock()
+}
+
+// Categories lists every category name currently known — populated
+// reactively as *arr apps declare them (see handleCreateCategory), or
+// manually via AddCategory (see the settings API). Sorted for a stable,
+// predictable order in the settings UI.
+func (s *Server) Categories() []string {
+	s.categories.mu.Lock()
+	defer s.categories.mu.Unlock()
+	names := make([]string, 0, len(s.categories.names))
+	for name := range s.categories.names {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// AddCategory manually registers a category name, the same way an *arr
+// app's own createCategory call does — see internal/api's settings
+// endpoints, which let a category be pre-declared from the web UI (e.g. to
+// populate the "Add Download" form's category field) without needing
+// Sonarr/Radarr to have done it first. No save path: that's an *arr-app
+// concept AcerviNode itself never interprets (see docs/configuration.md).
+func (s *Server) AddCategory(name string) {
+	s.categories.add(name, "")
 }
 
 type categoryResponse struct {

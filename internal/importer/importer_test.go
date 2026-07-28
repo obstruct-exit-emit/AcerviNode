@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,11 +24,14 @@ type fakeProvider struct {
 	requestedAt []string        // fileIDs RequestDownloadLink was called for, in order
 	statuses    []debrid.DownloadStatus
 	listErr     error
-	listCalls   int
+	// listCalls is atomic because TestSetConfig_ResetsTickerInterval reads it
+	// from the test goroutine while Importer.Run's own goroutine calls List
+	// concurrently.
+	listCalls atomic.Int32
 }
 
 func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) {
-	f.listCalls++
+	f.listCalls.Add(1)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -503,8 +507,8 @@ func TestTick_SkipsListCallWhenNothingTracked(t *testing.T) {
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
-	if provider.listCalls != 0 {
-		t.Errorf("List() called %d times with nothing tracked, want 0", provider.listCalls)
+	if provider.listCalls.Load() != 0 {
+		t.Errorf("List() called %d times with nothing tracked, want 0", provider.listCalls.Load())
 	}
 }
 
@@ -547,5 +551,113 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run() did not return after context cancellation")
+	}
+}
+
+// TestSetConfig_DownloadDirAppliesLive proves a downloadDir change from
+// SetConfig takes effect on the very next Tick, with no restart.
+func TestSetConfig_DownloadDirAppliesLive(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("episode bytes"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "episode.mkv", SizeBytes: int64(len("episode bytes"))}},
+	}
+
+	d := &database.Download{
+		ID: "dl-setconfig", Provider: "fake", ProviderDownloadID: "provider-setconfig", Kind: database.KindTorrent,
+		Hash: "setconfig1", Name: "Some Release", Category: "tv", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	newDownloadDir := t.TempDir()
+	im.SetConfig(newDownloadDir, time.Minute, 5)
+
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	want := filepath.Join(newDownloadDir, "tv", "Some Release", "episode.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected file at the new downloadDir %s, stat error = %v", want, err)
+	}
+}
+
+// TestSetConfig_MaxRetriesAppliesLive proves a maxRetries change from
+// SetConfig takes effect on the very next handleFailure call.
+func TestSetConfig_MaxRetriesAppliesLive(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-setconfig-retries", Provider: "fake", ProviderDownloadID: "provider-setconfig-retries", Kind: database.KindTorrent,
+		Hash: "setconfig2", Name: "Retry Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, nil, nil, t.TempDir(), time.Minute, 5)
+	im.SetConfig(t.TempDir(), time.Minute, 1) // lower maxRetries to 1: the very next failure should give up
+
+	im.handleFailure(ctx, d, errors.New("simulated failure"))
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateError {
+		t.Errorf("state = %q, want error (new maxRetries=1 should give up on the first failure)", got.State)
+	}
+}
+
+// TestSetConfig_ResetsTickerInterval proves a running Importer's ticker
+// actually resets to a new interval immediately rather than waiting out
+// whatever's left of the old one — starts with a long interval, then shrinks
+// it drastically and expects a tick well within the old interval's window.
+func TestSetConfig_ResetsTickerInterval(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	provider := &fakeProvider{}
+
+	// refreshKind (called from every Tick) skips calling List entirely when
+	// nothing's tracked — a row needs to exist for a tick to be observable
+	// via provider.listCalls at all.
+	d := &database.Download{
+		ID: "dl-ticker-reset", Provider: "fake", ProviderDownloadID: "provider-ticker-reset", Kind: database.KindTorrent,
+		Hash: "tickerreset1", Name: "Ticker Reset Test", State: database.StateQueued,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Hour, 5) // old interval: would never fire in this test's timeout
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go im.Run(runCtx)
+
+	im.SetConfig(t.TempDir(), 20*time.Millisecond, 5)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if provider.listCalls.Load() > 0 {
+			return // a tick fired — the reset took effect
+		}
+		select {
+		case <-deadline:
+			t.Fatal("ticker did not reset to the new (much shorter) interval in time")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

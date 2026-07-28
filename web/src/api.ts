@@ -153,3 +153,49 @@ export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
 export function regenerateApiKey(apiKey: string): Promise<{ api_key: string }> {
   return request('/api/v1/settings/api-key/regenerate', apiKey, { method: 'POST' })
 }
+
+export interface GeneralUpdateInput {
+  port: number
+  data_dir: string
+  download_dir: string
+  log_level: string
+  import_interval_seconds: number
+  import_max_retries: number
+}
+
+// updateGeneralSettings applies download_dir/log_level/import_interval_seconds/
+// import_max_retries immediately, no restart needed. port/data_dir are saved
+// too, but only take effect after a restart — restart_required in the
+// response reflects whether either of those changed.
+export function updateGeneralSettings(apiKey: string, update: GeneralUpdateInput): Promise<{ restart_required: boolean }> {
+  return request('/api/v1/settings/general', apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+}
+
+// testTorBoxConnection makes one real, live call to TorBox with the
+// currently configured key. A failed connection test is still a successful
+// API call (200) — the failure is reported in the body via ok:false, not an
+// HTTP error status.
+export function testTorBoxConnection(apiKey: string): Promise<{ ok: boolean; latency_ms?: number; error?: string }> {
+  return request('/api/v1/settings/providers/torbox/test', apiKey, { method: 'POST' })
+}
+
+export interface Categories {
+  torrent: string[]
+  usenet: string[]
+}
+
+export function getCategories(apiKey: string): Promise<Categories> {
+  return request('/api/v1/settings/categories', apiKey)
+}
+
+export function addCategory(apiKey: string, protocol: 'torrent' | 'usenet', name: string): Promise<void> {
+  return request('/api/v1/settings/categories', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ protocol, name }),
+  })
+}

@@ -7,14 +7,27 @@ units without a mounted config file.
 
 | Key | Env var | Default | Purpose |
 |---|---|---|---|
-| `port` | `ACERVINODE_PORT` | `7846` | HTTP port for both compat shims and the native API |
-| `data_dir` | `ACERVINODE_DATA_DIR` | `./data` | Where the SQLite database file lives |
+| `port` | `ACERVINODE_PORT` | `7846` | HTTP port for both compat shims and the native API. Editable via the settings API/UI, but **requires a restart** — AcerviNode doesn't rebind its listener live |
+| `data_dir` | `ACERVINODE_DATA_DIR` | `./data` | Where the SQLite database file lives. Editable via the settings API/UI, but **requires a restart** — the database connection isn't reopened live |
 | `api_key` | `ACERVINODE_API_KEY` | *(generated on first run)* | Key required by the native `/api/v1` endpoints, the qBittorrent shim's login password, and the SABnzbd shim's `apikey` param. Viewable and regeneratable live (no restart) via the web UI's Settings tab, or `GET`/`POST /api/v1/settings/general` and `/api/v1/settings/api-key/regenerate` — see [API](api.md) |
-| `log_level` | `ACERVINODE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
-| `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path` |
-| `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `10` | How often `internal/importer` ticks: proactively refreshes every tracked download's status from its provider (not just when an *arr app happens to poll — see [Providers](providers.md#proactive-status-refresh)) and checks for provider-completed downloads to fetch to local disk; also the base of its retry backoff (attempt *N* waits ~`import_interval_seconds`×2^*N*, capped at 1 hour) |
-| `import_max_retries` | `ACERVINODE_IMPORT_MAX_RETRIES` | `5` | How many failed fetch attempts a download gets before `internal/importer` gives up and moves it to `error` instead of retrying again |
-| `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings) |
+| `log_level` | `ACERVINODE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. Editable live (no restart) via `PUT /api/v1/settings/general` or the web UI — applies immediately via a `slog.LevelVar` |
+| `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path`. Editable live (no restart) — `internal/importer.SetConfig` |
+| `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `10` | How often `internal/importer` ticks: proactively refreshes every tracked download's status from its provider (not just when an *arr app happens to poll — see [Providers](providers.md#proactive-status-refresh)) and checks for provider-completed downloads to fetch to local disk; also the base of its retry backoff (attempt *N* waits ~`import_interval_seconds`×2^*N*, capped at 1 hour). Editable live (no restart) — the running ticker resets to the new interval immediately rather than waiting out the old one |
+| `import_max_retries` | `ACERVINODE_IMPORT_MAX_RETRIES` | `5` | How many failed fetch attempts a download gets before `internal/importer` gives up and moves it to `error` instead of retrying again. Editable live (no restart) |
+| `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings). `POST /api/v1/settings/providers/torbox/test` makes one real, live call to confirm the key actually works |
+
+All seven live-editable fields above (everything except `port`/`data_dir`, which
+still persist but need a restart) can be changed together in one call via
+`PUT /api/v1/settings/general` — see [API](api.md).
+
+### Categories
+
+Both compat shims track category names *arr apps declare (purely so
+`/api/v2/torrents/categories`/`mode=get_config` have something to report back —
+AcerviNode never interprets a category itself). `GET /api/v1/settings/categories`
+and `POST /api/v1/settings/categories` (or the web UI's Settings tab) let you view
+them and pre-declare one manually, e.g. to populate the "Add Download" form's
+category field before Sonarr/Radarr has ever added anything.
 
 ## Example
 

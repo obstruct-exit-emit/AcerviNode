@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,9 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/acervinode/acervinode/internal/api"
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/importer"
 )
 
 func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
@@ -260,5 +264,171 @@ func TestSettingsAPI_RegenerateAPIKey_OldKeyStopsWorkingNewKeyWorks(t *testing.T
 	loginResp.Body.Close()
 	if strings.TrimSpace(string(body)) != "Ok." {
 		t.Errorf("qbt login with new key body = %q, want Ok.", body)
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists proves
+// download_dir/log_level/import_interval_seconds/import_max_retries take
+// effect on the live Importer/levelVar immediately, not just in config.yaml.
+func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(slog.LevelInfo)
+	settings.SetLevelVar(levelVar)
+
+	newDownloadDir := t.TempDir()
+	imp := importer.New(db, torrentDyn, usenetDyn, "old-download-dir", time.Minute, 5)
+	settings.SetImporter(imp)
+
+	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
+		Port: cfg.Port, DataDir: cfg.DataDir, // unchanged — no restart needed
+		DownloadDir: newDownloadDir, LogLevel: "debug",
+		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGeneral() error = %v", err)
+	}
+	if restartRequired {
+		t.Error("restartRequired = true, want false (port/data_dir unchanged)")
+	}
+
+	if got := levelVar.Level(); got != slog.LevelDebug {
+		t.Errorf("levelVar = %v, want debug applied live", got)
+	}
+	gotDir, gotInterval, gotMaxRetries := imp.Config()
+	if gotDir != newDownloadDir {
+		t.Errorf("importer downloadDir = %q, want %q applied live", gotDir, newDownloadDir)
+	}
+	if gotInterval != 42*time.Second {
+		t.Errorf("importer interval = %v, want 42s applied live", gotInterval)
+	}
+	if gotMaxRetries != 9 {
+		t.Errorf("importer maxRetries = %d, want 9 applied live", gotMaxRetries)
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if reloaded.DownloadDir != newDownloadDir || reloaded.LogLevel != "debug" ||
+		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 {
+		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir proves a
+// port or data_dir change is reported back as needing a restart, since
+// AcerviNode doesn't rebind its listener or reopen the database live.
+func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, settings := setupProviders(cfg, configPath)
+
+	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
+		Port: cfg.Port + 1, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
+		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGeneral() error = %v", err)
+	}
+	if !restartRequired {
+		t.Error("restartRequired = false, want true (port changed)")
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_RejectsInvalidValues proves an invalid
+// candidate is rejected without mutating the live config at all.
+func TestLiveSettings_UpdateGeneral_RejectsInvalidValues(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	originalLogLevel := cfg.LogLevel
+	_, _, settings := setupProviders(cfg, configPath)
+
+	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
+		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
+		LogLevel: "not-a-real-level", ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+	})
+	if err == nil {
+		t.Fatal("UpdateGeneral() with an invalid log_level: expected an error, got nil")
+	}
+	if settings.General().LogLevel != originalLogLevel {
+		t.Errorf("General().LogLevel = %q after a rejected update, want unchanged %q", settings.General().LogLevel, originalLogLevel)
+	}
+}
+
+// TestLiveSettings_TestTorBoxConnection_NotConfigured proves the connection
+// test fails fast and clearly when no TorBox key has been set, rather than
+// attempting a network call at all.
+func TestLiveSettings_TestTorBoxConnection_NotConfigured(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, settings := setupProviders(cfg, configPath)
+
+	if _, err := settings.TestTorBoxConnection(context.Background()); err == nil {
+		t.Error("TestTorBoxConnection() with nothing configured: expected an error, got nil")
+	}
+}
+
+// TestLiveSettings_CategoriesAndAddCategory proves the settings layer reads
+// from and writes to the actual compat shim category stores, once wired via
+// buildHandler (SetShimServers).
+func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, settings) // wires SetShimServers as a side effect
+
+	if err := settings.AddCategory("torrent", "movies"); err != nil {
+		t.Fatalf("AddCategory(torrent) error = %v", err)
+	}
+	if err := settings.AddCategory("usenet", "tv"); err != nil {
+		t.Fatalf("AddCategory(usenet) error = %v", err)
+	}
+	if err := settings.AddCategory("bogus", "x"); err == nil {
+		t.Error("AddCategory with an unknown protocol: expected an error, got nil")
+	}
+
+	torrentCats, usenetCats := settings.Categories()
+	if len(torrentCats) != 1 || torrentCats[0] != "movies" {
+		t.Errorf("torrent categories = %v, want [movies]", torrentCats)
+	}
+	found := false
+	for _, c := range usenetCats {
+		if c == "tv" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("usenet categories = %v, want it to include tv", usenetCats)
 	}
 }

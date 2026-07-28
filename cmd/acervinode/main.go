@@ -50,6 +50,13 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// A *slog.LevelVar (not a fixed level) so log_level can be changed live
+	// through the settings API — see liveSettings.UpdateGeneral — without
+	// tearing down and rebuilding the logger.
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(parseLogLevel(cfg.LogLevel))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: levelVar})))
+
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
@@ -63,6 +70,7 @@ func run(ctx context.Context) error {
 	defer db.Close()
 
 	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	settings.SetLevelVar(levelVar)
 	slog.Info("torbox provider", "configured", torrentDyn.Configured())
 	// Logged so a config.yaml without an explicit api_key is still usable —
 	// otherwise a randomly generated key (see internal/config) would be
@@ -77,6 +85,7 @@ func run(ctx context.Context) error {
 	// the same dynamic provider instances as everything else above.
 	importInterval := time.Duration(cfg.ImportIntervalSeconds) * time.Second
 	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
+	settings.SetImporter(imp)
 	go imp.Run(ctx)
 
 	srv := &http.Server{
@@ -112,12 +121,22 @@ func run(ctx context.Context) error {
 // later through the settings API), rather than the routes not existing at
 // all. Split out from run() so tests can exercise the full routing tree
 // without binding a real socket.
-func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, settings api.Settings) http.Handler {
+//
+// settings takes the concrete *liveSettings (not the api.Settings interface)
+// because the compat shim servers built here get wired back into it via
+// SetShimServers — the settings API's category endpoints read/write their
+// category stores directly (see docs/configuration.md).
+func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, settings *liveSettings) http.Handler {
 	mux := http.NewServeMux()
+
+	qbtServer := qbittorrent.NewServer(torrentProvider, db, settings)
+	sabServer := sabnzbd.NewServer(usenetProvider, db, settings)
+	settings.SetShimServers(qbtServer, sabServer)
+
 	mux.Handle("/api/v1/", api.NewServer(version, db, torrentProvider, usenetProvider, settings))
-	mux.Handle("/api/v2/", qbittorrent.NewServer(torrentProvider, db, settings))
+	mux.Handle("/api/v2/", qbtServer)
 	// SABnzbd's real API is a single fixed endpoint, not a subtree.
-	mux.Handle("/api", sabnzbd.NewServer(usenetProvider, db, settings))
+	mux.Handle("/api", sabServer)
 
 	// The embedded web UI is the lowest-priority route — it only ever
 	// receives requests the API/compat-shim patterns above didn't claim.
@@ -128,6 +147,23 @@ func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usene
 	}
 
 	return mux
+}
+
+// parseLogLevel maps config's log_level string onto a slog.Level — config
+// validates the string is one of these four (see config.Config.Validate),
+// so the default case here is unreachable in practice, not a silent typo
+// fallback.
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // newTorBoxProviders is the one place a concrete provider package (torbox) is

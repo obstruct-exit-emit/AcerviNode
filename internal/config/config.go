@@ -91,7 +91,7 @@ func Load(path string) (*Config, error) {
 		cfg.APIKey = key
 	}
 
-	if err := cfg.validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -145,7 +145,11 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-func (c *Config) validate() error {
+// Validate reports whether c's field values are well-formed — exported so
+// the settings API (internal/api, via cmd/acervinode's liveSettings) can
+// validate a candidate update before committing it, the same rules Load
+// applies at startup.
+func (c *Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d: must be between 1 and 65535", c.Port)
 	}

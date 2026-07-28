@@ -49,6 +49,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of. Found by inspecting a comparable open-source debrid client's polling
   code (RDT-Client), which checks both endpoints where AcerviNode only
   checked one — see [Providers](docs/providers.md#torbox-internaldebridtorbox).
+- Settings, expanded on three fronts:
+  - `PUT /api/v1/settings/general` makes `download_dir`, `log_level`,
+    `import_interval_seconds`, and `import_max_retries` editable live, no
+    restart — `internal/importer.SetConfig` (mutex-guarded fields, and the
+    running ticker resets to a new interval immediately rather than waiting
+    out the old one) and a `*slog.LevelVar` swapped in for `log_level`.
+    `port`/`data_dir` are also editable and persisted, but only take effect
+    after a restart (rebinding the listener / reopening the database live is
+    out of scope) — the response's `restart_required` reflects that. Along
+    the way, `log_level` went from validated-but-never-actually-applied (a
+    pre-existing bug — nothing ever read `cfg.LogLevel` after startup) to
+    genuinely wired up; the default logger is now an explicit
+    `slog.NewTextHandler`, which changes the on-disk log line format
+    (`time=... level=... msg=...` instead of the old bare `2026/07/27
+    15:04:05 INFO ...`) — a visible side effect of actually fixing it.
+  - `POST /api/v1/settings/providers/torbox/test` makes one real, live call
+    to TorBox and reports latency or the actual failure — a genuine
+    connectivity+auth check, not just "is a key set."
+  - `GET`/`POST /api/v1/settings/categories` surface both compat shims'
+    category stores (previously invisible outside their own in-memory state)
+    and let one be pre-declared manually — `qbittorrent.Server`/
+    `sabnzbd.Server` gained exported `Categories()`/`AddCategory()`.
+  - Web UI: the Settings tab's General card is now an editable form (with a
+    live/restart-required distinction shown per field), the TorBox card
+    gained a "Test connection" button, and a new Categories card shows both
+    protocols' lists plus an add form.
 - `internal/api`: `GET /api/v1/settings/general` (AcerviNode's own port, data
   dir, download dir, log level, import settings, and its own `api_key` in
   plaintext) and `POST /api/v1/settings/api-key/regenerate` (replaces the key,

@@ -67,6 +67,21 @@ type GeneralInfo struct {
 	ImportMaxRetries      int    `json:"import_max_retries"`
 }
 
+// GeneralUpdate is a candidate change to AcerviNode's general configuration
+// (everything in GeneralInfo except the API key, which has its own
+// regenerate flow). Port/DataDir take effect only after a restart — binding
+// a new port or reopening the database live is out of scope for now — while
+// DownloadDir/LogLevel/ImportIntervalSeconds/ImportMaxRetries apply
+// immediately; see Settings.UpdateGeneral's RestartRequired return value.
+type GeneralUpdate struct {
+	Port                  int    `json:"port"`
+	DataDir               string `json:"data_dir"`
+	DownloadDir           string `json:"download_dir"`
+	LogLevel              string `json:"log_level"`
+	ImportIntervalSeconds int    `json:"import_interval_seconds"`
+	ImportMaxRetries      int    `json:"import_max_retries"`
+}
+
 // Settings lets the API read and change configuration live, without a
 // restart — see internal/debrid's Dynamic*Provider types, which is what
 // makes an in-place provider swap possible, and settings.go for the HTTP
@@ -76,6 +91,10 @@ type GeneralInfo struct {
 type Settings interface {
 	TorBoxConfigured() bool
 	SetTorBoxAPIKey(ctx context.Context, apiKey string) error
+	// TestTorBoxConnection makes one real, lightweight call to TorBox with
+	// the currently configured key and reports how long it took — a genuine
+	// connectivity+auth check, not just "a key is set."
+	TestTorBoxConnection(ctx context.Context) (latencyMs int64, err error)
 	// APIKey returns AcerviNode's own current API key — the live source of
 	// truth every authenticated route (native API and both compat shims)
 	// checks against, so a regenerated key takes effect everywhere at once.
@@ -85,6 +104,17 @@ type Settings interface {
 	RegenerateAPIKey(ctx context.Context) (string, error)
 	// General reports the rest of AcerviNode's current configuration.
 	General() GeneralInfo
+	// UpdateGeneral validates and applies a candidate configuration change,
+	// persists it to config.yaml, and reports whether a restart is needed
+	// for all of it to take effect (see GeneralUpdate).
+	UpdateGeneral(ctx context.Context, update GeneralUpdate) (restartRequired bool, err error)
+	// Categories lists every category name each compat shim currently
+	// knows about (populated reactively by *arr apps, or manually via
+	// AddCategory).
+	Categories() (torrent []string, usenet []string)
+	// AddCategory manually registers a category name for the given
+	// protocol ("torrent" or "usenet").
+	AddCategory(protocol, name string) error
 }
 
 // Server is AcerviNode's native API.
@@ -130,8 +160,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
+	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAuth(s.handleTestTorBoxConnection))
 	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAuth(s.handleGetGeneralSettings))
+	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAuth(s.handleUpdateGeneralSettings))
 	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAuth(s.handleRegenerateAPIKey))
+	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAuth(s.handleGetCategories))
+	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAuth(s.handleAddCategory))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

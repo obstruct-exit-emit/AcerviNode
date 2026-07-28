@@ -102,6 +102,18 @@ type fakeSettings struct {
 	regenCalls int
 	regenErr   error
 	general    GeneralInfo
+
+	testLatencyMs int64
+	testErr       error
+
+	updateCalls []GeneralUpdate
+	updateErr   error
+	restartReq  bool
+
+	torrentCategories []string
+	usenetCategories  []string
+	addCategoryCalls  []addCategoryRequest
+	addCategoryErr    error
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -113,6 +125,10 @@ func (f *fakeSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 	}
 	f.configured = true
 	return nil
+}
+
+func (f *fakeSettings) TestTorBoxConnection(_ context.Context) (int64, error) {
+	return f.testLatencyMs, f.testErr
 }
 
 // APIKey defaults to "secret" (matching authedRequest below) so tests that
@@ -134,6 +150,28 @@ func (f *fakeSettings) RegenerateAPIKey(_ context.Context) (string, error) {
 }
 
 func (f *fakeSettings) General() GeneralInfo { return f.general }
+
+func (f *fakeSettings) UpdateGeneral(_ context.Context, update GeneralUpdate) (bool, error) {
+	f.updateCalls = append(f.updateCalls, update)
+	if f.updateErr != nil {
+		return false, f.updateErr
+	}
+	f.general = GeneralInfo{
+		APIKey: f.general.APIKey, Port: update.Port, DataDir: update.DataDir,
+		DownloadDir: update.DownloadDir, LogLevel: update.LogLevel,
+		ImportIntervalSeconds: update.ImportIntervalSeconds, ImportMaxRetries: update.ImportMaxRetries,
+	}
+	return f.restartReq, nil
+}
+
+func (f *fakeSettings) Categories() (torrent []string, usenet []string) {
+	return f.torrentCategories, f.usenetCategories
+}
+
+func (f *fakeSettings) AddCategory(protocol, name string) error {
+	f.addCategoryCalls = append(f.addCategoryCalls, addCategoryRequest{Protocol: protocol, Name: name})
+	return f.addCategoryErr
+}
 
 func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
 	t.Helper()
@@ -338,6 +376,204 @@ func TestHandleRegenerateAPIKey_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/api-key/regenerate", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleTestTorBoxConnection_Success(t *testing.T) {
+	settings := &fakeSettings{testLatencyMs: 123}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["ok"] != true {
+		t.Errorf("ok = %v, want true", got["ok"])
+	}
+	if got["latency_ms"] != float64(123) {
+		t.Errorf("latency_ms = %v, want 123", got["latency_ms"])
+	}
+}
+
+func TestHandleTestTorBoxConnection_Failure(t *testing.T) {
+	settings := &fakeSettings{testErr: errors.New("connection test failed: torbox: not configured")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test"))
+	// A failed *connection test* is still a successful API call (200) — the
+	// failure is reported in the body, matching handleTestTorBoxConnection's
+	// "ok": false shape rather than an HTTP error status.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["ok"] != false {
+		t.Errorf("ok = %v, want false", got["ok"])
+	}
+	if got["error"] == nil || got["error"] == "" {
+		t.Error("error message missing from failed connection test response")
+	}
+}
+
+func TestHandleTestTorBoxConnection_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleUpdateGeneralSettings(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	body := `{"port":7846,"data_dir":"./data","download_dir":"./new-downloads","log_level":"debug","import_interval_seconds":15,"import_max_retries":3}`
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.updateCalls) != 1 {
+		t.Fatalf("UpdateGeneral calls = %d, want 1", len(settings.updateCalls))
+	}
+	got := settings.updateCalls[0]
+	if got.DownloadDir != "./new-downloads" || got.LogLevel != "debug" || got.ImportIntervalSeconds != 15 || got.ImportMaxRetries != 3 {
+		t.Errorf("UpdateGeneral called with %+v", got)
+	}
+
+	var resp map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["restart_required"] {
+		t.Error("restart_required = true, want false (fakeSettings default)")
+	}
+}
+
+func TestHandleUpdateGeneralSettings_ReportsRestartRequired(t *testing.T) {
+	settings := &fakeSettings{restartReq: true}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	body := `{"port":9999,"data_dir":"./data","download_dir":"./downloads","log_level":"info","import_interval_seconds":10,"import_max_retries":5}`
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp["restart_required"] {
+		t.Error("restart_required = false, want true")
+	}
+}
+
+func TestHandleUpdateGeneralSettings_RejectsInvalid(t *testing.T) {
+	settings := &fakeSettings{updateErr: errors.New("invalid log_level")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(`{"log_level":"bogus"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleUpdateGeneralSettings_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleGetCategories(t *testing.T) {
+	settings := &fakeSettings{torrentCategories: []string{"movies", "tv"}, usenetCategories: []string{"*"}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/categories"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got categoriesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Torrent) != 2 || len(got.Usenet) != 1 {
+		t.Errorf("got = %+v", got)
+	}
+}
+
+func TestHandleGetCategories_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/categories", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleAddCategory(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/categories", strings.NewReader(`{"protocol":"torrent","name":"movies"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.addCategoryCalls) != 1 || settings.addCategoryCalls[0].Protocol != "torrent" || settings.addCategoryCalls[0].Name != "movies" {
+		t.Errorf("AddCategory calls = %+v", settings.addCategoryCalls)
+	}
+}
+
+func TestHandleAddCategory_RejectsInvalid(t *testing.T) {
+	settings := &fakeSettings{addCategoryErr: errors.New("unknown protocol")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/categories", strings.NewReader(`{"protocol":"bogus","name":"x"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleAddCategory_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/categories", strings.NewReader(`{"protocol":"torrent","name":"x"}`))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
