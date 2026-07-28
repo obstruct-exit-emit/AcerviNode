@@ -42,6 +42,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   finished it. Verified live: added a real magnet, watched only the read-only
   native API (no shim polling at all), and saw it reach `ready_for_import` on
   the importer's own tick.
+- `internal/debrid/torbox`: `Provider`/`UsenetProvider`'s `List`/`Status` now
+  also check `GET /queued/getqueued` — a separate pre-processing queue TorBox
+  holds a download in before it ever appears in `mylist`. Previously a
+  backlogged download was indistinguishable from one TorBox had never heard
+  of. Found by inspecting a comparable open-source debrid client's polling
+  code (RDT-Client), which checks both endpoints where AcerviNode only
+  checked one — see [Providers](docs/providers.md#torbox-internaldebridtorbox).
 - `internal/api`: `GET /api/v1/settings/general` (AcerviNode's own port, data
   dir, download dir, log level, import settings, and its own `api_key` in
   plaintext) and `POST /api/v1/settings/api-key/regenerate` (replaces the key,

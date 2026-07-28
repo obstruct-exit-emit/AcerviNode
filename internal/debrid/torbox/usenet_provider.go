@@ -58,6 +58,15 @@ func (p *UsenetProvider) Status(ctx context.Context, id debrid.ProviderDownloadI
 			return usenetToStatus(d), nil
 		}
 	}
+	// Not in mylist yet doesn't mean TorBox doesn't know about it — see
+	// Provider.Status's identical torrent-side reasoning and ListQueued.
+	if queued, err := p.client.ListQueued(ctx, "usenet"); err == nil {
+		for _, q := range queued {
+			if formatID(q.ID) == string(id) {
+				return queuedToStatus(q), nil
+			}
+		}
+	}
 	return debrid.DownloadStatus{}, fmt.Errorf("torbox: usenet download %s not found", id)
 }
 
@@ -67,8 +76,21 @@ func (p *UsenetProvider) List(ctx context.Context) ([]debrid.DownloadStatus, err
 		return nil, fmt.Errorf("torbox: usenet list: %w", err)
 	}
 	out := make([]debrid.DownloadStatus, 0, len(downloads))
+	seen := make(map[string]bool, len(downloads))
 	for _, d := range downloads {
 		out = append(out, usenetToStatus(d))
+		seen[formatID(d.ID)] = true
+	}
+	// See Provider.List's identical reasoning: merge in anything still
+	// sitting in TorBox's pre-processing queue, best-effort.
+	if queued, err := p.client.ListQueued(ctx, "usenet"); err == nil {
+		for _, q := range queued {
+			id := formatID(q.ID)
+			if seen[id] {
+				continue
+			}
+			out = append(out, queuedToStatus(q))
+		}
 	}
 	return out, nil
 }

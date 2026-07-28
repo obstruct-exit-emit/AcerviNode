@@ -250,6 +250,38 @@ func (c *Client) ListUsenetDownloads(ctx context.Context) ([]UsenetDownload, err
 	return env.Data, nil
 }
 
+// --- Queue ------------------------------------------------------------------
+
+// QueuedDownload is one entry from /queued/getqueued — a torrent or usenet
+// download TorBox has accepted but hasn't started processing yet (e.g. an
+// account concurrency limit or backend load). Confirmed live: it does not
+// appear in mylist/usenet/mylist at all until it's promoted out of this
+// queue, so without checking this endpoint too, a backlogged download is
+// indistinguishable from one TorBox has never heard of. No progress, state,
+// or size is available for it yet — only proof it exists and is pending;
+// found by inspecting a comparable open-source debrid client's own polling
+// code (RDT-Client), which checks both endpoints where AcerviNode previously
+// only checked mylist — see docs/providers.md.
+type QueuedDownload struct {
+	ID   float64 `json:"id"`
+	Hash string  `json:"hash"`
+	Name string  `json:"name"`
+}
+
+// ListQueued returns downloads of the given kind ("torrent" or "usenet")
+// still waiting in TorBox's pre-processing queue, per the account. Shares
+// the bypass_cache reasoning of ListTorrents/ListUsenetDownloads.
+func (c *Client) ListQueued(ctx context.Context, kind string) ([]QueuedDownload, error) {
+	var env envelope[[]QueuedDownload]
+	if err := c.doGet(ctx, "/queued/getqueued", url.Values{"type": {kind}, "bypass_cache": {"true"}}, &env); err != nil {
+		return nil, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}
+
 func formatID(n float64) string {
 	return strconv.FormatInt(int64(n), 10)
 }

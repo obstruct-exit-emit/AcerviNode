@@ -40,6 +40,11 @@ func TestProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			}
 			torrents = nil
 			json.NewEncoder(w).Encode(map[string]any{"success": true})
+		case "/v1/api/queued/getqueued":
+			// Status()/List() check this too now — nothing queued in this
+			// test, so an empty list, matching a real account with nothing
+			// backlogged.
+			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{}})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -89,6 +94,91 @@ func TestProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	}
 }
 
+// TestProvider_ListMergesQueuedDownloads proves a torrent that's still in
+// TorBox's pre-processing queue (per queued/getqueued) — and so absent from
+// mylist entirely — shows up as queued rather than being invisible, and that
+// one already present in mylist isn't duplicated.
+func TestProvider_ListMergesQueuedDownloads(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/api/torrents/mylist":
+			json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": []map[string]any{
+					{"id": 1.0, "hash": "already-listed", "name": "In Mylist", "size": 10.0, "download_state": "downloading", "progress": 0.2},
+				},
+			})
+		case "/v1/api/queued/getqueued":
+			if got := r.URL.Query().Get("type"); got != "torrent" {
+				t.Errorf("type query param = %q, want torrent", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": []map[string]any{
+					{"id": 1.0, "hash": "already-listed", "name": "In Mylist"},
+					{"id": 2.0, "hash": "backlogged", "name": "Backlogged Release"},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := NewProvider("test-key", WithBaseURL(server.URL))
+	statuses, err := p.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("statuses = %+v, want 2 (queued entry #1 deduped against mylist, #2 merged in)", statuses)
+	}
+
+	byHash := make(map[string]debrid.DownloadStatus, len(statuses))
+	for _, s := range statuses {
+		byHash[s.Hash] = s
+	}
+	if got := byHash["already-listed"]; got.State != debrid.StateDownloading {
+		t.Errorf("already-listed state = %q, want the mylist value to win, not the queued one", got.State)
+	}
+	backlogged, ok := byHash["backlogged"]
+	if !ok {
+		t.Fatal("backlogged (queued-only) torrent missing from List() results")
+	}
+	if backlogged.State != debrid.StateQueued {
+		t.Errorf("backlogged state = %q, want queued", backlogged.State)
+	}
+}
+
+// TestProvider_StatusFindsQueuedDownload proves Status() falls back to
+// queued/getqueued instead of reporting "not found" for a torrent TorBox has
+// accepted but not yet started processing.
+func TestProvider_StatusFindsQueuedDownload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/api/torrents/mylist":
+			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{}})
+		case "/v1/api/queued/getqueued":
+			json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data":    []map[string]any{{"id": 5.0, "hash": "backlogged", "name": "Backlogged Release"}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := NewProvider("test-key", WithBaseURL(server.URL))
+	status, err := p.Status(context.Background(), "5")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.State != debrid.StateQueued || status.Hash != "backlogged" {
+		t.Errorf("status = %+v", status)
+	}
+}
+
 func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	downloads := []map[string]any{}
 
@@ -116,6 +206,11 @@ func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			}
 			downloads = nil
 			json.NewEncoder(w).Encode(map[string]any{"success": true})
+		case "/v1/api/queued/getqueued":
+			// Status()/List() check this too now — nothing queued in this
+			// test, so an empty list, matching a real account with nothing
+			// backlogged.
+			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{}})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}

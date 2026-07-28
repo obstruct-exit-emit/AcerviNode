@@ -45,6 +45,16 @@ func (p *Provider) Status(ctx context.Context, id debrid.ProviderDownloadID) (de
 			return torrentToStatus(t), nil
 		}
 	}
+	// Not in mylist yet doesn't mean TorBox doesn't know about it — a
+	// backlogged add sits in a separate pre-processing queue until promoted
+	// (see ListQueued) and won't appear in mylist until then.
+	if queued, err := p.client.ListQueued(ctx, "torrent"); err == nil {
+		for _, q := range queued {
+			if formatID(q.ID) == string(id) {
+				return queuedToStatus(q), nil
+			}
+		}
+	}
 	return debrid.DownloadStatus{}, fmt.Errorf("torbox: torrent %s not found", id)
 }
 
@@ -54,8 +64,24 @@ func (p *Provider) List(ctx context.Context) ([]debrid.DownloadStatus, error) {
 		return nil, fmt.Errorf("torbox: list: %w", err)
 	}
 	out := make([]debrid.DownloadStatus, 0, len(torrents))
+	seen := make(map[string]bool, len(torrents))
 	for _, t := range torrents {
 		out = append(out, torrentToStatus(t))
+		seen[formatID(t.ID)] = true
+	}
+	// Merge in anything still sitting in TorBox's pre-processing queue —
+	// mylist won't list it at all until it's promoted out of there, so
+	// without this a backlogged download is indistinguishable from one
+	// TorBox has never heard of (see ListQueued). Best-effort: a failure
+	// here shouldn't discard perfectly good mylist data.
+	if queued, err := p.client.ListQueued(ctx, "torrent"); err == nil {
+		for _, q := range queued {
+			id := formatID(q.ID)
+			if seen[id] {
+				continue
+			}
+			out = append(out, queuedToStatus(q))
+		}
 	}
 	return out, nil
 }
@@ -106,6 +132,20 @@ func torrentToStatus(t Torrent) debrid.DownloadStatus {
 		State:      mapDownloadState(t.DownloadState),
 		ETASeconds: int64(t.Eta),
 		RawState:   t.DownloadState,
+	}
+}
+
+// queuedToStatus maps a QueuedDownload — shared by both the torrent and
+// usenet services — into AcerviNode's provider-agnostic status shape.
+// Progress/size are left at zero and RawState says so explicitly: there's
+// nothing more specific to report until TorBox promotes it into mylist.
+func queuedToStatus(q QueuedDownload) debrid.DownloadStatus {
+	return debrid.DownloadStatus{
+		ID:       debrid.ProviderDownloadID(formatID(q.ID)),
+		Name:     q.Name,
+		Hash:     q.Hash,
+		State:    debrid.StateQueued,
+		RawState: "queued (pre-processing, not yet in mylist)",
 	}
 }
 

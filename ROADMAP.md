@@ -155,6 +155,19 @@ CDN link instead of BitTorrent/NNTP.
   NZB upload through the web UI: TorBox's `createusenetdownload` sends
   `usenetdownload_id` back as a JSON number, not the string the official SDK's
   docs describe — see [Providers](docs/providers.md#torbox-internaldebridtorbox).
+- **Status-update speed investigation** (follow-on): a user report that a
+  comparable debrid client showed status updates faster than AcerviNode led
+  to actually cloning that client's source (RDT-Client) rather than
+  speculating. Ruled out: `reannounce` and TorBox's undocumented "Request
+  Update On Torrent" mechanism are unrelated things (confirmed against the
+  SDK docs); `GetHashInfoAsync`/`GetIdInfoAsync` turned out to be thin
+  wrappers around the same `mylist` endpoint AcerviNode already calls, not a
+  faster path. Found one real, narrow gap: RDT-Client also polls
+  `queued/getqueued`, a separate pre-processing queue AcerviNode never
+  checked — fixed, see Providers doc. The broader "faster" observation itself
+  most likely traced to TorBox (or the network path to it) genuinely being
+  slow at that moment — the WSL instance's own log showed sustained real
+  `mylist` timeouts around the same time, unrelated to any AcerviNode code.
 
 ## Phase 4 — Multi-provider ⏳
 

@@ -157,6 +157,20 @@ Torrent endpoints used: `POST /torrents/createtorrent` (magnet or multipart file
 Usenet endpoints follow the same shape under a `/usenet/...` path family (add,
 list, request-download-link, control/delete).
 
+Both also fall back to `GET /queued/getqueued?type=torrent|usenet` — a
+separate pre-processing queue TorBox holds a download in (e.g. an account
+concurrency limit, or backend load) *before* it appears in `mylist`/
+`usenet/mylist` at all. Found by inspecting a comparable open-source debrid
+client's own polling code ([RDT-Client](https://github.com/rogerfar/rdt-client)),
+which checks both endpoints where AcerviNode previously only checked the
+`mylist` family — see `Provider.List`/`Status` and `UsenetProvider.List`/
+`Status`, which merge a queued-only entry in (or fall back to it) so a
+backlogged download shows as genuinely `queued` instead of "not found."
+`queued/getqueued` carries no progress/state/size — only proof the download
+exists and is pending — so this closes a narrow visibility gap, not a speed
+gap: once something's actually downloading, both AcerviNode and RDT-Client
+read progress from the same `mylist` endpoint the same way.
+
 **Confirmed live (not just from docs):** `mylist`/`usenet/mylist` is cached
 server-side for up to 600 seconds by default — a freshly added torrent was simply
 absent from the response until `bypass_cache=true` was passed. Both `ListTorrents`

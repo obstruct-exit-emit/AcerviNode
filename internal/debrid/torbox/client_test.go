@@ -193,6 +193,34 @@ func TestCheckCachedTorrents(t *testing.T) {
 	}
 }
 
+func TestListQueued(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/queued/getqueued" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("type"); got != "torrent" {
+			t.Errorf("type query param = %q, want torrent", got)
+		}
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": []map[string]any{
+				{"id": 77, "hash": "queuedhash", "name": "Backlogged.Release"},
+			},
+		})
+	})
+
+	queued, err := client.ListQueued(context.Background(), "torrent")
+	if err != nil {
+		t.Fatalf("ListQueued() error = %v", err)
+	}
+	if len(queued) != 1 || queued[0].Hash != "queuedhash" || queued[0].Name != "Backlogged.Release" {
+		t.Errorf("queued = %+v", queued)
+	}
+}
+
 func TestCreateUsenetDownload_Link(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/v1/api/usenet/createusenetdownload" {
