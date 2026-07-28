@@ -322,9 +322,15 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
                 <p className="text-muted">None yet</p>
               ) : (
                 <ul className="category-list">
-                  {categories.usenet.map((c) => (
-                    <li key={c}>{c}</li>
-                  ))}
+                  {categories.usenet.map((c) =>
+                    c === '*' ? (
+                      <li key={c} title="SABnzbd's default catch-all category — always exists">
+                        Default
+                      </li>
+                    ) : (
+                      <li key={c}>{c}</li>
+                    ),
+                  )}
                 </ul>
               )}
             </div>
