@@ -143,7 +143,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.refreshFromProvider(ctx, rows)
+	etaByProviderID := s.refreshFromProvider(ctx, rows)
 
 	wantHashes := splitFilter(r.URL.Query().Get("hashes"))
 	wantCategory := r.URL.Query().Get("category")
@@ -156,7 +156,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		if wantCategory != "" && d.Category != wantCategory {
 			continue
 		}
-		items = append(items, toTorrentInfo(d))
+		items = append(items, toTorrentInfo(d, etaByProviderID[d.ProviderDownloadID]))
 	}
 
 	writeJSON(w, items)
@@ -166,14 +166,24 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 // List() call — a single bulk request rather than one Status() call per row.
 // See database.RefreshFromProvider, which this and internal/importer's own
 // proactive background refresh both share, so an *arr app polling here still
-// gets the freshest possible view even between importer ticks.
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) {
+// gets the freshest possible view even between importer ticks. Also returns
+// each row's current ETA keyed by provider download ID — ETA is a fast-moving,
+// purely informational value the provider recomputes on every call, so unlike
+// state/progress/size it's never persisted to the database, just read fresh
+// and attached to the response here (see toTorrentInfo).
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]int64 {
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("qbittorrent: provider list failed", "error", err)
-		return
+		return nil
 	}
 	s.db.RefreshFromProvider(ctx, rows, statuses)
+
+	eta := make(map[string]int64, len(statuses))
+	for _, st := range statuses {
+		eta[string(st.ID)] = st.ETASeconds
+	}
+	return eta
 }
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
@@ -280,7 +290,7 @@ type torrentFileInfo struct {
 	Priority int     `json:"priority"`
 }
 
-func toTorrentInfo(d *database.Download) torrentInfo {
+func toTorrentInfo(d *database.Download, etaSeconds int64) torrentInfo {
 	completionOn := int64(-1)
 	if d.CompletedAt != nil {
 		completionOn = d.CompletedAt.Unix()
@@ -293,6 +303,7 @@ func toTorrentInfo(d *database.Download) torrentInfo {
 		Size:         d.SizeBytes,
 		Progress:     d.Progress,
 		State:        qbtState(d.State),
+		Eta:          etaSeconds,
 		AddedOn:      d.AddedAt.Unix(),
 		CompletionOn: completionOn,
 	}

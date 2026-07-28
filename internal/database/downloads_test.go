@@ -550,6 +550,109 @@ func TestRefreshFromProvider_NeverRegressesReadyForImport(t *testing.T) {
 	}
 }
 
+// TestRefreshFromProvider_SurfacesProviderErrorState proves a provider
+// reporting a genuine error (e.g. TorBox's own "Error" state, or a stalled/
+// no-seeds torrent, both mapped to debrid.StateError before this reaches
+// here — see torbox.mapDownloadState) actually lands the row in the local
+// error state with the provider's raw reason as error_message, rather than
+// the state transition being silently dropped.
+func TestRefreshFromProvider_SurfacesProviderErrorState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	d.Progress = 0.4
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateError, RawState: "stalled (no seeds)"},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.State != StateError {
+		t.Errorf("state = %q, want error", d.State)
+	}
+	if d.ErrorMessage != "stalled (no seeds)" {
+		t.Errorf("ErrorMessage = %q, want the provider's raw state", d.ErrorMessage)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateError || got.ErrorMessage != "stalled (no seeds)" {
+		t.Errorf("persisted row = state:%q error:%q, want error/\"stalled (no seeds)\"", got.State, got.ErrorMessage)
+	}
+}
+
+// TestRefreshFromProvider_ProviderErrorCanRecover proves a StateError the
+// provider itself reported (RetryCount == 0) isn't sticky — if the provider
+// later reports the download progressing again (e.g. a stalled torrent found
+// a seed), the row un-errors automatically. Contrast with
+// TestRefreshFromProvider_DoesNotResurrectImporterGaveUp below.
+func TestRefreshFromProvider_ProviderErrorCanRecover(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	d.ErrorMessage = "stalled (no seeds)"
+	d.RetryCount = 0
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.6},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.State != StateDownloading {
+		t.Errorf("state = %q, want downloading (provider-side error recovered)", d.State)
+	}
+}
+
+// TestRefreshFromProvider_DoesNotResurrectImporterGaveUp proves a download
+// internal/importer gave up on after exhausting its own fetch retries
+// (RetryCount > 0 — a local, sticky decision distinct from a provider-
+// reported error) is NOT silently reset back to provider_completed just
+// because the provider still reports its unchanged old state on a later
+// poll — only an explicit manual retry/re-add should revive it.
+func TestRefreshFromProvider_DoesNotResurrectImporterGaveUp(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	d.ErrorMessage = "fetch file: connection reset"
+	d.RetryCount = 5 // importer's own exhaustion path always persists this > 0
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	// Provider still cheerfully reports "cached" — as it would for a fetch
+	// failure that had nothing to do with the provider itself.
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1, SizeBytes: d.SizeBytes},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.State != StateError {
+		t.Errorf("state = %q, want it to stay error (importer's give-up is sticky)", d.State)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateError {
+		t.Errorf("persisted state = %q, want it to stay error", got.State)
+	}
+}
+
 // TestRefreshFromProvider_ToleratesUpdateFailure proves one row's update
 // error (e.g. it was deleted concurrently) doesn't stop the rest of the
 // batch from being processed.

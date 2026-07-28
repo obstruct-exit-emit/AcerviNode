@@ -815,6 +815,13 @@ func TestSetConfig_MaxRetriesAppliesLive(t *testing.T) {
 	if got.State != database.StateError {
 		t.Errorf("state = %q, want error (new maxRetries=1 should give up on the first failure)", got.State)
 	}
+	// RetryCount must be > 0 even in this maxRetries=1 edge case — it's how
+	// database.RefreshFromProvider tells this give-up apart from a
+	// provider-reported error and knows not to silently resurrect it (see
+	// TestRefreshFromProvider_DoesNotResurrectImporterGaveUp).
+	if got.RetryCount == 0 {
+		t.Error("RetryCount = 0, want > 0 even when maxRetries=1 triggers give-up on the very first attempt")
+	}
 }
 
 // TestSetConfig_ResetsTickerInterval proves a running Importer's ticker

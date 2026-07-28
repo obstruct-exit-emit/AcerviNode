@@ -140,7 +140,13 @@ has passed). Once `retry_count` reaches `import_max_retries`, the download is
 moved to `error` instead of scheduled again, so a permanently-broken link stops
 occupying a retry slot forever rather than silently never finishing. Both fields
 are surfaced on `GET /api/v1/downloads/{id}` — see [API](api.md) — and shown in
-the web UI's detail view.
+the web UI's detail view. This give-up is sticky by design —
+`database.RefreshFromProvider` won't silently resurrect it back to
+`provider_completed` just because the provider still reports its old
+"completed" state on a later poll (`retry_count > 0` is what distinguishes a
+local give-up like this one from a provider-reported error — see
+[State mapping](#state-mapping) below, where the opposite is true: those
+recover automatically).
 
 A download that gave up isn't stuck forever, though: `POST
 /api/v1/downloads/{id}/retry` resets it back to `provider_completed` with
@@ -187,6 +193,36 @@ Torrent endpoints used: `POST /torrents/createtorrent` (magnet or multipart file
 
 Usenet endpoints follow the same shape under a `/usenet/...` path family (add,
 list, request-download-link, control/delete).
+
+### State mapping
+
+TorBox reports a `download_state` string (shared across both services) that
+`internal/debrid/torbox/provider.go`'s `mapDownloadState` translates into
+AcerviNode's provider-agnostic `debrid.DownloadState`. The vocabulary itself
+isn't published as an exhaustive list anywhere in TorBox's own docs, so it was
+ported from [decypharr](https://github.com/sirrobot01/decypharr)'s own
+production mapping (`pkg/debrid/providers/torbox/torbox.go`'s
+`getTorboxStatus`) rather than guessed — the reference implementation this
+project benchmarks against, and one that's actually running against real
+TorBox accounts. A qualifier TorBox appends to some states (e.g. `"stalled
+(no seeds)"`) is stripped before matching, same as decypharr's own regex.
+
+The important part: **anything unmatched is treated as an error**, not "still
+downloading" — this includes a stalled/no-seeds torrent. TorBox's own [help
+center](https://support.torbox.app/en/articles/9928977-download-statuses)
+independently confirms an explicit `"Error"` state exists (server error,
+missing encryption key, missing par2 files, etc.), which previously had
+nowhere to go but the same bucket as genuinely-still-downloading states —
+found while auditing the whole state machine, not from a specific bug report,
+and confirmed against the real account's own data (`mapDownloadState` is
+tested directly against `"stalled (no seeds)"`, the exact raw string a real
+torrent on the test account had at the time).
+
+A local `error` state reached this way is *not* sticky — if the provider
+later reports genuine progress again (e.g. a stalled torrent finds a seed),
+it recovers automatically on the next refresh. Contrast with
+[Completed Download Handling](#completed-download-handling)'s own retry
+exhaustion below, which *is* sticky by design.
 
 Both also fall back to `GET /queued/getqueued?type=torrent|usenet` — a
 separate pre-processing queue TorBox holds a download in (e.g. an account

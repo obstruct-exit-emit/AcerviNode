@@ -30,6 +30,7 @@ login step required.
 | `queue` | Active/pending downloads — polled repeatedly while a download is active |
 | `history` | Completed/failed downloads |
 | `fullstatus` | Basic server status |
+| `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download |
 
 ## How NZB-shaped adds map onto TorBox
 
@@ -47,7 +48,15 @@ at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`. `queued`,
 `Downloading`, since [Completed Download Handling](providers.md#completed-download-handling)
 hasn't fetched the files to local disk yet, and Sonarr's import step needs them
 there first). Only `ready_for_import` moves to `/history` as `Completed`; `error`
-moves there as `Failed`.
+moves there as `Failed` — either because the provider itself reported a failure
+(e.g. TorBox's own "Error" state, or a stalled/no-seeds download — see
+[Providers](providers.md#state-mapping)) or because Completed Download Handling
+gave up after exhausting its own fetch retries.
+
+`mode=queue`'s `timeleft` field (`H:MM:SS`, matching real SABnzbd) reports the
+provider's live ETA for the download — read fresh from the same provider call
+that refreshes state/progress on every poll, not persisted to the database
+(see `internal/sabnzbd`'s `refreshFromProvider`/`formatTimeLeft`).
 
 ## What's not emulated
 

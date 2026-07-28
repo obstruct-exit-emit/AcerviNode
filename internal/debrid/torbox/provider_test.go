@@ -16,6 +16,43 @@ var (
 	_ debrid.UsenetProvider  = (*UsenetProvider)(nil)
 )
 
+// TestMapDownloadState proves TorBox's real download_state vocabulary maps
+// correctly, especially that anything unmatched — including a stalled/
+// no-seeds torrent, and TorBox's own documented "Error" state — is treated
+// as an error rather than silently folded into "still downloading" forever.
+// Ported from decypharr's own production mapping (github.com/sirrobot01/
+// decypharr, pkg/debrid/providers/torbox/torbox.go's getTorboxStatus) as the
+// reference for TorBox's actual vocabulary, since TorBox's docs don't
+// publish an exhaustive list; "Error" itself is independently confirmed by
+// TorBox's help center ("Download Statuses").
+func TestMapDownloadState(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want debrid.DownloadState
+	}{
+		{"", debrid.StateUnknown},
+		{"downloading", debrid.StateDownloading},
+		{"metaDL", debrid.StateDownloading},
+		{"checkingResumeData", debrid.StateDownloading},
+		{"paused", debrid.StateDownloading},
+		{"queuedDL", debrid.StateDownloading},
+		{"incomplete", debrid.StateDownloading}, // TorBox v8.4.3's stalled-seeders state
+		{"stalled (no seeds)", debrid.StateError},
+		{"completed", debrid.StateCompleted},
+		{"cached", debrid.StateCompleted},
+		{"uploading", debrid.StateCompleted},
+		{"downloaded", debrid.StateCompleted},
+		{"Error", debrid.StateError},
+		{"error", debrid.StateError},
+		{"some-unrecognized-future-state", debrid.StateError},
+	}
+	for _, c := range cases {
+		if got := mapDownloadState(c.raw); got != c.want {
+			t.Errorf("mapDownloadState(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+}
+
 func TestProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	torrents := []map[string]any{}
 

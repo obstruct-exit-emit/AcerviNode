@@ -42,7 +42,13 @@ specific vocabulary:
 | `downloading` | `downloading` | Provider is fetching it |
 | `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling) hasn't fetched the files to local disk yet — reporting `uploading` here would send Sonarr's import step looking for files that don't exist yet |
 | `ready_for_import` | `uploading` | Files are actually on disk; safe to report as complete/seeding |
-| `error` | `error` | Either the provider or Completed Download Handling failed |
+| `error` | `error` | Either the provider itself reported a failure (e.g. TorBox's own "Error" state, or a stalled/no-seeds torrent — see [Providers](providers.md#state-mapping)) or Completed Download Handling gave up after exhausting its own fetch retries |
+
+`GET /api/v2/torrents/info`'s `eta` field reports the provider's live ETA
+(seconds) for the download — read fresh from the same provider call that
+refreshes state/progress on every poll, not persisted to the database (it's a
+fast-moving, purely informational value; see `internal/qbittorrent`'s
+`refreshFromProvider`).
 
 ## What's not emulated
 

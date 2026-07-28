@@ -268,3 +268,49 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 		t.Errorf("SizeBytes = %d, want 276445467 (backfilled even though state/progress didn't change)", got.SizeBytes)
 	}
 }
+
+// TestHandleInfo_ReportsETAFromProvider proves the provider's live ETA
+// actually reaches /api/v2/torrents/info's eta field. debrid.DownloadStatus
+// has carried ETASeconds since TorBox's provider started populating it, but
+// it was silently dropped in database.RefreshFromProvider (which has no ETA
+// column to persist it to) and never made it into torrentInfo — Sonarr's
+// queue view showed no ETA for any active download even though TorBox
+// genuinely reports one. Fixed by reading it fresh from the same List() call
+// on every /info poll instead of trying to persist a fast-changing value.
+func TestHandleInfo_ReportsETAFromProvider(t *testing.T) {
+	ctx := t.Context()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	d := &database.Download{
+		ID: "dl-eta", Provider: "faketorbox", ProviderDownloadID: "fake-eta", Kind: database.KindTorrent,
+		Hash: "etahash", Name: "ETA Test", State: database.StateDownloading, Progress: 0.5,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	provider := newFakeProvider()
+	provider.entries["fake-eta"] = &fakeEntry{
+		name: "ETA Test", size: 1024, calls: 1, eta: 123,
+	}
+
+	srv := &Server{provider: provider, db: db}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/torrents/info", nil)
+	srv.handleInfo(rec, req)
+
+	var items []torrentInfo
+	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
+		t.Fatalf("decode info response: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("info = %d items, want 1", len(items))
+	}
+	if items[0].Eta != 123 {
+		t.Errorf("Eta = %d, want 123 (from provider)", items[0].Eta)
+	}
+}

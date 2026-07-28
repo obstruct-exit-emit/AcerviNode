@@ -167,27 +167,6 @@ func (db *DB) ListAllDownloads(ctx context.Context) ([]*Download, error) {
 	return out, rows.Err()
 }
 
-// ListDownloadsByState returns every download (either kind) currently in the
-// given state, oldest first — used by internal/importer to find downloads
-// the provider has finished but that haven't been fetched to local disk yet.
-func (db *DB) ListDownloadsByState(ctx context.Context, state string) ([]*Download, error) {
-	rows, err := db.QueryContext(ctx, `SELECT `+downloadColumns+` FROM downloads WHERE state = ? ORDER BY added_at`, state)
-	if err != nil {
-		return nil, fmt.Errorf("list downloads by state: %w", err)
-	}
-	defer rows.Close()
-
-	var out []*Download
-	for rows.Next() {
-		d, err := scanDownload(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
-}
-
 // ListDownloadsDueForRetry returns every download (either kind) currently in
 // the given state whose next_retry_at has passed (or was never set) — used
 // by internal/importer so a download in backoff isn't retried before its
@@ -345,25 +324,51 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		if d.State == StateReadyForImport {
 			continue
 		}
+		// A download internal/importer gave up on after exhausting its own
+		// fetch retries (RetryCount > 0 — see importer.handleFailure, which
+		// always persists the final attempt count before flipping state) is
+		// a sticky, local decision: only an explicit manual retry/re-add
+		// should revive it, not the provider simply still reporting its old
+		// "completed" state on a later poll, which would otherwise silently
+		// undo the give-up. A StateError the provider itself is reporting
+		// (RetryCount == 0, since that path never goes through fetch-retry
+		// bookkeeping at all) stays live below and can recover on its own —
+		// e.g. a "stalled (no seeds)" torrent that later finds a seed.
+		if d.State == StateError && d.RetryCount > 0 {
+			continue
+		}
 
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
 			continue
 		}
 		newState := LocalStateFromProvider(st.State)
-		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes {
+		// errorMessage carries the provider's own raw state string (e.g.
+		// TorBox's "stalled (no seeds)") whenever the provider itself is
+		// reporting a failure — distinct from an error internal/importer's
+		// own fetch attempts produced, but surfaced the same way through
+		// both compat shims and the native API/UI (see debrid.DownloadStatus
+		// .RawState). Included in the no-op change check below so an
+		// updated failure reason (e.g. "stalled (no seeds)" -> "Error")
+		// isn't silently skipped just because progress/size didn't move.
+		errorMessage := ""
+		if newState == StateError {
+			errorMessage = st.RawState
+		}
+		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes && errorMessage == d.ErrorMessage {
 			continue
 		}
 		// completed_at is set once files are actually on disk
 		// (internal/importer), not merely when the provider reports done —
 		// so it isn't touched here.
-		if err := db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, nil, ""); err != nil {
+		if err := db.UpdateDownloadStatus(ctx, d.ID, newState, st.Progress, st.SizeBytes, nil, errorMessage); err != nil {
 			slog.Error("database: refresh from provider failed", "id", d.ID, "error", err)
 			continue
 		}
 		d.State = newState
 		d.Progress = st.Progress
 		d.SizeBytes = st.SizeBytes
+		d.ErrorMessage = errorMessage
 	}
 }
 

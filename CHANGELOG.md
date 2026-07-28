@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+A full QA pass over every existing ability and setting, prompted by a direct
+request to audit and fix rather than a specific bug report. Found via a
+systematic code review of every package plus live testing against the real
+WSL instance/TorBox account, not from user reports:
+
+- **SABnzbd shim had no delete support at all** — `mode=queue`/`mode=history`
+  never handled `name=delete`, meaning Sonarr/Radarr configured against
+  AcerviNode's SABnzbd shim had no way to remove a download at all (the
+  qBittorrent shim's `POST /torrents/delete` always worked fine; this gap was
+  SABnzbd-specific). Fixed by adding `name=delete` support layered onto both
+  modes, matching real SABnzbd's API shape (no separate delete mode) —
+  `internal/sabnzbd/delete.go`. Verified live: inserted a real row, deleted it
+  over an actual HTTP request against the running instance, confirmed removal
+  without touching the account's other real downloads.
+- **Provider ETA was silently dropped in both compat shims** —
+  `debrid.DownloadStatus.ETASeconds` was populated correctly by the TorBox
+  provider (confirmed: it reads TorBox's real `eta` field) but discarded in
+  `database.RefreshFromProvider`, which has no column for it, and never
+  reached qBittorrent's `torrentInfo.Eta` (always `0`) or SABnzbd's queue
+  slots (no `timeleft` field existed at all) — Sonarr/Radarr's queue view
+  showed no ETA for any active download despite TorBox genuinely reporting
+  one. Fixed by reading it fresh from the same provider `List()` call that
+  already refreshes state/progress on every poll, rather than trying to
+  persist a fast-changing value — `eta` (qBittorrent) and `timeleft`
+  (SABnzbd, formatted `H:MM:SS` matching real SABnzbd).
+- **A TorBox torrent/NZB the provider itself marked as failed could never
+  reach local `error` state** — `mapDownloadState`'s default case treated
+  every unrecognized `download_state` as "still downloading," including a
+  stalled/no-seeds torrent (explicitly called out as such in the old code's
+  own comment) and TorBox's own documented `"Error"` state (confirmed via
+  TorBox's help center: server error, missing encryption key, missing par2
+  files, etc.) — meaning a download the provider had already given up on
+  would show as perpetually "downloading" to Sonarr/Radarr forever, since
+  nothing in AcerviNode could ever detect it. Fixed by porting
+  [decypharr](https://github.com/sirrobot01/decypharr)'s own
+  production-proven state mapping (the reference implementation this project
+  benchmarks against): anything not explicitly a known downloading/completed
+  state — including a stalled torrent — is now treated as an error. Verified
+  the exact fix against the real account's own data: `mapDownloadState` is
+  tested directly against `"stalled (no seeds)"`, the literal raw state a
+  real torrent on the test account had at the time. See
+  [Providers](docs/providers.md#state-mapping).
+  - A provider-reported error isn't sticky — it recovers automatically if the
+    provider later reports progress again (e.g. a stalled torrent finds a
+    seed), unlike `internal/importer`'s own retry-exhaustion give-up, which
+    *is* sticky by design. Distinguishing the two exposed a related,
+    previously-dormant bug: `internal/importer.handleFailure`'s give-up path
+    never persisted the final `retry_count`, so `database.RefreshFromProvider`
+    had no reliable way to tell a local give-up apart from a provider error and
+    could have silently resurrected a gave-up download back to
+    `provider_completed` the next time the provider happened to report its
+    unchanged old state. Fixed alongside the state-mapping change since the
+    two are directly related.
+  - The provider's raw failure reason (e.g. `"stalled (no seeds)"`) is now
+    surfaced as the download's `error_message` — previously documented as
+    "never surfaced through either compat shim directly," but that stance
+    only made sense back when the provider could never actually produce a
+    local `error` state at all; leaving `error_message` blank for a detected
+    provider failure would be worse UX than showing the raw reason.
+- Removed `database.ListDownloadsByState` — dead code, unused anywhere
+  including tests, and a footgun for a future caller: it looked like it
+  should back `internal/importer`'s due-for-retry logic but was missing the
+  `next_retry_at` backoff check that `ListDownloadsDueForRetry` (the function
+  actually used) applies.
+
 ### Changed
 
 - Native API's `GET /api/v1/downloads[/{id}]` field `kind` is now `protocol`

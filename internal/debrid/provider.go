@@ -44,8 +44,11 @@ type DownloadStatus struct {
 	State      DownloadState
 	ETASeconds int64
 	// RawState is the provider's own state string (e.g. TorBox's
-	// "stalled (no seeds)"), kept only for logs/debugging — never surfaced
-	// through either compat shim directly.
+	// "stalled (no seeds)"). Used for logs/debugging, and — when State is
+	// StateError — as the download's error_message, so a provider-side
+	// failure (as opposed to one of AcerviNode's own fetch failures) is
+	// visible to the user through both compat shims and the native API/UI,
+	// not just server logs (see database.RefreshFromProvider).
 	RawState string
 }
 

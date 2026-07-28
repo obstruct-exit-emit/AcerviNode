@@ -330,6 +330,19 @@ func (im *Importer) handleFailure(ctx context.Context, d *database.Download, pro
 	attempt := d.RetryCount + 1
 
 	if attempt >= maxRetries {
+		// Persist the final attempt count before flipping state — this is
+		// what lets database.RefreshFromProvider tell a give-up like this
+		// one (RetryCount > 0) apart from a StateError the provider itself
+		// reported (RetryCount == 0, since that path never goes through this
+		// retry bookkeeping at all — see RefreshFromProvider) and treat this
+		// one as a sticky, local decision that only a manual retry/re-add
+		// should revive, not the provider simply still reporting its old
+		// state on its next poll. next_retry_at doesn't matter here —
+		// nothing consults it once state has left provider_completed.
+		if err := im.db.UpdateDownloadRetry(ctx, d.ID, attempt, time.Now().UTC(), procErr.Error()); err != nil {
+			slog.Error("importer: persist final retry count failed", "id", d.ID, "error", err)
+			return
+		}
 		if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateError, d.Progress, d.SizeBytes, nil, procErr.Error()); err != nil {
 			slog.Error("importer: mark error failed", "id", d.ID, "error", err)
 			return

@@ -136,6 +136,79 @@ func TestSonarrCallSequence(t *testing.T) {
 	}
 }
 
+// TestHandleDelete_RemovesFromQueueAndHistory proves name=delete works
+// layered onto both mode=queue (an active download) and mode=history (a
+// failed one) — matching real SABnzbd's API shape, which Sonarr/Radarr rely
+// on to let a user remove a download from either list.
+func TestHandleDelete_RemovesFromQueueAndHistory(t *testing.T) {
+	ts := newTestServer(t)
+
+	// Add one via addurl, delete it straight out of the queue.
+	addResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"addurl"}, "apikey": {testAPIKey},
+		"name": {"https://example.com/queued.nzb"}, "cat": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("addurl error = %v", err)
+	}
+	var addResult map[string]any
+	json.NewDecoder(addResp.Body).Decode(&addResult)
+	addResp.Body.Close()
+	nzoID := addResult["nzo_ids"].([]any)[0].(string)
+
+	if queue := getQueue(t, ts.URL); len(queue.Queue.Slots) != 1 {
+		t.Fatalf("queue before delete = %d slots, want 1", len(queue.Queue.Slots))
+	}
+
+	delResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"queue"}, "name": {"delete"}, "apikey": {testAPIKey}, "value": {nzoID},
+	})
+	if err != nil {
+		t.Fatalf("queue delete error = %v", err)
+	}
+	var delResult map[string]any
+	json.NewDecoder(delResp.Body).Decode(&delResult)
+	delResp.Body.Close()
+	if delResult["status"] != true {
+		t.Errorf("queue delete result = %+v, want status:true", delResult)
+	}
+	if queue := getQueue(t, ts.URL); len(queue.Queue.Slots) != 0 {
+		t.Errorf("queue after delete = %+v, want empty", queue.Queue.Slots)
+	}
+
+	// A second download, forced straight to error state (bypassing the
+	// shim, which has no path there on its own in a provider-only test), to
+	// prove mode=history&name=delete works the same way for a history row.
+	ctx := t.Context()
+	failed := &database.Download{
+		ID: "dl-failed", Provider: "fake", ProviderDownloadID: "provider-failed",
+		Kind: database.KindUsenet, Name: "Failed Release", Category: "tv-sonarr",
+		State: database.StateError, ErrorMessage: "simulated",
+	}
+	db := ts.Config.Handler.(*Server).db
+	if err := db.InsertDownload(ctx, failed); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	if hist := getHistory(t, ts.URL); len(hist.History.Slots) != 1 {
+		t.Fatalf("history before delete = %d slots, want 1", len(hist.History.Slots))
+	}
+
+	delResp, err = http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"history"}, "name": {"delete"}, "apikey": {testAPIKey}, "value": {"dl-failed"},
+	})
+	if err != nil {
+		t.Fatalf("history delete error = %v", err)
+	}
+	json.NewDecoder(delResp.Body).Decode(&delResult)
+	delResp.Body.Close()
+	if delResult["status"] != true {
+		t.Errorf("history delete result = %+v, want status:true", delResult)
+	}
+	if hist := getHistory(t, ts.URL); len(hist.History.Slots) != 0 {
+		t.Errorf("history after delete = %+v, want empty", hist.History.Slots)
+	}
+}
+
 func getQueue(t *testing.T, baseURL string) queueResponse {
 	t.Helper()
 	resp, err := http.Get(baseURL + "/api?mode=queue&apikey=" + testAPIKey)
@@ -199,5 +272,66 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 	}
 	if got.SizeBytes != 987654321 {
 		t.Errorf("SizeBytes = %d, want 987654321 (backfilled even though state/progress didn't change)", got.SizeBytes)
+	}
+}
+
+// TestHandleQueue_ReportsTimeLeftFromProvider proves the provider's live ETA
+// reaches mode=queue's timeleft field — same underlying gap as
+// internal/qbittorrent's eta fix: debrid.DownloadStatus.ETASeconds was always
+// available but never made it into a queue slot.
+func TestHandleQueue_ReportsTimeLeftFromProvider(t *testing.T) {
+	ctx := t.Context()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	d := &database.Download{
+		ID: "dl-eta", Provider: "faketorbox", ProviderDownloadID: "fake-usenet-eta", Kind: database.KindUsenet,
+		Name: "ETA Test", State: database.StateDownloading, Progress: 0.5,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	provider := newFakeProvider()
+	provider.entries["fake-usenet-eta"] = &fakeEntry{
+		name: "ETA Test", size: 1024, calls: 1, eta: 754, // 754s = 0:12:34
+	}
+
+	srv := &Server{provider: provider, db: db, categories: newCategoryStore()}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil)
+	srv.handleQueue(rec, req)
+
+	var q queueResponse
+	if err := json.NewDecoder(rec.Body).Decode(&q); err != nil {
+		t.Fatalf("decode queue response: %v", err)
+	}
+	if len(q.Queue.Slots) != 1 {
+		t.Fatalf("queue = %d slots, want 1", len(q.Queue.Slots))
+	}
+	if got := q.Queue.Slots[0].TimeLeft; got != "0:12:34" {
+		t.Errorf("TimeLeft = %q, want 0:12:34 (from provider's 754s ETA)", got)
+	}
+}
+
+func TestFormatTimeLeft(t *testing.T) {
+	cases := []struct {
+		seconds int64
+		want    string
+	}{
+		{0, "0:00:00"},
+		{-5, "0:00:00"},
+		{59, "0:00:59"},
+		{60, "0:01:00"},
+		{754, "0:12:34"},
+		{3661, "1:01:01"},
+	}
+	for _, c := range cases {
+		if got := formatTimeLeft(c.seconds); got != c.want {
+			t.Errorf("formatTimeLeft(%d) = %q, want %q", c.seconds, got, c.want)
+		}
 	}
 }

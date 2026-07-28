@@ -3,6 +3,7 @@ package torbox
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/acervinode/acervinode/internal/debrid"
 )
@@ -169,21 +170,48 @@ func torrentFilesToDownloadFiles(files []TorrentFile) []debrid.DownloadFile {
 	return out
 }
 
-// mapDownloadState translates TorBox's download_state vocabulary (shared by
-// both the torrent and usenet services — see docs/providers.md) onto
-// AcerviNode's provider-agnostic DownloadState. TorBox's own docs note
-// "completed" here means "fully fetched by TorBox", not "ready to serve" —
-// "cached"/"uploading" are the actual ready-to-download signals.
+// parentheticalSuffix strips a qualifier TorBox appends to some states, e.g.
+// "stalled (no seeds)" -> "stalled", before matching against the known state
+// lists below.
+var parentheticalSuffix = regexp.MustCompile(`\s*\(.*?\)\s*`)
+
+// downloadingStates and completedStates are TorBox's real download_state
+// vocabulary (shared by both the torrent and usenet services — see
+// docs/providers.md), largely borrowed from qBittorrent's own state strings.
+// Ported from decypharr's own production-proven mapping (the reference
+// implementation this project benchmarks against — see ROADMAP.md) rather
+// than guessed, since TorBox's official docs don't publish an exhaustive
+// list. "completed" here means "fully fetched by TorBox", not "ready to
+// serve" — "cached"/"uploading" are the actual ready-to-download signals.
+var downloadingStates = map[string]bool{
+	"paused": true, "downloading": true, "checkingResumeData": true, "metaDL": true,
+	"pausedUP": true, "queuedUP": true, "checkingUP": true, "forcedUP": true,
+	"allocating": true, "pausedDL": true, "queuedDL": true, "checkingDL": true,
+	"forcedDL": true, "moving": true, "incomplete": true,
+}
+
+var completedStates = map[string]bool{
+	"completed": true, "cached": true, "uploading": true, "downloaded": true,
+}
+
+// mapDownloadState translates a raw download_state into AcerviNode's
+// provider-agnostic DownloadState. Anything unmatched — this is the
+// important part, not an oversight — is treated as an error, not "still
+// downloading": TorBox's own help center documents an explicit "Error" state
+// (server error, missing encryption key, missing par2 files, etc.), and a
+// stalled/no-seeds torrent is exactly the kind of dead end decypharr's own
+// mapping treats the same way rather than waiting on it forever.
 func mapDownloadState(raw string) debrid.DownloadState {
-	switch raw {
-	case "":
+	if raw == "" {
 		return debrid.StateUnknown
-	case "cached", "completed", "uploading":
+	}
+	normalized := parentheticalSuffix.ReplaceAllString(raw, "")
+	switch {
+	case downloadingStates[normalized]:
+		return debrid.StateDownloading
+	case completedStates[normalized]:
 		return debrid.StateCompleted
 	default:
-		// downloading, metaDL, checkingResumeData, "stalled (no seeds)",
-		// paused, and any qBittorrent-vocabulary state TorBox passes through
-		// are all "still in progress" from AcerviNode's point of view.
-		return debrid.StateDownloading
+		return debrid.StateError
 	}
 }

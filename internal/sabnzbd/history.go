@@ -18,8 +18,14 @@ type historySlot struct {
 // handleHistory implements mode=history: only downloads that are actually
 // done — ready_for_import (files fetched to local disk by internal/importer)
 // or error. provider_completed stays in the queue (see handleQueue) since
-// the provider being done isn't the same as AcerviNode being done.
+// the provider being done isn't the same as AcerviNode being done. Also
+// handles name=delete (see handleDelete), same as handleQueue.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("name") == "delete" {
+		s.handleDelete(w, r)
+		return
+	}
+
 	ctx := r.Context()
 	rows, err := s.db.ListDownloads(ctx, database.KindUsenet)
 	if err != nil {

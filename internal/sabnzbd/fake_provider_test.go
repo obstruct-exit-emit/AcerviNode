@@ -21,6 +21,7 @@ type fakeProvider struct {
 type fakeEntry struct {
 	name  string
 	size  int64
+	eta   int64
 	calls int
 	files []debrid.DownloadFile
 }
@@ -71,7 +72,7 @@ func (f *fakeProvider) statusFor(id debrid.ProviderDownloadID, e *fakeEntry) deb
 	default:
 		state, progress = debrid.StateCompleted, 1.0
 	}
-	return debrid.DownloadStatus{ID: id, Name: e.name, SizeBytes: e.size, Progress: progress, State: state}
+	return debrid.DownloadStatus{ID: id, Name: e.name, SizeBytes: e.size, Progress: progress, State: state, ETASeconds: e.eta}
 }
 
 func (f *fakeProvider) Status(_ context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {

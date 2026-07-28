@@ -1,8 +1,8 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 and 5 are complete;
-Phase 4 (more debrid providers) is blocked for now. The fine-grained record of
-every change lives in the [CHANGELOG](CHANGELOG.md).
+Where the project has been and where it's going. Phases 0–3, 5, and 6 are
+complete; Phase 4 (more debrid providers) is blocked for now. The
+fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
 **Legend:** ✅ complete · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
@@ -16,6 +16,7 @@ every change lives in the [CHANGELOG](CHANGELOG.md).
 | [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | ✅ |
 | [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
 | [5 — Hardening & release](#phase-5--hardening--release-) | systemd unit, packaged Linux binaries, release automation | ✅ |
+| [6 — Full QA pass](#phase-6--full-qa-pass-) | Systematic review + live testing of every existing ability; 3 real bugs found and fixed | ✅ |
 
 ---
 
@@ -307,3 +308,46 @@ CDN link instead of BitTorrent/NNTP.
   module's vanity import path) instead of the actual repo,
   `github.com/obstruct-exit-emit/AcerviNode` — meant the release badge and the
   `git clone` instructions were both broken
+
+## Phase 6 — Full QA pass ✅
+
+A direct request to audit every existing ability and setting and fix whatever
+turned up, rather than a specific bug report — a systematic code review of
+every package plus live testing against the real WSL instance/TorBox account.
+Found and fixed three real, independent bugs (full detail in the
+[CHANGELOG](CHANGELOG.md)):
+
+- **SABnzbd shim had no delete support at all** — `mode=queue`/`history` never
+  handled `name=delete`; the qBittorrent shim's delete always worked fine,
+  this gap was SABnzbd-specific. Fixed and verified live against the real
+  running instance.
+- **Provider ETA was silently dropped in both compat shims** — TorBox's real
+  `eta` field made it as far as `debrid.DownloadStatus.ETASeconds` and no
+  further; Sonarr/Radarr's queue view showed no ETA for any active download
+  despite TorBox genuinely reporting one. Fixed by reading it fresh from the
+  provider on every poll rather than trying to persist a fast-changing value.
+- **A TorBox download the provider itself marked as failed could never reach
+  local `error` state** — the state-mapping function's default case treated
+  every unrecognized `download_state` (including a stalled/no-seeds torrent,
+  and TorBox's own documented `"Error"` state) as "still downloading," so a
+  download the provider had already given up on would show as perpetually
+  downloading forever. Fixed by porting
+  [decypharr](https://github.com/sirrobot01/decypharr)'s own
+  production-proven mapping — the reference implementation this project
+  benchmarks against — confirmed against the real account's own data
+  (`"stalled (no seeds)"`, the exact raw state a real torrent on the test
+  account had at the time). Surfaced and fixed a related, previously-dormant
+  interaction along the way: `internal/importer`'s own retry-exhaustion
+  give-up wasn't reliably distinguishable from a provider-reported error,
+  which could have let a gave-up download get silently resurrected.
+- Also removed one piece of confirmed-dead code
+  (`database.ListDownloadsByState`) found during the review — unused
+  anywhere including tests, and a footgun since it looked like it should back
+  retry logic but was missing the actual backoff check.
+
+Every fix has dedicated regression tests (unit tests using the real account's
+own observed raw provider strings where relevant) and was verified live
+against the running WSL instance — the SABnzbd delete and the state-mapping
+fix's exact string were both confirmed against real data, not just reasoned
+about. All existing abilities not touched by a fix were re-verified working
+via the full test suite plus live spot checks; nothing else turned up.
