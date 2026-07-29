@@ -86,6 +86,13 @@ type Download struct {
 	// to StateError instead.
 	RetryCount  int
 	NextRetryAt *time.Time
+	// MissingCount backs proactive vanished-Manual-download detection: how
+	// many consecutive successful provider listings this row has been
+	// absent from — see RefreshFromProvider. Only ever nonzero for an
+	// AddedViaManual row; a Managed (AddedViaArr) download that vanishes is
+	// already caught by internal/importer's own fetch-retry path instead.
+	// Reset to 0 the moment the row reappears in a listing.
+	MissingCount int
 	// Source is the original magnet URI (torrent) or NZB URL (usenet) this
 	// download was added with, if it was added via a link rather than an
 	// uploaded file — empty otherwise, since there's nothing to resubmit for
@@ -316,6 +323,85 @@ func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progre
 	return checkRowsAffected(res, id)
 }
 
+// UpdateMissingCount records how many consecutive successful provider
+// listings a tracked AddedViaManual download has been absent from — see
+// RefreshFromProvider, the only caller (both to increment it on a miss and
+// to reset it back to 0 the moment the row reappears in a listing).
+func (db *DB) UpdateMissingCount(ctx context.Context, id string, missingCount int) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET missing_count = ?, updated_at = ?
+		WHERE id = ?`,
+		missingCount, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update missing count %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
+// missingDetectionThreshold is how many consecutive successful provider
+// listings a tracked AddedViaManual download can be absent from before
+// RefreshFromProvider flags it StateError — see handleMissingFromProvider.
+// Debounced rather than flagged on the very first miss: a row only ever
+// starts being tracked once it was already visible to the provider (either
+// an immediate Status() call right after adding it, or already present in a
+// List() response at discovery time — see internal/importer.discoverManual),
+// but TorBox's own listing endpoints have shown brief eventual-consistency
+// gaps around exactly that boundary (see docs/providers.md), so a
+// single-miss rule would risk wrongly flagging a download that's still
+// genuinely there. Not user-configurable — this is a debounce implementation
+// detail, not a tuning knob operators need (see ROADMAP.md Phase 7).
+const missingDetectionThreshold = 3
+
+// missingDownloadErrorMessage is the ErrorMessage set once a Manual download
+// crosses missingDetectionThreshold — deliberately distinct wording from a
+// provider-reported failure (see LocalStateFromProvider), since this is
+// AcerviNode's own conclusion ("we stopped seeing it"), not something the
+// provider itself ever said.
+const missingDownloadErrorMessage = "no longer found in the provider's account"
+
+// handleMissingFromProvider is RefreshFromProvider's counterpart for a row
+// whose provider_download_id was absent from the current tick's listing —
+// see the docs' "Proactively detect a vanished Manual download" section for
+// the full design rationale.
+func (db *DB) handleMissingFromProvider(ctx context.Context, d *Download) {
+	// A Managed (AddedViaArr) download that vanishes is already caught by
+	// internal/importer's own fetch-retry path within a few ticks — the
+	// fetch attempt itself fails and eventually gives up with a clear
+	// reason (see handleFailure) — so this mechanism only needs to cover
+	// Manual, which has no such path. Also skip a row already in
+	// StateError, whatever put it there, so this never clobbers an
+	// existing (possibly more specific) error reason.
+	if d.AddedVia != AddedViaManual || d.State == StateError {
+		return
+	}
+
+	count := d.MissingCount + 1
+	if count < missingDetectionThreshold {
+		if err := db.UpdateMissingCount(ctx, d.ID, count); err != nil {
+			slog.Error("database: update missing count failed", "id", d.ID, "error", err)
+			return
+		}
+		d.MissingCount = count
+		return
+	}
+
+	// Threshold crossed. RetryCount is deliberately left at 0 here (never
+	// touched by this path) — that's what keeps this recoverable exactly
+	// the same way a provider-reported error already is: if the provider
+	// reports the download again on some later tick, the
+	// state==StateError-and-RetryCount>0 stickiness check above doesn't
+	// apply, so it self-heals automatically with no special-case code (see
+	// docs/providers.md#state-mapping).
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateError, d.Progress, d.SizeBytes, nil, missingDownloadErrorMessage); err != nil {
+		slog.Error("database: mark vanished download as error failed", "id", d.ID, "error", err)
+		return
+	}
+	d.State = StateError
+	d.ErrorMessage = missingDownloadErrorMessage
+}
+
 // BackfillHashAndName fills in a row's hash and name from the provider's
 // current data — see RefreshFromProvider, the only caller. A torrent's
 // provider-side listing is provisional right after it's added (placeholder
@@ -383,7 +469,15 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 	for _, d := range rows {
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
+			db.handleMissingFromProvider(ctx, d)
 			continue
+		}
+		if d.MissingCount > 0 {
+			if err := db.UpdateMissingCount(ctx, d.ID, 0); err != nil {
+				slog.Error("database: reset missing count failed", "id", d.ID, "error", err)
+			} else {
+				d.MissingCount = 0
+			}
 		}
 
 		// A torrent's provider-side listing is provisional right after it's
@@ -541,7 +635,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
 	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
-	retry_count, next_retry_at, source, added_via`
+	retry_count, next_retry_at, source, added_via, missing_count`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, args...)
@@ -565,7 +659,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
-		&d.RetryCount, &d.NextRetryAt, &source, &addedVia,
+		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}

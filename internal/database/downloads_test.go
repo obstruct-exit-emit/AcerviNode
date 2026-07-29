@@ -611,22 +611,196 @@ func TestRefreshFromProvider_NeverOverwritesExistingHash(t *testing.T) {
 	}
 }
 
-func TestRefreshFromProvider_IgnoresRowsMissingFromStatuses(t *testing.T) {
+// TestRefreshFromProvider_ManagedDownloadMissingFromStatuses_NeverFlaggedByThisMechanism
+// proves a Managed (AddedViaArr) row missing from the provider's listing is
+// left entirely alone by handleMissingFromProvider, however many ticks it
+// stays missing — internal/importer's own fetch-retry path is what catches a
+// vanished Managed download instead (the fetch attempt itself fails and
+// eventually gives up with a clear reason); this mechanism only ever applies
+// to Manual, which has no such path — see the Manual-specific tests below.
+func TestRefreshFromProvider_ManagedDownloadMissingFromStatuses_NeverFlaggedByThisMechanism(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
 	d := newTestDownload(KindTorrent)
 	d.State = StateQueued
+	d.AddedVia = AddedViaArr
 	if err := db.InsertDownload(ctx, d); err != nil {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	// statuses has no entry at all for d.ProviderDownloadID — e.g. the
-	// provider's list hasn't indexed a freshly-added download yet.
-	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	// statuses has no entry at all for d.ProviderDownloadID, repeatedly —
+	// well past missingDetectionThreshold — to prove this really is never
+	// applied to a Managed row, not just debounced longer.
+	for i := 0; i < missingDetectionThreshold+2; i++ {
+		db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	}
 
 	if d.State != StateQueued {
 		t.Errorf("state = %q, want it left unchanged (queued) when absent from statuses", d.State)
+	}
+	if d.MissingCount != 0 {
+		t.Errorf("MissingCount = %d, want 0 (never incremented for a Managed row)", d.MissingCount)
+	}
+}
+
+// TestRefreshFromProvider_ManualDownloadMissing_SingleMissDoesNotFlag proves
+// a single absence doesn't immediately flag a Manual download as gone — see
+// missingDetectionThreshold's doc comment for why a debounce exists at all.
+func TestRefreshFromProvider_ManualDownloadMissing_SingleMissDoesNotFlag(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateProviderCompleted
+	d.AddedVia = AddedViaManual
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+
+	if d.State != StateProviderCompleted {
+		t.Errorf("state = %q, want it left unchanged after one miss", d.State)
+	}
+	if d.MissingCount != 1 {
+		t.Errorf("MissingCount = %d, want 1", d.MissingCount)
+	}
+}
+
+// TestRefreshFromProvider_ManualDownloadVanishes_FlaggedAfterThreshold proves
+// a Manual download absent from missingDetectionThreshold consecutive
+// successful listings is flagged StateError with a clear reason — the actual
+// "proactively detect a vanished Manual download" behavior — and not before.
+func TestRefreshFromProvider_ManualDownloadVanishes_FlaggedAfterThreshold(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateProviderCompleted
+	d.AddedVia = AddedViaManual
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	for i := 1; i < missingDetectionThreshold; i++ {
+		db.RefreshFromProvider(ctx, []*Download{d}, nil)
+		if d.State == StateError {
+			t.Fatalf("state = error after miss %d, want it to stay provider_completed until threshold %d", i, missingDetectionThreshold)
+		}
+	}
+
+	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+
+	if d.State != StateError {
+		t.Fatalf("state = %q after %d misses, want error", d.State, missingDetectionThreshold)
+	}
+	if d.ErrorMessage != missingDownloadErrorMessage {
+		t.Errorf("ErrorMessage = %q, want %q", d.ErrorMessage, missingDownloadErrorMessage)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != StateError || got.ErrorMessage != missingDownloadErrorMessage {
+		t.Errorf("persisted row = state:%q error:%q, want error/%q", got.State, got.ErrorMessage, missingDownloadErrorMessage)
+	}
+}
+
+// TestRefreshFromProvider_ManualDownloadReappears_ResetsMissingCount proves a
+// Manual download that reappears in a listing before crossing the threshold
+// has its miss counter reset back to 0, rather than accumulating misses
+// across gaps (e.g. missed, seen, missed, seen — never actually flagged).
+func TestRefreshFromProvider_ManualDownloadReappears_ResetsMissingCount(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	d.AddedVia = AddedViaManual
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	if d.MissingCount != 1 {
+		t.Fatalf("MissingCount after one miss = %d, want 1", d.MissingCount)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.MissingCount != 0 {
+		t.Errorf("MissingCount after reappearing = %d, want 0", d.MissingCount)
+	}
+	if d.State != StateDownloading {
+		t.Errorf("state = %q, want downloading (updated normally once found again)", d.State)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.MissingCount != 0 {
+		t.Errorf("persisted MissingCount = %d, want 0", got.MissingCount)
+	}
+}
+
+// TestRefreshFromProvider_VanishedManualDownload_SelfHealsIfProviderReportsItAgain
+// proves flagging a Manual download StateError this way isn't sticky — the
+// same "not sticky" guarantee TestRefreshFromProvider_ProviderErrorCanRecover
+// already proves for a provider-reported error, since this path deliberately
+// never touches RetryCount either (see handleMissingFromProvider).
+func TestRefreshFromProvider_VanishedManualDownload_SelfHealsIfProviderReportsItAgain(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	d.ErrorMessage = missingDownloadErrorMessage
+	d.AddedVia = AddedViaManual
+	d.RetryCount = 0
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.State != StateProviderCompleted {
+		t.Errorf("state = %q, want provider_completed (self-healed once the provider reported it again)", d.State)
+	}
+}
+
+// TestRefreshFromProvider_AlreadyErroredManualDownload_NotDoubleFlagged proves
+// a Manual download already in StateError for some other reason (e.g. a
+// provider-reported error) doesn't have its MissingCount incremented or its
+// ErrorMessage overwritten just because it also happens to be missing from a
+// listing — see handleMissingFromProvider's early return.
+func TestRefreshFromProvider_AlreadyErroredManualDownload_NotDoubleFlagged(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateError
+	d.ErrorMessage = "stalled (no seeds)"
+	d.AddedVia = AddedViaManual
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+
+	if d.MissingCount != 0 {
+		t.Errorf("MissingCount = %d, want 0 (not incremented for an already-errored row)", d.MissingCount)
+	}
+	if d.ErrorMessage != "stalled (no seeds)" {
+		t.Errorf("ErrorMessage = %q, want the original reason untouched", d.ErrorMessage)
 	}
 }
 

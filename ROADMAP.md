@@ -539,24 +539,55 @@ alternative worth trying first, before reaching for full categorization
 (which would also need an edit-after-the-fact story, since a discovered
 download starts with no category and TorBox gives it none to inherit).
 
-💡 **Proactively detect a vanished Manual download**: right now nothing
-notices a Manual download's provider item is gone until the user actually
-clicks download and hits `files_error` live — `RefreshFromProvider` only
-updates rows it finds a matching status for, and a Manual download is never
-in `internal/importer`'s fetch-retry path (the thing that catches this for a
-Managed download within a few ticks, since the fetch attempt itself fails
-and eventually gives up with a clear reason). Not fixed proactively yet on
-purpose: doing it safely needs a debounce — mark a row as gone only after
-it's been missing from a *successful* provider listing for several
-consecutive ticks, not the first miss, since a brand-new add can legitimately
-take a while to be indexed anywhere (mylist or the pre-processing queue) and
-a single-miss rule would wrongly flag it "gone" while it's still just new.
-That's real design work (a missing-since timestamp or counter, tuned against
-how long TorBox actually takes to index something), not a one-line fix.
-Reconfirmed during a later live-account audit — a real usenet download
-expired from TorBox's own `mylist` while still cached locally as
-`provider_completed`, the same scenario previously only confirmed for a
-torrent — so this applies to both kinds equally, not just one.
+**Proactively detect a vanished Manual download** ✅ (immediate follow-on,
+2026-07-29 — user picked this directly off a short list of next-move options).
+Previously nothing noticed a Manual download's provider item was gone until
+the user actually clicked download and hit `files_error` live —
+`RefreshFromProvider` only ever *updated* rows it found a matching status
+for, and a Manual download is never in `internal/importer`'s fetch-retry path
+(the thing that catches this for a Managed download within a few ticks,
+since the fetch attempt itself fails and eventually gives up with a clear
+reason). Confirmed as a real, recurring gap twice already — once for a
+torrent, then reconfirmed for a usenet download during a later live-account
+audit (both expired from TorBox's own `mylist` while still cached locally as
+`provider_completed`).
+
+Built exactly as scoped above: `RefreshFromProvider` now increments a new
+`downloads.missing_count` column (migration `0006_missing_count.sql`) each
+time a tracked `AddedViaManual` row is absent from a *successful* provider
+listing (a `List()` call that itself failed — e.g. a rate limit — never
+counts as a miss, since `refreshKind` already skips calling
+`RefreshFromProvider` at all on a listing error), and flags the row `error`
+with a fixed, clear reason (`"no longer found in the provider's account"`)
+once that reaches a threshold of 3 consecutive misses — a debounce, not a
+single-miss rule, for exactly the reason originally identified: a row only
+starts being tracked once it was already visible to the provider somehow, but
+TorBox's own listing endpoints have shown brief eventual-consistency gaps
+right around that boundary elsewhere in this project (see the hash/name
+backfill entry above). Deliberately scoped to `AddedViaManual` only — a
+Managed row's `missing_count` never moves, since its own fetch-retry path
+already covers the same scenario with a more specific reason — and
+deliberately not sticky, the same way a provider-reported error already
+isn't: the threshold path never touches `RetryCount`, so a download that
+reappears later (found again in some future listing) self-heals with zero
+special-case code, reusing `RefreshFromProvider`'s existing
+`state==error-and-RetryCount>0` stickiness check unchanged. A row already
+`error` for some other reason is left alone by this path entirely, so it
+never clobbers a more specific existing reason.
+
+No frontend changes were needed at all — `GET /api/v1/downloads[/{id}]`
+already surfaces `state`/`error_message` unconditionally, the existing error
+badge already renders any `error_message` string, and Retry/Re-add were
+already correctly gated to `added_via === 'arr'` only, so a vanished Manual
+download in `error` state shows the right message with no misleading action
+buttons, automatically. Full test coverage in
+`internal/database/downloads_test.go`: a Managed row is never flagged however
+long it's missing, a single miss doesn't flag a Manual row, the exact
+threshold-th miss does (with the persisted row checked directly, not just the
+in-memory struct), a Manual row that reappears before the threshold resets
+its counter and updates normally, a flagged row self-heals once the provider
+reports it again, and an already-`error` Manual row isn't double-flagged or
+overwritten. See [Providers](docs/providers.md#proactively-detecting-a-vanished-manual-download).
 
 💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
 restart**: requested by the user after the Downloads popup work above. Once a

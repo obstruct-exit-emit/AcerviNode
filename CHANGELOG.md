@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Proactively detect a vanished Manual download** — closes a
+  previously-documented, long-standing gap (ROADMAP.md's Phase 7): a Manual
+  download whose provider item disappears (deleted directly through the
+  provider's own site, or genuinely expired — confirmed as a real, recurring
+  scenario twice this project, once for a torrent and once for a usenet
+  download) used to just sit looking "Available" forever, since
+  `internal/importer`'s fetch-retry path (what catches this for a Managed
+  download within a few ticks) never applies to a Manual one at all.
+  `RefreshFromProvider` now increments a new `downloads.missing_count` column
+  (migration `0006_missing_count.sql`) each time a tracked `AddedViaManual`
+  row is absent from a *successful* provider listing, flagging it `error`
+  (`"no longer found in the provider's account"`) once it's been missing for
+  3 consecutive ticks — a debounce, not a single-miss rule, since a row can
+  legitimately be briefly absent from a provider's own listing endpoints
+  right around the moment it starts being tracked (the same class of
+  eventual-consistency gap the hash/name backfill bug fix below already had
+  to account for). Deliberately scoped to Manual only (a Managed row's
+  counter never moves) and deliberately not sticky (never touches
+  `RetryCount`, so a download that reappears later self-heals automatically,
+  reusing the existing provider-error-recovery logic unchanged). No frontend
+  changes needed — the existing error badge/message display and the
+  `added_via === 'arr'`-only Retry/Re-add gating already handle this
+  correctly. Full test coverage: a Managed row is never flagged, a single
+  miss doesn't flag a Manual row, the exact threshold-th miss does, an
+  early reappearance resets the counter, a flagged row self-heals, and an
+  already-errored row isn't double-flagged. See
+  [Providers](docs/providers.md#proactively-detecting-a-vanished-manual-download).
+
 - **TorBox Web Downloads + account status**, built autonomously per explicit
   user go-ahead ("Web Downloads (the real ask) + a small TorBox account-status
   display (UserService), skip the rest"), after evaluating all 7 of the

@@ -281,23 +281,50 @@ overrides key on (see [Configuration](configuration.md#categories-and-save-paths
 categorization concept at all. Brainstormed with the user and left as a 💡
 item in ROADMAP.md to revisit if the Manual tab ever gets hard to navigate.
 
-**Known limitation: a Manual download whose provider item vanishes entirely
-stays looking "Available" forever**, not because of a bug in the polling
-itself but because nothing ever runs the check for it. `RefreshFromProvider`
-only *updates* rows it finds a matching status for; a row whose
-`provider_download_id` is simply absent from the provider's current list —
-e.g. deleted directly through the provider's own site — is silently skipped,
-same as always (there was never a "this ID used to exist, now it's gone"
-branch). For a Managed download this self-corrects within a few ticks:
-`internal/importer`'s own fetch attempt fails, retries, and eventually
+### Proactively detecting a vanished Manual download
+
+For a Managed download, a provider item vanishing self-corrects within a few
+ticks: `internal/importer`'s own fetch attempt fails, retries, and eventually
 lands in `error` with a clear reason. A Manual download is never in that
-fetch-retry path at all, so nothing ever notices — the row just sits there
-looking done until the user actually clicks download and hits the error
-live (see `files_error` in [API](api.md)). Deliberately not auto-detected
-proactively yet: doing so safely needs a debounce (a download that's
-merely slow to be freshly indexed by the provider would otherwise get
-wrongly flagged "gone" after a single missed poll), which is real design
-work, not a one-line fix — tracked as a 💡 follow-up in ROADMAP.md.
+fetch-retry path at all (it's never auto-fetched — see above), so nothing
+would otherwise notice at all — the row would just sit there looking done
+until the user actually clicked download and hit the error live (`files_error`
+— see [API](api.md)).
+
+`RefreshFromProvider` (`internal/database/downloads.go`) now catches this
+proactively too, for both `internal/importer`'s own ticks and each compat
+shim's reactive polling (same shared function, all callers benefit). A row
+whose `provider_download_id` is missing from a *successful* provider listing
+(`p.List()` itself failing — e.g. a rate limit — doesn't count as a miss;
+`refreshKind` already skips calling `RefreshFromProvider` at all on a listing
+error) increments `downloads.missing_count`; once that reaches
+`missingDetectionThreshold` (3, not user-configurable — a debounce
+implementation detail, not a tuning knob) consecutive misses, the row is
+flagged `error` with a fixed reason (`"no longer found in the provider's
+account"`), and `missing_count` resets to 0 the instant the row is seen again
+in any listing before then.
+
+**Why a debounce at all, not a single-miss rule:** a row only starts being
+tracked once it was already visible to the provider somehow — either an
+immediate `Status()` call right after adding it (`handleAddWebDownload` etc.),
+or already present in a `List()` response at discovery time
+(`discoverManual`) — but TorBox's own listing endpoints have shown brief
+eventual-consistency gaps around exactly that boundary elsewhere in this
+project (the hash/name backfill above is a direct example: a fresh add's
+first snapshot can be provisional). A single-miss rule risked wrongly flagging
+a download that was still genuinely there.
+
+**Deliberately scoped to `AddedViaManual` only** — a Managed row is never
+touched by this mechanism (`missing_count` stays 0 for it always), since its
+own fetch-retry path already covers the same scenario with a more specific
+reason. **Deliberately not sticky**, the same way a provider-reported error
+isn't (see [State mapping](#state-mapping)): `missing_count`'s threshold path
+never touches `RetryCount`, so if the provider reports the download again on
+a later poll, `RefreshFromProvider`'s own
+`d.State == StateError && d.RetryCount > 0` stickiness check doesn't apply,
+and it self-heals with no special-case code. A row already `error` for some
+other reason (e.g. a genuine provider-reported failure) is left alone by this
+path entirely, so it never overwrites a more specific existing reason.
 
 ## TorBox (`internal/debrid/torbox`)
 
