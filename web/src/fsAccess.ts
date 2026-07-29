@@ -28,7 +28,16 @@ export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null>
 // writeFileToDirectory streams a fetch Response's body straight to disk
 // (never buffering the whole file in memory — matters for multi-gigabyte
 // video files), creating any subdirectories a "/"-containing path implies.
-export async function writeFileToDirectory(root: FileSystemDirectoryHandle, path: string, response: Response): Promise<void> {
+// onChunk, if given, is called with each chunk's byte length as it's
+// written — the caller sums these across a whole batch of files to drive a
+// progress bar; omitting it uses pipeTo directly (marginally cheaper, no
+// per-chunk callback overhead) for callers that don't need progress.
+export async function writeFileToDirectory(
+  root: FileSystemDirectoryHandle,
+  path: string,
+  response: Response,
+  onChunk?: (bytesWritten: number) => void,
+): Promise<void> {
   if (!response.body) {
     throw new Error(`${path}: response has no body to stream`)
   }
@@ -43,7 +52,25 @@ export async function writeFileToDirectory(root: FileSystemDirectoryHandle, path
   }
   const fileHandle = await dir.getFileHandle(parts[parts.length - 1], { create: true })
   const writable = await fileHandle.createWritable()
-  await response.body.pipeTo(writable)
+
+  if (!onChunk) {
+    await response.body.pipeTo(writable)
+    return
+  }
+
+  const reader = response.body.getReader()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      await writable.write(value)
+      onChunk(value.byteLength)
+    }
+    await writable.close()
+  } catch (err) {
+    await writable.abort().catch(() => {})
+    throw err
+  }
 }
 
 // --- remembered default folder ---------------------------------------------

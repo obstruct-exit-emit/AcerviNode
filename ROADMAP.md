@@ -69,7 +69,7 @@ CDN link instead of BitTorrent/NNTP.
   `mylist`/`usenet/mylist` endpoints are server-side cached for up to 600 seconds
   unless `bypass_cache=true` is passed — without it, a freshly added torrent was
   invisible to every poll for as long as the cache window lasted. See
-  [Providers](docs/providers.md#completed-download-handling).
+  [Providers](docs/providers.md#completed-download-handling-internalimporter).
 - **Retry/backoff** (added as a follow-on): a fetch failure no longer retries on
   every tick forever with no limit — `Importer.handleFailure` schedules the next
   attempt with exponential backoff (`retry_count`/`next_retry_at` on the row,
@@ -427,6 +427,20 @@ designing it solo.
   underlying provider error, present only when the live query actually
   failed) and the web UI shows it directly. See the 💡 below for the deeper,
   deliberately-deferred half of this.
+- Immediate follow-on: the row-level "Download all" button now shows a real
+  progress bar (cumulative bytes across the whole batch, weighted by file
+  size) while streaming to a folder, instead of a static "…" for however long
+  the whole thing takes. `writeFileToDirectory` takes an optional per-chunk
+  callback instead of a blind `pipeTo`. Scoped to that one path on purpose —
+  the tab-per-file fallback and the per-file/zip buttons already get real
+  progress for free from the browser's own download manager once handed off.
+- Docs cleanup: found and fixed a broken cross-reference anchor
+  (`#completed-download-handling` vs. the real
+  `#completed-download-handling-internalimporter`) affecting 7 links across
+  6 files, using a link/anchor checker written for the occasion rather than
+  by inspection — worth remembering as a technique for a future docs pass.
+  Also updated README.md/quickstart.md's web UI descriptions, stale since
+  before the Managed/Manual split.
 
 💡 **Manual categories**: brainstormed with the user and deliberately left
 out for now. Category only drives real behavior for Managed downloads (it's

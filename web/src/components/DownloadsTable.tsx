@@ -23,6 +23,11 @@ interface Props {
   onRetry: (d: Download) => void
   onDownloadAll: (d: Download) => void
   downloadingAllId: string | null
+  // Cumulative bytes written so far for the row matching downloadingAllId —
+  // only populated for the streamed-to-folder path (File System Access);
+  // null shows the plain "…" busy indicator instead (the tab-per-file
+  // fallback hands off to the browser immediately, nothing left to track).
+  downloadProgress: { loaded: number; total: number } | null
   onSelect: (d: Download) => void
   // Retry only makes sense for a Managed (added_via=arr) download that
   // internal/importer's own fetch pipeline can act on — a Manual download is
@@ -42,7 +47,18 @@ interface Props {
 // filesForDownload (backend) can query live from the provider.
 const HAS_FILES_STATES = new Set(['provider_completed', 'ready_for_import'])
 
-export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect, allowRetry, showCategory, emptyMessage }: Props) {
+export function DownloadsTable({
+  downloads,
+  onDelete,
+  onRetry,
+  onDownloadAll,
+  downloadingAllId,
+  downloadProgress,
+  onSelect,
+  allowRetry,
+  showCategory,
+  emptyMessage,
+}: Props) {
   if (downloads.length === 0) {
     return <p className="empty">{emptyMessage}</p>
   }
@@ -99,17 +115,29 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
                   local disk by internal/importer, so there's nothing to
                   manually grab. */}
               {d.added_via === 'manual' && HAS_FILES_STATES.has(d.state) && (
-                <button
-                  className="download-all-btn-sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDownloadAll(d)
-                  }}
-                  disabled={downloadingAllId === d.id}
-                  title={downloadAllTitle()}
-                >
-                  {downloadingAllId === d.id ? '…' : '⬇'}
-                </button>
+                downloadingAllId === d.id && downloadProgress && downloadProgress.total > 0 ? (
+                  <span
+                    className="download-progress-mini"
+                    title={`${formatBytes(downloadProgress.loaded)} / ${formatBytes(downloadProgress.total)}`}
+                  >
+                    <span
+                      className="download-progress-mini-fill"
+                      style={{ width: `${Math.min(100, Math.round((downloadProgress.loaded / downloadProgress.total) * 100))}%` }}
+                    />
+                  </span>
+                ) : (
+                  <button
+                    className="download-all-btn-sm"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onDownloadAll(d)
+                    }}
+                    disabled={downloadingAllId === d.id}
+                    title={downloadAllTitle()}
+                  >
+                    {downloadingAllId === d.id ? '…' : '⬇'}
+                  </button>
+                )
               )}
               <button
                 className="delete-btn"

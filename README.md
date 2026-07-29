@@ -76,8 +76,11 @@ the storage layer.
   listing/management/**adding** (magnet, .torrent, NZB URL, or .nzb file — no
   need to go through Sonarr/Radarr or fake being one), settings — API-key
   authenticated, the exact API the UI itself uses
-- A React (Vite) single-page dashboard, embedded into the binary — download table
-  with live state/progress, provider status, one-click delete, a "+ Add" button
+- A React (Vite) single-page dashboard, embedded into the binary, split into
+  **Managed** (added through Sonarr/Radarr, auto-fetched to disk) and
+  **Manual** (added directly, or discovered already sitting in your TorBox
+  account — never auto-fetched, browse and grab files on demand instead) —
+  live state/progress, provider status, one-click delete, a "+ Add" button
   to push a magnet/torrent file/NZB straight in, a per-download detail view
   (full metadata, file list, retry status), and a Settings tab to add/change
   your TorBox key without touching `config.yaml` — takes effect immediately,

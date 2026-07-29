@@ -43,6 +43,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [downloadingAllId, setDownloadingAllId] = useState<string | null>(null)
+  // Cumulative bytes written across every file in the batch currently
+  // streaming to disk (the File System Access path only — see
+  // handleDownloadAllIndividual). null while nothing's downloading, or once
+  // a download starts if total size wasn't knowable up front.
+  const [downloadProgress, setDownloadProgress] = useState<{ loaded: number; total: number } | null>(null)
 
   const handleUnauthorized = useCallback(() => {
     clearStoredApiKey()
@@ -177,6 +182,14 @@ export default function App() {
         alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
         return
       }
+
+      // Only meaningful for the streamed-to-folder path (dir set) — a
+      // window.open per file, in the fallback path, hands off to the
+      // browser immediately with nothing left for us to track.
+      const totalBytes = files.reduce((sum, f) => sum + f.size_bytes, 0)
+      let loadedBytes = 0
+      if (dir) setDownloadProgress({ loaded: 0, total: totalBytes })
+
       const failed: string[] = []
       for (const f of files) {
         try {
@@ -184,7 +197,10 @@ export default function App() {
           if (dir) {
             const resp = await fetch(url)
             if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-            await writeFileToDirectory(dir, f.path, resp)
+            await writeFileToDirectory(dir, f.path, resp, (chunkBytes) => {
+              loadedBytes += chunkBytes
+              setDownloadProgress({ loaded: loadedBytes, total: totalBytes })
+            })
           } else {
             window.open(url, '_blank', 'noopener,noreferrer')
           }
@@ -200,6 +216,7 @@ export default function App() {
       alert(err instanceof Error ? err.message : String(err))
     } finally {
       setDownloadingAllId(null)
+      setDownloadProgress(null)
     }
   }
 
@@ -250,6 +267,7 @@ export default function App() {
             onRetry={handleRetry}
             onDownloadAll={handleDownloadAll}
             downloadingAllId={downloadingAllId}
+            downloadProgress={downloadProgress}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry
             showCategory
@@ -263,6 +281,7 @@ export default function App() {
             onRetry={handleRetry}
             onDownloadAll={handleDownloadAll}
             downloadingAllId={downloadingAllId}
+            downloadProgress={downloadProgress}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry={false}
             showCategory={false}

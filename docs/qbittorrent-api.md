@@ -44,7 +44,7 @@ specific vocabulary:
 |---|---|---|
 | `queued` | `queuedDL` | Not yet accepted by the provider |
 | `downloading` | `downloading` | Provider is fetching it |
-| `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling) hasn't fetched the files to local disk yet — reporting `uploading` here would send Sonarr's import step looking for files that don't exist yet |
+| `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — reporting `uploading` here would send Sonarr's import step looking for files that don't exist yet |
 | `ready_for_import` | `uploading` | Files are actually on disk; safe to report as complete/seeding |
 | `error` | `error` | Either the provider itself reported a failure (e.g. TorBox's own "Error" state, or a stalled/no-seeds torrent — see [Providers](providers.md#state-mapping)) or Completed Download Handling gave up after exhausting its own fetch retries |
 

@@ -78,7 +78,7 @@ provider ID.
 
 `retry_count` and `next_retry_at` are omitted entirely (not just zero/null) until
 a download has failed at least once — see
-[Providers](providers.md#completed-download-handling) for what sets them.
+[Providers](providers.md#completed-download-handling-internalimporter) for what sets them.
 `added_via` (`arr` or `manual`) is permanent from the moment a download is
 added — see [Providers](providers.md#managed-vs-manual) for what it means and
 how a `manual` download can also show up without ever being added through
@@ -140,7 +140,7 @@ provider-hosted URL for one file — for downloading straight through a
 browser instead of (or in addition to) `internal/importer` fetching it to
 AcerviNode's own local disk. It's the exact same call `internal/importer`
 itself makes when fetching a file (see
-[Providers](providers.md#completed-download-handling)) — AcerviNode doesn't
+[Providers](providers.md#completed-download-handling-internalimporter)) — AcerviNode doesn't
 proxy, cache, or otherwise sit in the middle of the actual transfer, it just
 hands back what the provider gave it. The web UI's detail view shows a
 "Download" button per file once `provider_file_id` is available — only for

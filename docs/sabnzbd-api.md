@@ -49,7 +49,7 @@ Same approach as the [qBittorrent shim](qbittorrent-api.md): the internal
 `downloads.state` machine is translated to SABnzbd's queue/history vocabulary only
 at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`. `queued`,
 `downloading`, and `provider_completed` all stay in `/queue` (the latter as
-`Downloading`, since [Completed Download Handling](providers.md#completed-download-handling)
+`Downloading`, since [Completed Download Handling](providers.md#completed-download-handling-internalimporter)
 hasn't fetched the files to local disk yet, and Sonarr's import step needs them
 there first). Only `ready_for_import` moves to `/history` as `Completed`; `error`
 moves there as `Failed` — either because the provider itself reported a failure

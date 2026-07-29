@@ -591,6 +591,24 @@ table.downloads tbody tr:hover {
   cursor: default;
 }
 
+.download-progress-mini {
+  display: inline-block;
+  width: 36px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin: 0 6px;
+}
+
+.download-progress-mini-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+
 /* ApiKeyGate */
 .gate {
   min-height: 100svh;

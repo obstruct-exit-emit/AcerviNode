@@ -74,7 +74,7 @@ the one that triggered the change; nothing else does.
 qBittorrent shim, generally rely on the category's own configured path rather than
 sending an explicit `save_path`. AcerviNode stores whatever category and save path
 the calling app does send, and Completed Download Handling
-([Providers](providers.md#completed-download-handling)) writes fetched files there
+([Providers](providers.md#completed-download-handling-internalimporter)) writes fetched files there
 when one was supplied — an explicit `save_path` from the *arr app always wins.
 
 When no `save_path` was supplied, AcerviNode falls back to `download_dir`, organized

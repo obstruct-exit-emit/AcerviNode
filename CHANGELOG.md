@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Progress bar for the Manual tab's multi-file "Download all"**: the
+  streamed-to-folder path (File System Access) previously just showed a
+  static "…" for the whole batch, however long it took. `writeFileToDirectory`
+  now takes an optional per-chunk callback instead of a blind `pipeTo`, and
+  the row button swaps for a small live progress bar (cumulative bytes
+  written across every file in the batch, weighted by size) while a download
+  is in flight. Deliberately scoped to that one path — the tab-per-file
+  fallback and the per-file/zip buttons hand off to the browser immediately
+  with nothing left to track, and already get real progress for free from
+  the browser's own download manager.
 - **Remembered default download folder** (`web/src/fsAccess.ts`): the Manual
   tab's "Download all" (individual files) button no longer shows the folder
   picker on every single download — the first pick is persisted (via
@@ -76,6 +86,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Broken cross-reference links across the docs, found with a link/anchor
+  checker written for the occasion rather than by inspection: `providers.md`'s
+  "Completed Download Handling" header has a parenthetical
+  (`` (`internal/importer`) ``) that changes its real GitHub anchor to
+  `#completed-download-handling-internalimporter`, but every cross-reference
+  to it — 7 of them, across `api.md`, `configuration.md`, `qbittorrent-api.md`,
+  `sabnzbd-api.md`, `ROADMAP.md`, and a self-reference within `providers.md`
+  itself — linked to the shorter `#completed-download-handling`, which GitHub
+  has never actually recognized. Also updated `README.md` and
+  `docs/quickstart.md`'s web UI descriptions, which still described a single
+  downloads table with no mention of the Managed/Manual split.
 - Clicking download on a Manual download whose provider item had vanished
   entirely (deleted directly through TorBox's own site — spotted live by the
   user, confirmed by querying the real account directly: the torrent was

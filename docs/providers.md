@@ -304,7 +304,7 @@ torrent on the test account had at the time).
 A local `error` state reached this way is *not* sticky — if the provider
 later reports genuine progress again (e.g. a stalled torrent finds a seed),
 it recovers automatically on the next refresh. Contrast with
-[Completed Download Handling](#completed-download-handling)'s own retry
+[Completed Download Handling](#completed-download-handling-internalimporter)'s own retry
 exhaustion below, which *is* sticky by design.
 
 Both also fall back to `GET /queued/getqueued?type=torrent|usenet` — a

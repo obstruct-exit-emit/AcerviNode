@@ -70,8 +70,12 @@ fetched to disk by `internal/importer` the same way once TorBox reports it done.
 ## 4. The web UI
 
 Open `http://localhost:7846` in a browser, enter your `api_key` once (it's
-remembered), and watch the same downloads table update live — same data as
-`curl`-ing [`/api/v1/downloads`](api.md), just rendered.
+remembered), and watch the same downloads update live — same data as
+`curl`-ing [`/api/v1/downloads`](api.md), just rendered. The **Managed** tab
+is what you just added through Sonarr; **Manual** is for anything added
+directly (a "+ Add" button, or just added straight through TorBox's own
+site/app — it shows up here automatically too, see
+[Providers](providers.md#managed-vs-manual)).
 
 If you didn't add a TorBox key to `config.yaml`, do it here instead: the
 **Settings** tab has a field for it. Saving takes effect immediately — no
