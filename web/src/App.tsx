@@ -21,7 +21,7 @@ import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
-import { pickDirectory, supportsDirectoryPicker, writeFileToDirectory } from './fsAccess'
+import { resolveDownloadDirectory, supportsDirectoryPicker, writeFileToDirectory } from './fsAccess'
 import { getDownloadMode } from './preferences'
 import './App.css'
 
@@ -148,17 +148,20 @@ export default function App() {
 
   // Downloads every file individually. In a browser that supports it
   // (Chromium-based; not Firefox/Safari), files are streamed straight into a
-  // folder the user picks, with no per-file tab/download popup at all.
-  // Elsewhere, it falls back to opening each file's link in its own tab.
+  // folder — the remembered default if one's already usable (no prompt at
+  // all), otherwise the picker, same as before — with no per-file tab/
+  // download popup at all. Elsewhere, it falls back to opening each file's
+  // link in its own tab.
   async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
 
-    // Must happen first, before any other await — the picker needs the
-    // click's own user-activation, which an intervening API call consumes.
+    // Must happen first, before any other await — resolving (and
+    // potentially prompting for) a directory needs the click's own
+    // user-activation, which an intervening API call consumes.
     let dir: FileSystemDirectoryHandle | null = null
     if (supportsDirectoryPicker()) {
       try {
-        dir = await pickDirectory()
+        dir = await resolveDownloadDirectory()
         if (!dir) return // user cancelled the picker
       } catch (err) {
         alert(err instanceof Error ? err.message : String(err))

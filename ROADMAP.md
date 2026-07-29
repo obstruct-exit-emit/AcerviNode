@@ -407,6 +407,18 @@ designing it solo.
 - Immediate follow-on: removed category from Manual entirely — no input in
   the "+ Add" form, no column in the table, no row in the detail view — see
   💡 **Manual categories** below.
+- Immediate follow-on: the Manual tab's multi-file "Download all" no longer
+  shows the folder picker on every download — the first pick is remembered
+  (persisted via IndexedDB) and silently reused as long as permission is
+  still live, with a "Change folder"/"Forget" control in Settings →
+  Downloads. Deliberately scoped to that one multi-file path only — brainstormed
+  with the user first, including the real constraint that streaming-to-disk
+  requires the tab to stay open for the whole download (unlike a real
+  browser download), and the conclusion that a *single* file (the per-file
+  "Download" button, "Download all (zip)") is better served staying a plain
+  browser download, not File System Access — it's tracked in the browser's
+  own download manager and survives the tab closing, which streaming can't
+  offer either way.
 
 💡 **Manual categories**: brainstormed with the user and deliberately left
 out for now. Category only drives real behavior for Managed downloads (it's

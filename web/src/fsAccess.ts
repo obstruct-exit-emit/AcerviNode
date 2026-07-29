@@ -45,3 +45,112 @@ export async function writeFileToDirectory(root: FileSystemDirectoryHandle, path
   const writable = await fileHandle.createWritable()
   await response.body.pipeTo(writable)
 }
+
+// --- remembered default folder ---------------------------------------------
+//
+// Picking a folder every single time you download a batch of files is
+// friction the File System Access API doesn't strictly require: a directory
+// handle can be persisted (IndexedDB — localStorage can't hold a handle
+// object) and reused later without re-prompting, as long as its permission
+// is still granted. queryPermission itself never needs a user gesture, so
+// checking "do we already have a usable default?" is safe to do before the
+// click handler's first await; only actually showing the picker (when there
+// is no usable default yet) still needs to happen first in the gesture.
+
+const DB_NAME = 'acervinode-fs-access'
+const STORE_NAME = 'handles'
+const DEFAULT_DIR_KEY = 'default-directory'
+
+function openHandleStore(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1)
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE_NAME)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function storeHandle(key: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await openHandleStore()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite')
+      tx.objectStore(STORE_NAME).put(handle, key)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
+async function loadHandle(key: string): Promise<FileSystemDirectoryHandle | null> {
+  const db = await openHandleStore()
+  try {
+    return await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly')
+      const req = tx.objectStore(STORE_NAME).get(key)
+      req.onsuccess = () => resolve(req.result ?? null)
+      req.onerror = () => reject(req.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
+type PermissionMode = { mode: 'read' | 'readwrite' }
+interface PermissibleHandle {
+  queryPermission(desc: PermissionMode): Promise<PermissionState>
+  requestPermission(desc: PermissionMode): Promise<PermissionState>
+}
+
+// hasReadWritePermission checks (and, if requestIfNeeded, asks for) write
+// access to a previously-picked handle. Asking requires a user gesture, same
+// as showDirectoryPicker; checking alone doesn't.
+async function hasReadWritePermission(handle: FileSystemDirectoryHandle, requestIfNeeded: boolean): Promise<boolean> {
+  const permissible = handle as unknown as PermissibleHandle
+  if ((await permissible.queryPermission({ mode: 'readwrite' })) === 'granted') return true
+  if (!requestIfNeeded) return false
+  return (await permissible.requestPermission({ mode: 'readwrite' })) === 'granted'
+}
+
+// getDefaultDirectory returns the remembered folder if one is stored and
+// still has live permission, without prompting — safe to call any time, not
+// just inside a click handler.
+export async function getDefaultDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  if (!supportsDirectoryPicker()) return null
+  const handle = await loadHandle(DEFAULT_DIR_KEY)
+  if (!handle || !(await hasReadWritePermission(handle, false))) return null
+  return handle
+}
+
+// pickAndRememberDirectory shows the picker (must be the first await in
+// whatever click handler calls it — see pickDirectory) and saves the result
+// as the new default for next time, unless the user cancels.
+export async function pickAndRememberDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  const handle = await pickDirectory()
+  if (handle) await storeHandle(DEFAULT_DIR_KEY, handle)
+  return handle
+}
+
+// forgetDefaultDirectory clears the remembered folder — the next download
+// (or an explicit "change folder") shows the picker again.
+export async function forgetDefaultDirectory(): Promise<void> {
+  await storeHandle(DEFAULT_DIR_KEY, null as unknown as FileSystemDirectoryHandle)
+}
+
+// resolveDownloadDirectory is the one entry point download handlers should
+// use: reuses the remembered default if it's still usable (no prompt at
+// all), otherwise falls back to the picker. Only genuinely risky for the
+// user-gesture requirement on that fallback path — the remembered-default
+// check ahead of it is a couple of fast IndexedDB round trips, comfortably
+// inside Chromium's several-second activation window in practice, but this
+// hasn't been exercised by a real click in a real browser — see the
+// caveat this was shipped with.
+export async function resolveDownloadDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  const remembered = await getDefaultDirectory()
+  if (remembered) return remembered
+  return pickAndRememberDirectory()
+}

@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remembered default download folder** (`web/src/fsAccess.ts`): the Manual
+  tab's "Download all" (individual files) button no longer shows the folder
+  picker on every single download — the first pick is persisted (via
+  IndexedDB, since a `FileSystemDirectoryHandle` can't live in localStorage)
+  and silently reused as long as this browser still has permission for it,
+  falling back to the picker again if not. A new "Change folder"/"Choose
+  folder" control in Settings → Downloads shows the current default (by name
+  only — browsers don't expose a handle's full path) and lets you switch or
+  forget it. Deliberately scoped to the multi-file "individual files" path
+  only: the per-file "Download" button and "Download all (zip)" in the
+  detail view stay plain browser downloads on purpose, since for a *single*
+  file that's strictly better than File System Access — it shows up in the
+  browser's own download manager and survives the tab closing, neither of
+  which streaming-to-a-picked-folder can offer. Brainstormed with the user
+  first, including the real constraint that the whole streamed-download
+  approach requires the tab to stay open for the duration, unlike a native
+  browser download.
 - **Managed vs. Manual downloads**: the web UI's single "Downloads" tab is
   now two — **Managed** (added through the qBittorrent/SABnzbd compat shims,
   i.e. by Sonarr/Radarr — auto-fetched to local disk exactly as before) and

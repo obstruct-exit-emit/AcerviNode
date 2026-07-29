@@ -15,6 +15,7 @@ import {
   type GeneralUpdateInput,
   type ProviderSettings,
 } from '../api'
+import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
 import { getDownloadMode, setDownloadMode, type DownloadMode } from '../preferences'
 
 // One row of the "Save path overrides" list — kept as its own component,
@@ -90,6 +91,8 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
   const [newCategoryProtocol, setNewCategoryProtocol] = useState<'torrent' | 'usenet'>('torrent')
   const [categoryStatus, setCategoryStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   const [downloadMode, setDownloadModeState] = useState<DownloadMode>(() => getDownloadMode())
+  const [defaultFolderName, setDefaultFolderName] = useState<string | null>(null)
+  const [folderStatus, setFolderStatus] = useState<{ kind: 'idle' | 'error'; message?: string }>({ kind: 'idle' })
 
   async function load() {
     try {
@@ -121,6 +124,28 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!supportsDirectoryPicker()) return
+    // queryPermission alone needs no user gesture, so this is safe to check
+    // on mount rather than only inside a click handler.
+    getDefaultDirectory().then((handle) => setDefaultFolderName(handle?.name ?? null))
+  }, [])
+
+  async function handleChangeFolder() {
+    setFolderStatus({ kind: 'idle' })
+    try {
+      const handle = await pickAndRememberDirectory()
+      if (handle) setDefaultFolderName(handle.name)
+    } catch (err) {
+      setFolderStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  async function handleForgetFolder() {
+    await forgetDefaultDirectory()
+    setDefaultFolderName(null)
+  }
 
   async function handleCopyKey() {
     if (!general) return
@@ -460,6 +485,28 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
           way, both options stay available per-download in the detail view — this only sets the
           per-row button's default. Stored in this browser only, not on the server.
         </p>
+
+        {supportsDirectoryPicker() && (
+          <>
+            <div className="api-key-row">
+              <code className="api-key-value">{defaultFolderName ?? 'Not set — you\'ll be asked to pick one on the next download'}</code>
+              <button type="button" onClick={handleChangeFolder}>
+                {defaultFolderName ? 'Change folder' : 'Choose folder'}
+              </button>
+              {defaultFolderName && (
+                <button type="button" onClick={handleForgetFolder}>
+                  Forget
+                </button>
+              )}
+            </div>
+            <p className="settings-help">
+              Default folder for "Individual files" downloads — picked once, then reused silently
+              (no prompt) for every download after, as long as this browser still has permission for
+              it. Only the folder's name is shown here; browsers don't expose its full path.
+            </p>
+            {folderStatus.kind === 'error' && <p className="settings-error">Failed to change folder: {folderStatus.message}</p>}
+          </>
+        )}
       </section>
     </div>
   )
