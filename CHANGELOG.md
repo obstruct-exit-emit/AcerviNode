@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   holds the lock receives every batch and progress/completion report,
   regardless of which tab triggered it or which popup object that tab's own
   `window.open()` call happened to return.
+  - Immediate follow-on: a duplicate that loses the lock race now calls
+    `window.close()` on itself right away, instead of only offering a
+    manual "Close this window" button. `window.close()` silently does
+    nothing in some browsers/settings even for a window opened by script
+    (no error thrown either way), so the explanatory text and the manual
+    button both stay as the fallback if the automatic close doesn't work.
 - **Confirm dialog before a streamed "Download all" starts**
   (`web/src/components/DownloadOptionsDialog.tsx`): clicking the row button
   used to immediately start fetching — folder and Downloads-popup hand-off

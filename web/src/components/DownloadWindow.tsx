@@ -203,13 +203,22 @@ export function DownloadWindow() {
     channelRef.current?.postMessage(msg)
   }
 
+  // A duplicate (lost the singleton lock race) tries to close itself right
+  // away — window.close() only works on a window script actually opened
+  // (true here, via openDownloadWindow()'s window.open() call), but some
+  // browsers/settings still refuse it silently with no error, so the
+  // message and manual button below stay as the fallback either way.
+  useEffect(() => {
+    if (isPrimary === false) window.close()
+  }, [isPrimary])
+
   if (isPrimary === false) {
     return (
       <div className="download-window">
         <h1 className="download-window-title">📦 Downloads</h1>
         <p className="empty">
           Another Downloads window is already open and is the one actually tracking your downloads — this extra
-          copy isn't doing anything. Safe to close.
+          copy isn't doing anything. Closing automatically…
         </p>
         <button onClick={() => window.close()}>Close this window</button>
       </div>
