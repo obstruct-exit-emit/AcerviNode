@@ -18,13 +18,13 @@ import {
 import { AddDownload } from './components/AddDownload'
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { DownloadDetail } from './components/DownloadDetail'
+import { DownloadOptionsDialog, type DownloadOptions } from './components/DownloadOptionsDialog'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
 import {
   listenForDownloadWindowMessages,
   openDownloadWindow,
-  resolveDownloadDirectory,
   sendBatchToDownloadWindow,
   supportsDirectoryPicker,
   writeFileToDirectory,
@@ -49,6 +49,11 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  // Set while the DownloadOptionsDialog is open for a given row (streamed-
+  // to-folder path only) — lets the user see/change the destination folder
+  // and choose whether to hand off to the Downloads popup window before
+  // anything actually starts. See handleDownloadAll/startStreamedDownload.
+  const [downloadDialogFor, setDownloadDialogFor] = useState<Download | null>(null)
   const [downloadingAllId, setDownloadingAllId] = useState<string | null>(null)
   // Cumulative bytes written across every file in the batch currently
   // streaming to disk (the File System Access path only — see
@@ -151,15 +156,21 @@ export default function App() {
 
   // The per-row "Download all" button's entry point — dispatches on the
   // user's Settings > Downloads preference (see preferences.getDownloadMode).
-  // 'zip' resolves the whole download as one provider-zipped archive; the
-  // default 'individual' fetches every file separately (see
-  // handleDownloadAllIndividual). Either way, the detail view's own explicit
-  // "Download all (zip)"/per-file buttons remain available regardless of
-  // this preference — it only controls the row button's default action.
+  // 'zip' resolves the whole download as one provider-zipped archive. The
+  // default 'individual' either opens DownloadOptionsDialog (browsers that
+  // support streaming to a folder — see startStreamedDownload, which the
+  // dialog's confirm triggers) or, if this browser can't do that at all,
+  // falls straight to handleDownloadAllIndividual's plain tab-per-file
+  // behavior, since there's no folder/Downloads-window choice to make there
+  // anyway. Either way, the detail view's own explicit "Download all
+  // (zip)"/per-file buttons remain available regardless of this preference —
+  // it only controls the row button's default action.
   async function handleDownloadAll(d: Download) {
     if (!apiKey) return
     if (getDownloadMode() === 'zip') {
       await handleDownloadAllZip(d)
+    } else if (supportsDirectoryPicker()) {
+      setDownloadDialogFor(d)
     } else {
       await handleDownloadAllIndividual(d)
     }
@@ -178,43 +189,59 @@ export default function App() {
     }
   }
 
-  // Downloads every file individually. In a browser that supports it
-  // (Chromium-based; not Firefox/Safari), files are streamed straight into a
-  // folder — the remembered default if one's already usable (no prompt at
-  // all), otherwise the picker, same as before — with no per-file tab/
-  // download popup at all. Elsewhere, it falls back to opening each file's
-  // link in its own tab.
+  // No-File-System-Access fallback (Firefox/Safari, or any browser without
+  // showDirectoryPicker): opens every file's link in its own tab. Nothing
+  // to choose here — no folder, no Downloads window — so this never goes
+  // through DownloadOptionsDialog.
   async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
-
-    // Both the popup and directory resolution need this click's own live
-    // user-activation, so both must happen before any other await —
-    // window.open() is synchronous (no await ahead of it), so it goes
-    // first; resolveDownloadDirectory()'s picker fallback goes right after,
-    // with nothing else in between. Opens (or focuses) the shared Downloads
-    // window up front, before we even know the user won't cancel the
-    // folder picker next — a known, harmless quirk (see CHANGELOG): the
-    // popup can pop up even on a cancelled pick. It's never auto-closed for
-    // this, since it may already be gathering other, unrelated downloads.
-    const canStream = supportsDirectoryPicker()
-    const opened = canStream ? openDownloadWindow() : null
-
-    let dir: FileSystemDirectoryHandle | null = null
-    if (canStream) {
-      try {
-        dir = await resolveDownloadDirectory()
-        if (!dir) return // user cancelled the picker
-      } catch (err) {
-        alert(err instanceof Error ? err.message : String(err))
+    setDownloadingAllId(d.id)
+    try {
+      const detail = await getDownload(apiKey, d.id)
+      const files = detail.files.filter((f) => f.provider_file_id)
+      if (files.length === 0) {
+        alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
         return
       }
+      const failed: string[] = []
+      for (const f of files) {
+        try {
+          const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
+          window.open(url, '_blank', 'noopener,noreferrer')
+        } catch (err) {
+          console.error(`Failed to download ${f.path}`, err)
+          failed.push(f.path)
+        }
+      }
+      if (failed.length > 0) {
+        alert(`${failed.length} of ${files.length} file(s) failed to download:\n${failed.join('\n')}`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloadingAllId(null)
     }
+  }
+
+  // Triggered by DownloadOptionsDialog's confirm — folder and the
+  // Downloads-window choice are already decided by then, so this only ever
+  // streams (never a tab-per-file fallback; that path never opens the
+  // dialog in the first place — see handleDownloadAll).
+  async function startStreamedDownload(d: Download, opts: DownloadOptions) {
+    if (!apiKey) return
+
+    // Deliberately the first statement, before any await — window.open()
+    // is synchronous, and this needs the dialog confirm button's own click
+    // gesture, same requirement as showDirectoryPicker(). Only actually
+    // opens/focuses the popup when the user left "Send to the Downloads
+    // window" checked.
+    const opened = opts.useDownloadManager ? openDownloadWindow() : null
 
     // Popup path: hand the whole batch off and return immediately — the
     // popup owns fetching/writing every file from here on, independent of
     // this tab. Its progress/completion arrive via the
     // listenForDownloadWindowMessages relay set up above.
-    if (dir && opened) {
+    if (opened) {
       try {
         const detail = await getDownload(apiKey, d.id)
         const files = detail.files.filter((f) => f.provider_file_id)
@@ -227,7 +254,7 @@ export default function App() {
         await sendBatchToDownloadWindow(opened, {
           downloadId: d.id,
           downloadName: d.name,
-          directoryHandle: dir,
+          directoryHandle: opts.folder,
           files: files.map((f) => ({ path: f.path, providerFileId: f.provider_file_id as string, sizeBytes: f.size_bytes })),
         })
       } catch (err) {
@@ -238,10 +265,8 @@ export default function App() {
       return
     }
 
-    // Fallback: either the popup was blocked (opened is null, dir is still
-    // set) or this browser can't stream to a folder at all (dir is null) —
-    // same in-tab loop as before either way, choosing per-file between
-    // streaming to dir and opening a tab per file.
+    // In-tab streaming: either the checkbox was unchecked, or the popup was
+    // blocked — either way, stream straight to the chosen folder here.
     setDownloadingAllId(d.id)
     try {
       const detail = await getDownload(apiKey, d.id)
@@ -251,27 +276,20 @@ export default function App() {
         return
       }
 
-      // Only meaningful for the streamed-to-folder path (dir set) — a
-      // window.open per file, in the fallback path, hands off to the
-      // browser immediately with nothing left for us to track.
       const totalBytes = files.reduce((sum, f) => sum + f.size_bytes, 0)
       let loadedBytes = 0
-      if (dir) setDownloadProgress({ loaded: 0, total: totalBytes })
+      setDownloadProgress({ loaded: 0, total: totalBytes })
 
       const failed: string[] = []
       for (const f of files) {
         try {
           const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
-          if (dir) {
-            const resp = await fetch(url)
-            if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-            await writeFileToDirectory(dir, f.path, resp, (chunkBytes) => {
-              loadedBytes += chunkBytes
-              setDownloadProgress({ loaded: loadedBytes, total: totalBytes })
-            })
-          } else {
-            window.open(url, '_blank', 'noopener,noreferrer')
-          }
+          const resp = await fetch(url)
+          if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+          await writeFileToDirectory(opts.folder, f.path, resp, (chunkBytes) => {
+            loadedBytes += chunkBytes
+            setDownloadProgress({ loaded: loadedBytes, total: totalBytes })
+          })
         } catch (err) {
           console.error(`Failed to download ${f.path}`, err)
           failed.push(f.path)
@@ -360,6 +378,13 @@ export default function App() {
       </main>
 
       {selectedId && <DownloadDetail apiKey={apiKey} id={selectedId} onClose={() => setSelectedId(null)} />}
+      {downloadDialogFor && (
+        <DownloadOptionsDialog
+          download={downloadDialogFor}
+          onClose={() => setDownloadDialogFor(null)}
+          onConfirm={(opts) => startStreamedDownload(downloadDialogFor, opts)}
+        />
+      )}
       {addOpen && (
         <AddDownload
           apiKey={apiKey}

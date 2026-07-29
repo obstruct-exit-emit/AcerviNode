@@ -1023,3 +1023,44 @@ table.detail-files tbody tr:last-child td {
   opacity: 0.6;
   cursor: default;
 }
+
+/* DownloadOptionsDialog */
+.download-options-panel {
+  max-width: 440px;
+}
+
+.download-manager-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 4px 0 16px;
+}
+
+.download-options-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.download-options-actions button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.download-options-actions button.download-options-confirm {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.download-options-confirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

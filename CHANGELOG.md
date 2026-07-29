@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Confirm dialog before a streamed "Download all" starts**
+  (`web/src/components/DownloadOptionsDialog.tsx`): clicking the row button
+  used to immediately start fetching — folder and Downloads-popup hand-off
+  were both decided silently underneath it (remembered default folder,
+  always try the popup). Now, in any browser that supports streaming to a
+  folder, it opens a small dialog first showing the folder it's about to
+  use (with a "Change folder" button, same picker as Settings → Downloads)
+  and a checkbox for whether to send the batch to the shared Downloads
+  window at all — unchecking it streams in the current tab instead, for
+  someone who'd rather not have that window open. Nothing starts until
+  "Download" is clicked. Split the old combined `handleDownloadAllIndividual`
+  into two: it now only covers the plain tab-per-file fallback (browsers
+  without File System Access — nothing to choose there, so it never opens
+  the dialog), and a new `startStreamedDownload(d, opts)` — triggered by the
+  dialog's confirm — takes the already-chosen folder and Downloads-window
+  choice directly instead of resolving either itself. `openDownloadWindow()`
+  still has to be the confirm button's very first synchronous statement
+  (before any `await`) for the same user-activation reason as before — the
+  dialog's "Change folder" button already ran its own picker earlier, as
+  its own separate gesture, so by the time "Download" is clicked the folder
+  is already resolved and only the popup itself still needs a live gesture.
 - **Shared "Downloads" popup window for streamed multi-file downloads**: a
   streamed-to-folder "Download all" (individual files) previously died the
   moment its tab was closed or navigated away from — there's no browser-level

@@ -444,6 +444,18 @@ designing it solo.
   One window gathers every batch rather than one popup per download. See the
   [CHANGELOG](CHANGELOG.md) for the full design and its several
   not-yet-verified-by-a-real-click caveats.
+- Immediate follow-on: fixed live, right after the popup feature's first
+  real use — every file failed silently with no folder prompt. Root cause:
+  a directory handle's write permission is checked per browsing context,
+  not just per origin, so the popup's postMessage-cloned handle wasn't
+  actually granted access there even though the main window already had
+  it. The popup now asks for its own permission (a real "Grant folder
+  access" button click) before writing, and surfaces the real per-file
+  error instead of a bare failure count.
+- Immediate follow-on: a confirm dialog (`DownloadOptionsDialog.tsx`) now
+  shows before a streamed "Download all" starts, showing the destination
+  folder (with a change-folder control) and a checkbox for whether to use
+  the Downloads window at all, rather than both being decided silently.
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across
