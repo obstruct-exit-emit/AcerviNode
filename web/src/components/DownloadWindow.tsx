@@ -61,6 +61,30 @@ export function DownloadWindow() {
   // directoryHandle) plus the size total already computed for it.
   const pending = useRef<Record<string, { batch: AddBatchMessage; totalBytes: number }>>({})
   const channelRef = useRef<BroadcastChannel | null>(null)
+  const baseTitleRef = useRef(document.title)
+
+  // window.focus() called on ourselves from a BroadcastChannel handler (no
+  // direct user gesture in this context) is exactly the "popup keeps
+  // stealing focus" pattern Chromium deliberately blocks, so it's
+  // best-effort only — it might do nothing. Flashing the title is the
+  // fallback that actually always works, no permission needed: it changes
+  // what's visible in the taskbar/alt-tab switcher even while genuinely
+  // backgrounded, and clears itself the moment the user does bring this
+  // window to the front.
+  useEffect(() => {
+    function onFocus() {
+      document.title = baseTitleRef.current
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
+
+  function bumpToForeground() {
+    window.focus()
+    if (!document.hasFocus()) {
+      document.title = `🔴 New download — ${baseTitleRef.current}`
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -68,6 +92,7 @@ export function DownloadWindow() {
     async function handleBatch(batch: AddBatchMessage) {
       if (processing.current.has(batch.downloadId)) return
       processing.current.add(batch.downloadId)
+      bumpToForeground()
 
       const totalBytes = batch.files.reduce((sum, f) => sum + f.sizeBytes, 0)
 
@@ -111,7 +136,7 @@ export function DownloadWindow() {
             ch.postMessage({ type: 'popup-ready' })
             break
           case 'focus-request':
-            window.focus()
+            bumpToForeground()
             break
           case 'add-batch':
             handleBatch(e.data)
