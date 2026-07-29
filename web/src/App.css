@@ -621,6 +621,11 @@ table.downloads tbody tr:hover {
   background: var(--border);
 }
 
+.download-window-icon-btn.retry:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .download-window-item .progress-track {
   display: block;
   width: 100%;

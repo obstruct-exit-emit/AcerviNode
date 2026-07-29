@@ -37,6 +37,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing. It's now cleared the moment a batch finishes, however it
   finishes (done, error, or stopped), so re-downloading — from the main
   app or the popup's own Retry button — always works.
+  - Immediate follow-on, requested by the user after trying it live: a
+    stopped batch gets its own "↻ Retry" icon button too, in the header
+    next to Dismiss — `processBatch` always processes files in array order
+    and breaks the instant it's aborted, so `filesDone` at that moment is
+    exactly how many files at the start of the array actually finished.
+    Retrying a stop reprocesses everything from there on (`files.slice
+    (filesDone)`), including the one interrupted mid-write, redone from
+    scratch rather than resumed byte-for-byte (no offset-tracking yet —
+    that's the pause/resume roadmap item).
 - **Fixed a real bug found live: some torrents never got a real hash.** The
   user noticed some Manual torrents had a hash and some didn't and asked
   why. Traced against their real TorBox account: a torrent's provider-side

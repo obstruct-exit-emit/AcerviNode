@@ -211,6 +211,21 @@ export function DownloadWindow() {
     handleBatch(retryBatch)
   }
 
+  // Rebuilds a batch from whatever a Stop left un-attempted. processBatch
+  // always processes files in order and breaks the instant it's aborted, so
+  // filesDone at that moment is exactly how many files at the start of the
+  // array actually finished — everything from there on (including the one
+  // interrupted mid-write, redone from scratch; there's no byte-offset
+  // resume yet, see the pause/resume roadmap item) is what's left to retry.
+  function retryStopped(downloadId: string) {
+    const original = lastBatch.current[downloadId]
+    const current = batches[downloadId]
+    if (!original || !current) return
+    const remaining = original.files.slice(current.filesDone)
+    if (remaining.length === 0) return
+    handleBatch({ ...original, files: remaining })
+  }
+
   function dismissBatch(downloadId: string) {
     setBatches((prev) => {
       if (!(downloadId in prev)) return prev
@@ -332,6 +347,11 @@ export function DownloadWindow() {
                   {b.status === 'downloading' && (
                     <button className="download-window-icon-btn stop" onClick={() => stopBatch(b.downloadId)} title="Stop this download">
                       ⏹
+                    </button>
+                  )}
+                  {b.status === 'stopped' && (
+                    <button className="download-window-icon-btn retry" onClick={() => retryStopped(b.downloadId)} title="Retry remaining files">
+                      ↻
                     </button>
                   )}
                   {canDismiss && (
