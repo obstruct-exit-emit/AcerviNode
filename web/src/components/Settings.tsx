@@ -453,11 +453,12 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
           </label>
         </div>
         <p className="settings-help">
-          Individual files are streamed straight into a folder you pick (Chromium-based browsers
-          only — Firefox/Safari open one tab per file instead). Zip resolves the whole download as
-          one provider-zipped archive. Either way, both options stay available per-download in the
-          detail view — this only sets the per-row button's default. Stored in this browser only,
-          not on the server.
+          Applies to the Manual tab only — a Managed download is already being fetched to local disk
+          automatically, so there's nothing to manually download. Individual files are streamed
+          straight into a folder you pick (Chromium-based browsers only — Firefox/Safari open one tab
+          per file instead). Zip resolves the whole download as one provider-zipped archive. Either
+          way, both options stay available per-download in the detail view — this only sets the
+          per-row button's default. Stored in this browser only, not on the server.
         </p>
       </section>
     </div>

@@ -201,11 +201,16 @@ added, never changed afterward:
   only knows the compat shims), or *discovered* — see below. Never
   auto-fetched; `ListDownloadsDueForRetry` filters to `arr` only, so a manual
   download sitting in `provider_completed` just stays there, and the user
-  grabs files on demand via the same per-file/zip-link endpoints Managed
-  downloads use. Shown in the web UI's **Manual** tab. Retry/Re-add aren't
-  offered for a manual download in `error` state either — there's no local
-  fetch attempt to retry, the row is just reflecting the provider's own live
-  state (see [State mapping](#state-mapping) above for how it gets there).
+  grabs files on demand via the per-file/zip-link endpoints (see
+  [Direct file downloads](api.md#direct-file-downloads)) instead. Shown in
+  the web UI's **Manual** tab, which is also the only place those manual-grab
+  buttons appear at all — a Managed download is already being auto-fetched,
+  so the UI doesn't offer a redundant manual download for it (the endpoints
+  themselves don't restrict by AddedVia; this is purely a web UI choice).
+  Retry/Re-add aren't offered for a manual download in `error` state either
+  — there's no local fetch attempt to retry, the row is just reflecting the
+  provider's own live state (see [State mapping](#state-mapping) above for
+  how it gets there).
 
 **Discovery** is what makes an item added directly through TorBox's own
 site/app — not through AcerviNode at all — show up in Manual too, not just

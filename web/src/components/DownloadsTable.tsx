@@ -89,7 +89,11 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
                   ↻
                 </button>
               )}
-              {HAS_FILES_STATES.has(d.state) && (
+              {/* Manual-download actions only make sense for a Manual
+                  download — a Managed one is already being auto-fetched to
+                  local disk by internal/importer, so there's nothing to
+                  manually grab. */}
+              {d.added_via === 'manual' && HAS_FILES_STATES.has(d.state) && (
                 <button
                   className="download-all-btn-sm"
                   onClick={(e) => {

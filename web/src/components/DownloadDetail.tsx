@@ -209,7 +209,11 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
 
             <div className="files-header">
               <h3>Files</h3>
-              {detail.files.length > 0 && (
+              {/* Manual-download actions only make sense for a Manual
+                  download — a Managed one is already being auto-fetched to
+                  local disk by internal/importer, so there's nothing to
+                  manually grab. */}
+              {detail.added_via === 'manual' && detail.files.length > 0 && (
                 <button type="button" className="zip-btn" onClick={handleDownloadZip} disabled={zipStatus.kind === 'resolving'}>
                   {zipStatus.kind === 'resolving' ? 'Resolving…' : 'Download all (zip)'}
                 </button>
@@ -224,7 +228,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                   <tr>
                     <th>Path</th>
                     <th>Size</th>
-                    <th />
+                    {detail.added_via === 'manual' && <th />}
                   </tr>
                 </thead>
                 <tbody>
@@ -232,19 +236,21 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                     <tr key={f.path}>
                       <td className="mono">{f.path}</td>
                       <td>{formatBytes(f.size_bytes)}</td>
-                      <td>
-                        {f.provider_file_id && (
-                          <button
-                            type="button"
-                            className="download-file-btn"
-                            onClick={() => handleDownloadFile(f)}
-                            disabled={resolvingPath === f.path}
-                            title="Download directly from the provider"
-                          >
-                            {resolvingPath === f.path ? 'Resolving…' : 'Download'}
-                          </button>
-                        )}
-                      </td>
+                      {detail.added_via === 'manual' && (
+                        <td>
+                          {f.provider_file_id && (
+                            <button
+                              type="button"
+                              className="download-file-btn"
+                              onClick={() => handleDownloadFile(f)}
+                              disabled={resolvingPath === f.path}
+                              title="Download directly from the provider"
+                            >
+                              {resolvingPath === f.path ? 'Resolving…' : 'Download'}
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

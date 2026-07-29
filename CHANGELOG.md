@@ -39,6 +39,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - New migration (`0004_added_via.sql`): `downloads.added_via` (default
     `arr`, so every existing row is correctly classified without a backfill
     step) plus the `discovery_baseline`/`discovery_seeded` tables.
+  - Follow-on, immediately after shipping: the manual-download actions (the
+    downloads table's per-row "Download all" button, and the detail view's
+    per-file "Download"/"Download all (zip)" buttons) no longer appear for a
+    Managed download at all — it's already being auto-fetched to local disk,
+    so a manual grab is redundant there; those buttons are Manual-tab-only
+    now. The underlying endpoints (`.../files/{fileId}/link`, `.../zip-link`)
+    are unchanged and still work for any download's id — this is purely a
+    web UI choice about which buttons to show, not a new restriction.
 
 ### Fixed
 

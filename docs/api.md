@@ -127,7 +127,12 @@ itself makes when fetching a file (see
 [Providers](providers.md#completed-download-handling)) — AcerviNode doesn't
 proxy, cache, or otherwise sit in the middle of the actual transfer, it just
 hands back what the provider gave it. The web UI's detail view shows a
-"Download" button per file once `provider_file_id` is available.
+"Download" button per file once `provider_file_id` is available — only for
+a Manual download, though; a Managed one is already being auto-fetched to
+local disk, so the UI doesn't offer a redundant manual grab for it (see
+[Providers](providers.md#managed-vs-manual)). The endpoint itself doesn't
+care either way — it works for any download's id, this is purely a web UI
+choice about which buttons to show.
 
 Two auth models meet at this boundary, deliberately: the `link` call itself
 needs AcerviNode's own `Authorization: Bearer <api_key>` like every other
@@ -140,11 +145,12 @@ to the URL in the response.
 `GET /api/v1/downloads/{id}/zip-link` is the "download everything" version
 — one URL for the whole download, zipped provider-side, rather than
 resolving and downloading each file separately. It's an explicit opt-in,
-not the default: the web UI's per-row "Download all" button in the
-downloads table downloads files individually (calling the per-file `link`
-endpoint once per file), and `zip-link` is instead offered as a "Download
-all (zip)" button in the detail view, for whoever wants one archive
-instead of several browser downloads. TorBox supports this via an
+not the default: the Manual tab's per-row "Download all" button downloads
+files individually (calling the per-file `link` endpoint once per file),
+and `zip-link` is instead offered as a "Download all (zip)" button in the
+detail view, for whoever wants one archive instead of several browser
+downloads. Neither button appears for a Managed download — see above.
+TorBox supports this via an
 undocumented `zip_link=true` parameter on the same `requestdl` endpoint
 (confirmed live, not found in any published docs — see
 [Providers](providers.md#torbox-internaldebridtorbox)).
