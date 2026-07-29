@@ -2,6 +2,7 @@ package qbittorrent
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"sync"
@@ -68,7 +69,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusBadRequest, "Fails.")
 		return
 	}
-	if r.FormValue("password") != s.apiKey.APIKey() {
+	// Constant-time, matching the native API's own auth check (see
+	// internal/api/auth.go) — a plain != comparison here would be the one
+	// auth entry point in the app not following that convention.
+	if subtle.ConstantTimeCompare([]byte(r.FormValue("password")), []byte(s.apiKey.APIKey())) != 1 {
 		writeText(w, http.StatusOK, "Fails.")
 		return
 	}

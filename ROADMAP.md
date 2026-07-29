@@ -353,6 +353,23 @@ fix's exact string were both confirmed against real data, not just reasoned
 about. All existing abilities not touched by a fix were re-verified working
 via the full test suite plus live spot checks; nothing else turned up.
 
+- **Second pass, done proactively while the user was at work**: this code
+  hadn't had a fresh look since the QA pass above, while everything shipped
+  in the meantime (the Downloads popup subsystem, Phase 7's follow-ons) had
+  already been separately reviewed as it landed. Read through the TorBox
+  client/provider/adapters, both compat shims, `internal/importer`, and the
+  native API again in full. Found one real, confirmed issue: the qBittorrent
+  and SABnzbd shims' auth checks used a plain `!=` comparison while the
+  native API's own auth deliberately uses `crypto/subtle.ConstantTimeCompare`
+  — brought both shims in line with that convention. Also used the same
+  live-account-audit technique that found the torrent hash bug: no new data
+  bugs turned up, but a real usenet download's expiration from TorBox's
+  `mylist` mid-audit reconfirmed the vanished-download scenario applies to
+  usenet too, not just torrents (see the 💡 item below), and left
+  `RequestUsenetZipDownloadLink` still unverified — the window to test it
+  against a real download closed before the test could run. See the
+  [CHANGELOG](CHANGELOG.md) for full detail.
+
 ## Phase 7 — Managed vs. Manual downloads ✅
 
 Prompted directly by the user: not every download should be auto-fetched to
@@ -535,6 +552,10 @@ take a while to be indexed anywhere (mylist or the pre-processing queue) and
 a single-miss rule would wrongly flag it "gone" while it's still just new.
 That's real design work (a missing-since timestamp or counter, tuned against
 how long TorBox actually takes to index something), not a one-line fix.
+Reconfirmed during a later live-account audit — a real usenet download
+expired from TorBox's own `mylist` while still cached locally as
+`provider_completed`, the same scenario previously only confirmed for a
+torrent — so this applies to both kinds equally, not just one.
 
 💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
 restart**: requested by the user after the Downloads popup work above. Once a

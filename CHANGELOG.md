@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Systematic code-review pass over Phases 1–6** (TorBox client, both
+  compat shims, `internal/importer`, the native API), done proactively
+  while the user was at work — everything shipped in this session's recent
+  streak had already been re-checked; this covered the older code that
+  hadn't had a fresh look since Phase 6's own QA pass. Read through every
+  file in `internal/debrid/torbox`, `internal/qbittorrent`,
+  `internal/sabnzbd`, `internal/importer/importer.go`, and `internal/api`
+  (add/downloads/settings/server) looking specifically for logic bugs,
+  race conditions, and inconsistencies between the two compat shims (which
+  are supposed to mirror each other's behavior).
+
+  **Found and fixed one real, confirmed issue**: the native API's own auth
+  check (`internal/api/auth.go`) deliberately uses
+  `crypto/subtle.ConstantTimeCompare` for its API-key comparison, explicitly
+  documented as "matching LibriNode's credential-check convention" — but
+  the qBittorrent shim's login (`password` field) and the SABnzbd shim's
+  `apikey` check both used a plain `!=` string comparison instead, a timing
+  side-channel the native API deliberately guards against. Brought both in
+  line with the same constant-time convention. Verified live: the real key
+  still authenticates correctly on the qBittorrent shim's login endpoint,
+  a wrong one is still rejected.
+
+  Everything else held up: TorBox client/provider/adapters, both compat
+  shims' request handling, `internal/importer`'s concurrency and retry
+  logic, and the native API's add/re-add/settings handlers. One thing
+  noted but deliberately not changed — `internal/qbittorrent/torrents.go`'s
+  `handleFiles` reports every file's progress as a flat 100%, unconditional
+  on the torrent's own actual progress; left alone since Sonarr/Radarr only
+  really consult this endpoint for file-name matching once a download is
+  already complete, where that's correct anyway, and there's no live
+  evidence it causes a real problem.
+
+- **Live-account audit** (the technique that found the torrent hash-backfill
+  bug earlier, applied again): checked the 4 currently-tracked downloads
+  for anomalies. No new data bugs found. One inconclusive result worth
+  recording rather than silently dropping: a real usenet download existed
+  on the account (a chance to finally verify `RequestUsenetZipDownloadLink`,
+  unverified since it was written), but it had already expired from TorBox's
+  actual `mylist` (confirmed directly against TorBox's own API — 0 usenet
+  items) by the time it was tested, so the zip-link call correctly errored
+  with "not found" rather than confirming or refuting the zip-link path
+  itself. Still unverified; watch for another live usenet download to test
+  against. The expiration itself is a second, live confirmation of the
+  already-documented "vanished Manual download" ROADMAP item — this time
+  on a usenet download rather than a torrent — which continues to be
+  handled reactively (a clear `files_error` once someone clicks in) but not
+  proactively, exactly as already documented there.
+
 - **Fixed a real bug found during a self-review pass** (done proactively
   while the user was away, specifically to catch issues in code shipped
   overnight without live testing): a file that genuinely failed partway

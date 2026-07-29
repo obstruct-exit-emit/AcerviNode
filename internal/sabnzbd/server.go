@@ -5,6 +5,7 @@
 package sabnzbd
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 
@@ -61,7 +62,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// though we ignore its error here.
 	_ = r.ParseMultipartForm(64 << 20)
 
-	if r.FormValue("apikey") != s.apiKey.APIKey() {
+	// Constant-time, matching the native API's own auth check (see
+	// internal/api/auth.go) — a plain != comparison here would be the one
+	// auth entry point in the app not following that convention.
+	if subtle.ConstantTimeCompare([]byte(r.FormValue("apikey")), []byte(s.apiKey.APIKey())) != 1 {
 		writeJSON(w, map[string]any{"status": false, "error": "API Key Incorrect"})
 		return
 	}
