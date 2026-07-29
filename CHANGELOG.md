@@ -42,6 +42,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Manual downloads sitting at `provider_completed` showed a "Fetching" state
+  badge — spotted by the user directly in the Manual tab right after
+  shipping it. That label was accurate for a Managed download (where
+  `provider_completed` really does mean `internal/importer` is about to
+  fetch it) but a leftover from before Manual downloads existed: a Manual
+  download is never auto-fetched at all, so "Fetching" was an outright lie,
+  even though nothing was actually wrong on the backend (confirmed live: the
+  two affected downloads were untouched, still sitting at `provider_completed`
+  with no fetch attempt against either). `StateBadge` now takes `added_via`
+  and shows "Available" instead, for that one state/added_via combination
+  only — every other label is unchanged.
+
 A full QA pass over every existing ability and setting, prompted by a direct
 request to audit and fix rather than a specific bug report. Found via a
 systematic code review of every package plus live testing against the real

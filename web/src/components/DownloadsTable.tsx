@@ -66,7 +66,7 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
             <td>{d.protocol}</td>
             <td>{d.category || '—'}</td>
             <td>
-              <StateBadge state={d.state} />
+              <StateBadge state={d.state} addedVia={d.added_via} />
             </td>
             <td>
               <div className="progress-track">

@@ -130,7 +130,7 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
               <div>
                 <dt>State</dt>
                 <dd>
-                  <StateBadge state={detail.state} />
+                  <StateBadge state={detail.state} addedVia={detail.added_via} />
                 </dd>
               </div>
               <div>
