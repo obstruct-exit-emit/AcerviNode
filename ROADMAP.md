@@ -434,6 +434,16 @@ designing it solo.
   callback instead of a blind `pipeTo`. Scoped to that one path on purpose —
   the tab-per-file fallback and the per-file/zip buttons already get real
   progress for free from the browser's own download manager once handed off.
+- Immediate follow-on, prompted by the user asking for a custom-button
+  `beforeunload` prompt: that specific ask isn't implementable (every modern
+  browser strips all customization from the native close/navigate dialog on
+  purpose), so reframed around the real underlying goal instead — a shared
+  "Downloads" popup window (`web/src/components/DownloadWindow.tsx`) that a
+  streamed multi-file "Download all" hands its whole batch off to over
+  `postMessage`, so the download keeps running even if the main tab closes.
+  One window gathers every batch rather than one popup per download. See the
+  [CHANGELOG](CHANGELOG.md) for the full design and its several
+  not-yet-verified-by-a-real-click caveats.
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across

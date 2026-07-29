@@ -8,6 +8,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Shared "Downloads" popup window for streamed multi-file downloads**: a
+  streamed-to-folder "Download all" (individual files) previously died the
+  moment its tab was closed or navigated away from — there's no browser-level
+  background process carrying a File System Access stream the way there is
+  for a native browser download. The underlying request was for a real
+  three-option `beforeunload` prompt ("stay" / "abort and leave" / "open a
+  window for downloads"), but that's not implementable: every modern browser
+  deliberately strips all customization from the native close/navigate
+  dialog (anti-abuse restriction, no exceptions), so a custom-button
+  `beforeunload` prompt simply doesn't exist as an API surface. Reframed
+  instead around what the user actually wanted — not losing the download —
+  via a small, separate "Downloads" popup window
+  (`web/src/components/DownloadWindow.tsx`, served from the same bundle via
+  a `?popup=downloads` query param checked in `main.tsx`, so no second Vite
+  build target or Go route was needed) that the row button hands the whole
+  batch off to over `postMessage` (`web/src/downloadWindowProtocol.ts`) —
+  including the `FileSystemDirectoryHandle` itself, which travels as an
+  ordinary structured-clone property. Once the popup owns a batch, it keeps
+  fetching and streaming files to disk independent of whatever happens to the
+  main tab afterward. One shared window gathers every batch rather than
+  spawning one popup per download (`openDownloadWindow()` in
+  `web/src/fsAccess.ts` reuses an already-open popup via `window.open`'s
+  named-window behavior); a ready-handshake (`popup-ready` message + a
+  `ready` promise the sender awaits) avoids a race where a batch is posted
+  before the popup's own listener has registered. `handleDownloadAllIndividual`
+  now opens/focuses the popup synchronously (no `await` before it, same
+  user-activation requirement as the folder picker) before resolving the
+  download directory, hands off to the popup if both succeed, and falls back
+  to the previous in-tab streaming loop if the popup was blocked, or the
+  tab-per-file fallback if this browser doesn't support File System Access at
+  all. **Known caveats, none of them verified by a real click in a real
+  browser yet**: (1) `FileSystemDirectoryHandle`'s cross-window
+  structured-clone transfer is asserted from spec knowledge, not observed;
+  (2) the ordering that's supposed to preserve user-activation for both
+  `window.open()` and the folder picker within one click is reasoned about,
+  not measured; (3) the popup can pop up/focus even when the user then
+  cancels the folder picker, since opening it has to happen before we know
+  whether picking will succeed — deliberately not auto-closed on cancel,
+  since it may already be gathering other, unrelated downloads; (4) a
+  completed or failed batch has no way to be dismissed from the popup's list
+  — it stays until the popup itself is closed; (5) re-triggering "Download
+  all" for the same download a second time (e.g. to retry failed files)
+  while its first batch is still tracked in the popup's `processing` set is
+  silently a no-op there. The main window's own row-level progress
+  indicator also only ever reflects the most recently active batch if more
+  than one is running in the popup at once — the popup's own list is the
+  real, always-accurate source of truth for concurrent downloads regardless.
 - **Progress bar for the Manual tab's multi-file "Download all"**: the
   streamed-to-folder path (File System Access) previously just showed a
   static "…" for the whole batch, however long it took. `writeFileToDirectory`

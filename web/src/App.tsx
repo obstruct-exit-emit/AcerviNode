@@ -21,7 +21,14 @@ import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
-import { resolveDownloadDirectory, supportsDirectoryPicker, writeFileToDirectory } from './fsAccess'
+import {
+  listenForDownloadWindowMessages,
+  openDownloadWindow,
+  resolveDownloadDirectory,
+  sendBatchToDownloadWindow,
+  supportsDirectoryPicker,
+  writeFileToDirectory,
+} from './fsAccess'
 import { getDownloadMode } from './preferences'
 import './App.css'
 
@@ -86,6 +93,26 @@ export default function App() {
     const interval = setInterval(() => refresh(apiKey), POLL_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [apiKey, refresh])
+
+  // Relays the Downloads popup window's progress back into this row's own
+  // progress bar — best-effort and, for now, single-row: if two downloads
+  // are both running in the popup at once, this only ever reflects whichever
+  // sent the most recent message. The popup itself always shows every batch
+  // at once regardless, so nothing is actually lost, just not mirrored here.
+  useEffect(() => {
+    return listenForDownloadWindowMessages((msg) => {
+      if (msg.type === 'batch-progress') {
+        setDownloadingAllId(msg.downloadId)
+        setDownloadProgress({ loaded: msg.loaded, total: msg.total })
+      } else if (msg.type === 'batch-complete') {
+        setDownloadingAllId((current) => (current === msg.downloadId ? null : current))
+        setDownloadProgress(null)
+        if (msg.failed.length > 0) {
+          alert(`${msg.failed.length} file(s) failed to download:\n${msg.failed.join('\n')}`)
+        }
+      }
+    })
+  }, [])
 
   function handleKeySubmit(key: string) {
     storeApiKey(key)
@@ -160,11 +187,20 @@ export default function App() {
   async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
 
-    // Must happen first, before any other await — resolving (and
-    // potentially prompting for) a directory needs the click's own
-    // user-activation, which an intervening API call consumes.
+    // Both the popup and directory resolution need this click's own live
+    // user-activation, so both must happen before any other await —
+    // window.open() is synchronous (no await ahead of it), so it goes
+    // first; resolveDownloadDirectory()'s picker fallback goes right after,
+    // with nothing else in between. Opens (or focuses) the shared Downloads
+    // window up front, before we even know the user won't cancel the
+    // folder picker next — a known, harmless quirk (see CHANGELOG): the
+    // popup can pop up even on a cancelled pick. It's never auto-closed for
+    // this, since it may already be gathering other, unrelated downloads.
+    const canStream = supportsDirectoryPicker()
+    const opened = canStream ? openDownloadWindow() : null
+
     let dir: FileSystemDirectoryHandle | null = null
-    if (supportsDirectoryPicker()) {
+    if (canStream) {
       try {
         dir = await resolveDownloadDirectory()
         if (!dir) return // user cancelled the picker
@@ -174,6 +210,38 @@ export default function App() {
       }
     }
 
+    // Popup path: hand the whole batch off and return immediately — the
+    // popup owns fetching/writing every file from here on, independent of
+    // this tab. Its progress/completion arrive via the
+    // listenForDownloadWindowMessages relay set up above.
+    if (dir && opened) {
+      try {
+        const detail = await getDownload(apiKey, d.id)
+        const files = detail.files.filter((f) => f.provider_file_id)
+        if (files.length === 0) {
+          alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
+          return
+        }
+        setDownloadingAllId(d.id)
+        setDownloadProgress({ loaded: 0, total: files.reduce((sum, f) => sum + f.size_bytes, 0) })
+        await sendBatchToDownloadWindow(opened, {
+          downloadId: d.id,
+          downloadName: d.name,
+          directoryHandle: dir,
+          files: files.map((f) => ({ path: f.path, providerFileId: f.provider_file_id as string, sizeBytes: f.size_bytes })),
+        })
+      } catch (err) {
+        alert(err instanceof Error ? err.message : String(err))
+        setDownloadingAllId(null)
+        setDownloadProgress(null)
+      }
+      return
+    }
+
+    // Fallback: either the popup was blocked (opened is null, dir is still
+    // set) or this browser can't stream to a folder at all (dir is null) —
+    // same in-tab loop as before either way, choosing per-file between
+    // streaming to dir and opening a tab per file.
     setDownloadingAllId(d.id)
     try {
       const detail = await getDownload(apiKey, d.id)

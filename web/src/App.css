@@ -547,6 +547,54 @@ table.downloads tbody tr:hover {
   border-radius: 4px;
 }
 
+/* The small popup "Downloads" window (components/DownloadWindow.tsx) —
+   deliberately plain, it's a status-only window meant to sit minimized in
+   the background, not a second copy of the main UI. */
+.download-window {
+  padding: 16px;
+  max-width: 100%;
+}
+
+.download-window-title {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.download-window-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.download-window-item {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.download-window-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-window-item .progress-track {
+  display: block;
+  width: 100%;
+  margin: 0 0 6px;
+}
+
+.download-window-item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
 .delete-btn:hover {
   color: var(--state-error);
   background: color-mix(in srgb, var(--state-error) 10%, transparent);
