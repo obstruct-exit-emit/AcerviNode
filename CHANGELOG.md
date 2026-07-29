@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Fixed a real bug found during a self-review pass** (done proactively
+  while the user was away, specifically to catch issues in code shipped
+  overnight without live testing): a file that genuinely failed partway
+  through a batch, followed by the user clicking Stop, silently vanished —
+  `filesDone` counts every file *attempted* (success or failure), not just
+  successes, since `processBatch` only skips incrementing it when a file
+  is interrupted by the abort itself. That meant three things went wrong
+  together: `reportComplete` unconditionally sent an empty failed list to
+  every main window whenever a batch was stopped (so the earlier real
+  failure raised no alert), the popup's own render only showed the failed-
+  file list for `status === 'error'`, never `'stopped'` (so it was
+  invisible there too), and `retryStopped`'s `files.slice(filesDone)` slice
+  treated the failed file as "done," so it would never be retried — a real
+  failure, permanently and silently dropped. Fixed by: always reporting
+  the true `failed` array regardless of whether the batch was stopped;
+  showing the failed-file list under a `'stopped'` status too, not just
+  `'error'`; and having `retryStopped` retry both the not-yet-attempted
+  suffix *and* anything in the failed list, rather than only the suffix.
+  Also restored a "clear the path and save to remove it" hint to the new
+  Save path overrides help text, dropped by mistake during last night's
+  redesign even though `CategoryPathRow` still supports it unchanged.
+
 - **Simplified Settings' Categories section into "Save path overrides."**
   Built overnight, continuing the conversation from the placeholder-category
   removal above: once that was gone, the remaining category list's only

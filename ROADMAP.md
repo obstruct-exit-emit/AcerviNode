@@ -494,6 +494,13 @@ designing it solo.
   Verified live via the API (set/confirm/clear an override for a
   never-before-seen category name) — the visual layout itself couldn't be
   checked without a browser and needs a look. See the [CHANGELOG](CHANGELOG.md).
+- Self-review pass, done proactively while the user was at work — nothing
+  reported broken, but code shipped without live testing deserved a second
+  look before it got found live instead. Found and fixed one real bug: a
+  file that genuinely failed before a later Stop click was silently
+  dropped — invisible in the popup, never reported to the main window, and
+  never retried, since `filesDone` (what `retryStopped` sliced on) counts
+  every attempted file, not just successes. See the [CHANGELOG](CHANGELOG.md).
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across

@@ -188,10 +188,13 @@ export function DownloadWindow() {
         ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], status: stopped ? 'stopped' : failed.length > 0 ? 'error' : 'done', failed } }
         : prev,
     )
-    // A deliberate Stop is reported as a no-op completion (empty failed
-    // list) — it's not a failure, and every main window's row should just
-    // go back to idle rather than showing a failure alert for it.
-    reportComplete(batch.downloadId, stopped ? [] : failed)
+    // Always the real list, even when stopped — a file that genuinely
+    // failed before the Stop click is a real failure regardless of what
+    // happened afterward, not something to hide just because the batch
+    // didn't run to completion. (A stop with nothing having failed yet
+    // naturally has an empty failed here already, so this isn't a
+    // regression for the "just stopped, nothing wrong" case.)
+    reportComplete(batch.downloadId, failed)
   }
 
   function stopBatch(downloadId: string) {
@@ -211,17 +214,22 @@ export function DownloadWindow() {
     handleBatch(retryBatch)
   }
 
-  // Rebuilds a batch from whatever a Stop left un-attempted. processBatch
-  // always processes files in order and breaks the instant it's aborted, so
-  // filesDone at that moment is exactly how many files at the start of the
-  // array actually finished — everything from there on (including the one
-  // interrupted mid-write, redone from scratch; there's no byte-offset
-  // resume yet, see the pause/resume roadmap item) is what's left to retry.
+  // Rebuilds a batch from whatever a Stop left outstanding: everything
+  // after filesDone was never attempted at all (processBatch always
+  // processes files in order and breaks the instant it's aborted, so
+  // filesDone is exactly how many files at the start of the array were
+  // attempted), PLUS anything at or before that point that genuinely
+  // failed rather than succeeded — filesDone counts attempts, not
+  // successes, so a real failure earlier in the batch would otherwise look
+  // "done" and never get retried. The one interrupted mid-write is redone
+  // from scratch either way; there's no byte-offset resume yet (see the
+  // pause/resume roadmap item).
   function retryStopped(downloadId: string) {
     const original = lastBatch.current[downloadId]
     const current = batches[downloadId]
     if (!original || !current) return
-    const remaining = original.files.slice(current.filesDone)
+    const failedPaths = new Set(current.failed.map((f) => f.path))
+    const remaining = original.files.filter((f, i) => i >= current.filesDone || failedPaths.has(f.path))
     if (remaining.length === 0) return
     handleBatch({ ...original, files: remaining })
   }
@@ -378,7 +386,10 @@ export function DownloadWindow() {
                       )}
                       {b.status === 'done' && <span className="settings-success">Done — {b.filesTotal} files</span>}
                       {b.status === 'stopped' && (
-                        <span className="text-muted">Stopped — {b.filesDone}/{b.filesTotal} files</span>
+                        <span className="text-muted">
+                          Stopped — {b.filesDone}/{b.filesTotal} files
+                          {b.failed.length > 0 && ` (${b.failed.length} failed before stopping)`}
+                        </span>
                       )}
                       {b.status === 'error' && (
                         <span className="settings-error">
@@ -386,19 +397,19 @@ export function DownloadWindow() {
                         </span>
                       )}
                     </div>
+                    {(b.status === 'error' || b.status === 'stopped') && b.failed.length > 0 && (
+                      <ul className="download-window-item-errors">
+                        {b.failed.map((f) => (
+                          <li key={f.path}>
+                            <span title={f.path}>{f.path}</span>: {f.error}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {b.status === 'error' && b.failed.length > 0 && (
-                      <>
-                        <ul className="download-window-item-errors">
-                          {b.failed.map((f) => (
-                            <li key={f.path}>
-                              <span title={f.path}>{f.path}</span>: {f.error}
-                            </li>
-                          ))}
-                        </ul>
-                        <button className="download-window-retry-btn" onClick={() => retryFailed(b.downloadId)}>
-                          ↻ Retry failed ({b.failed.length})
-                        </button>
-                      </>
+                      <button className="download-window-retry-btn" onClick={() => retryFailed(b.downloadId)}>
+                        ↻ Retry failed ({b.failed.length})
+                      </button>
                     )}
                   </>
                 )}

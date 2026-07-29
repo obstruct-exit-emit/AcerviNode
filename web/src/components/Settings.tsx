@@ -402,7 +402,8 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
         <p className="settings-help">
           Redirect a category's completed downloads to a specific directory instead of the default{' '}
           <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only affects
-          Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones.
+          Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing override's
+          path and save to remove it.
         </p>
 
         {categories &&
