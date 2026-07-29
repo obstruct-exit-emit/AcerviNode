@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -309,6 +310,28 @@ func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progre
 	return checkRowsAffected(res, id)
 }
 
+// BackfillHashAndName fills in a row's hash and name from the provider's
+// current data — see RefreshFromProvider, the only caller. A torrent's
+// provider-side listing is provisional right after it's added (placeholder
+// name, no hash yet) until the provider finishes indexing it; a row whose
+// initial snapshot was captured during that window otherwise never gets a
+// second chance to pick up the real values, since nothing else touches
+// Hash/Name after insert. Only ever called when the row's own hash is
+// currently empty, so this never overwrites a value that was already
+// trustworthy.
+func (db *DB) BackfillHashAndName(ctx context.Context, id, hash, name string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET hash = ?, name = ?, updated_at = ?
+		WHERE id = ?`,
+		nullable(hash), name, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("backfill hash/name %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // LocalStateFromProvider translates a debrid provider's own DownloadState
 // into AcerviNode's local state machine (see the State* constants above) —
 // shared by both compat shims and internal/importer so all three interpret a
@@ -352,6 +375,36 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 	}
 
 	for _, d := range rows {
+		st, ok := byID[d.ProviderDownloadID]
+		if !ok {
+			continue
+		}
+
+		// A torrent's provider-side listing is provisional right after it's
+		// added — placeholder name, no hash yet — until the provider
+		// finishes indexing it. A row whose initial snapshot (almost always
+		// via internal/importer's discoverManual — a magnet-based add
+		// already carries a real hash) was caught during that window
+		// otherwise never gets a second chance, since nothing below this
+		// touches Hash/Name. Deliberately unconditional on state (runs even
+		// for a row the guards below would otherwise skip entirely) and
+		// deliberately gated on Hash being empty — a reliable signal this
+		// row really was caught mid-indexing, not something to second-guess
+		// for a row that already has one.
+		if d.Hash == "" && st.Hash != "" {
+			hash := strings.ToLower(st.Hash)
+			name := st.Name
+			if name == "" {
+				name = d.Name
+			}
+			if err := db.BackfillHashAndName(ctx, d.ID, hash, name); err != nil {
+				slog.Error("database: backfill hash/name from provider failed", "id", d.ID, "error", err)
+			} else {
+				d.Hash = hash
+				d.Name = name
+			}
+		}
+
 		// Once internal/importer has moved a row to ready_for_import (files
 		// actually on disk), the provider's own state is no longer
 		// authoritative for it — TorBox still reporting "completed" must not
@@ -373,10 +426,6 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 			continue
 		}
 
-		st, ok := byID[d.ProviderDownloadID]
-		if !ok {
-			continue
-		}
 		newState := LocalStateFromProvider(st.State)
 		// errorMessage carries the provider's own raw state string (e.g.
 		// TorBox's "stalled (no seeds)") whenever the provider itself is

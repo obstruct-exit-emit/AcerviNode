@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Fixed a real bug found live: some torrents never got a real hash.** The
+  user noticed some Manual torrents had a hash and some didn't and asked
+  why. Traced against their real TorBox account: a torrent's provider-side
+  listing is provisional right after it's added — a placeholder name (the
+  raw uploaded filename) and no hash yet — until TorBox finishes indexing
+  it. `internal/importer`'s discovery step (`discoverManual`) captures
+  whatever the provider reports at that exact moment; if that happened to
+  be mid-indexing, the incomplete snapshot was stuck permanently, since
+  `RefreshFromProvider` — the function that runs on every later poll — only
+  ever updated `state`/`progress`/`size_bytes`/`error_message`, never
+  `hash` or `name`. Confirmed directly against TorBox's raw API: two of the
+  user's adopted torrents had an empty hash locally while TorBox's own
+  `mylist` already had the real one. `database.RefreshFromProvider` now
+  backfills `hash` and `name` from the provider whenever the local hash is
+  still empty — deliberately gated on that (never overwrites a hash a row
+  already has) and deliberately unconditional on state (runs even for rows
+  the state-transition guards elsewhere in the function would otherwise
+  skip). Two new tests: the backfill firing for an empty-hash row, and
+  proving it leaves an already-hashed row untouched.
 - **Documented a real browser restriction found live**: Chrome refuses to
   grant *any* site read/write access to certain "well-known" folders
   directly — Desktop, Documents, Downloads, Pictures, Music, Videos, plus

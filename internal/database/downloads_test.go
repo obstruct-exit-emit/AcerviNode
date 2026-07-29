@@ -506,6 +506,78 @@ func TestRefreshFromProvider_UpdatesChangedRows(t *testing.T) {
 	}
 }
 
+// TestRefreshFromProvider_BackfillsEmptyHash proves the fix for a real bug
+// found live: a torrent discovered while the provider was still indexing it
+// (placeholder name, no hash yet) got permanently stuck with that
+// incomplete snapshot, since nothing else ever revisited Hash/Name after
+// insert. Confirmed against the user's real TorBox account — two adopted
+// torrents had an empty hash locally despite TorBox's own mylist reporting
+// a real one by the time it was checked.
+func TestRefreshFromProvider_BackfillsEmptyHash(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Hash = ""
+	d.Name = "45____Riven_Worlds_seires___.torrent"
+	d.State = StateProviderCompleted
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	rows := []*Download{d}
+	statuses := []debrid.DownloadStatus{
+		{
+			ID:        debrid.ProviderDownloadID(d.ProviderDownloadID),
+			Hash:      "5A5C00CDB722F210453928EE5B789FA727306236", // providers can report mixed case
+			Name:      "2020-2022 - Riven Worlds seires (5)",
+			State:     debrid.StateCompleted,
+			Progress:  1,
+			SizeBytes: d.SizeBytes,
+		},
+	}
+	db.RefreshFromProvider(ctx, rows, statuses)
+
+	wantHash := "5a5c00cdb722f210453928ee5b789fa727306236"
+	if d.Hash != wantHash || d.Name != "2020-2022 - Riven Worlds seires (5)" {
+		t.Errorf("in-memory row = hash:%q name:%q, want %q / the real name", d.Hash, d.Name, wantHash)
+	}
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.Hash != wantHash || got.Name != "2020-2022 - Riven Worlds seires (5)" {
+		t.Errorf("persisted row = hash:%q name:%q, want %q / the real name", got.Hash, got.Name, wantHash)
+	}
+}
+
+// TestRefreshFromProvider_NeverOverwritesExistingHash proves the backfill
+// only ever fires for a row that genuinely has no hash yet — it must never
+// second-guess or replace a hash a row already has, even if the provider's
+// current value happens to differ (which shouldn't normally happen, but the
+// guard itself is what the test is pinning down).
+func TestRefreshFromProvider_NeverOverwritesExistingHash(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Hash = "originalhash"
+	d.Name = "Original Name"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	rows := []*Download{d}
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: "differenthash", Name: "Different Name", State: debrid.StateDownloading, Progress: 0.5},
+	}
+	db.RefreshFromProvider(ctx, rows, statuses)
+
+	if d.Hash != "originalhash" || d.Name != "Original Name" {
+		t.Errorf("hash/name = %q/%q, want left untouched since Hash was already non-empty", d.Hash, d.Name)
+	}
+}
+
 func TestRefreshFromProvider_IgnoresRowsMissingFromStatuses(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

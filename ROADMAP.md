@@ -463,6 +463,16 @@ designing it solo.
   coordination on `BroadcastChannel` + a singleton `navigator.locks` lock
   instead of direct window references, which don't care about that
   topology. See the [CHANGELOG](CHANGELOG.md) for the full design.
+- Bug found live by the user asking a simple "why" (some torrents had a
+  hash, some didn't): a torrent discovered while TorBox was still indexing
+  it (placeholder name, no hash yet) got stuck with that incomplete
+  snapshot forever, since `RefreshFromProvider` never revisited `hash`/
+  `name` on later polls. Confirmed directly against the user's real TorBox
+  account before fixing — two adopted torrents had an empty local hash
+  while TorBox's own `mylist` already had the real one. Now backfilled
+  automatically the next time the provider is polled; verified live, both
+  torrents picked up their real hash and real name on the very next
+  importer tick after deploying. See the [CHANGELOG](CHANGELOG.md).
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across
