@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Removed the seeded "AcerviNode" placeholder category.** The user asked
+  whether it overrode Sonarr/Radarr's real category — confirmed it never
+  did (`internal/importer.categoryPath` is a plain exact-string lookup, no
+  fallback), but it was inert clutter in the Settings UI's category list
+  either way. Both compat shims' `categoryStore` used to seed one default
+  entry (`"AcerviNode"`) purely so the list/`/api/v2/torrents/categories`
+  response was never empty before Sonarr/Radarr had declared anything; now
+  starts empty and fills in with real categories as Sonarr/Radarr actually
+  declare them, same as a real qBittorrent/SABnzbd install. The web UI
+  already rendered an empty category list as "None yet", so no frontend
+  change was needed. SABnzbd's protocol-mandated `"*"` category (a real
+  requirement, not the placeholder) is untouched.
 - **Stop, retry-failed, and dismiss controls in the Downloads popup**
   (`web/src/components/DownloadWindow.tsx`): each batch's header now shows
   a small icon button — ⏹ Stop while it's actively downloading, ✕ Dismiss

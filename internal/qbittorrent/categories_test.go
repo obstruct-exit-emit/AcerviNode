@@ -16,15 +16,15 @@ func TestServer_CategoriesAndAddCategory(t *testing.T) {
 
 	s := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
 
-	if got := s.Categories(); len(got) != 1 || got[0] != defaultCategory {
-		t.Errorf("Categories() = %v, want just [%s] before anything else is added", got, defaultCategory)
+	if got := s.Categories(); len(got) != 0 {
+		t.Errorf("Categories() = %v, want empty before anything is added", got)
 	}
 
 	s.AddCategory("movies")
 	s.categories.add("tv-sonarr", "/downloads/tv") // simulating an *arr app's own createCategory call
 
 	got := s.Categories()
-	want := []string{defaultCategory, "movies", "tv-sonarr"}
+	want := []string{"movies", "tv-sonarr"}
 	sort.Strings(want)
 	if len(got) != len(want) {
 		t.Fatalf("Categories() = %v, want %v (sorted)", got, want)
