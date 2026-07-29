@@ -861,8 +861,15 @@ func TestHandleGetDownload_NotFound(t *testing.T) {
 // error while listing files (e.g. still queued, nothing to list yet)
 // degrades to an empty file list rather than failing the whole download
 // detail response.
+// TestHandleGetDownload_FilesUnavailableIsNotAHardError also proves the
+// underlying reason isn't discarded (files_error) — a download with an
+// empty file list because the provider genuinely has no record of it
+// anymore (e.g. deleted directly through the provider's own site — a real,
+// observed case for a Manual/discovered download) needs to look different
+// from one that's just not processed yet, or the web UI has no way to tell
+// a permanently-gone download apart from a still-queued one.
 func TestHandleGetDownload_FilesUnavailableIsNotAHardError(t *testing.T) {
-	provider := &fakeProvider{filesErr: errors.New("torbox: torrent not found")}
+	provider := &fakeProvider{filesErr: errors.New("torbox: torrent 64235095 not found")}
 	srv, db := newTestServer(t, provider, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")
 
@@ -873,13 +880,34 @@ func TestHandleGetDownload_FilesUnavailableIsNotAHardError(t *testing.T) {
 	}
 	var got struct {
 		downloadResponse
-		Files []downloadFileResponse `json:"files"`
+		Files      []downloadFileResponse `json:"files"`
+		FilesError string                 `json:"files_error"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if got.Files == nil || len(got.Files) != 0 {
 		t.Errorf("files = %v, want an empty (not null) array", got.Files)
+	}
+	if got.FilesError != "torbox: torrent 64235095 not found" {
+		t.Errorf("files_error = %q, want the underlying provider error preserved", got.FilesError)
+	}
+}
+
+// TestHandleGetDownload_NoFilesErrorWhenFilesSucceed proves files_error is
+// omitted entirely (not just empty) on the ordinary success path.
+func TestHandleGetDownload_NoFilesErrorWhenFilesSucceed(t *testing.T) {
+	provider := &fakeProvider{filesResp: []debrid.DownloadFile{{ProviderFileID: "1", Path: "movie.mkv", SizeBytes: 1024}}}
+	srv, db := newTestServer(t, provider, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "files_error") {
+		t.Errorf("body contains files_error on the success path, want it omitted entirely: %s", rec.Body.String())
 	}
 }
 

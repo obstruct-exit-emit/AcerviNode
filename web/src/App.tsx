@@ -174,7 +174,7 @@ export default function App() {
       const detail = await getDownload(apiKey, d.id)
       const files = detail.files.filter((f) => f.provider_file_id)
       if (files.length === 0) {
-        alert('No files available to download yet.')
+        alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
         return
       }
       const failed: string[] = []

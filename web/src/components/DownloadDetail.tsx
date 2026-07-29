@@ -223,7 +223,9 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
             </div>
             {zipStatus.kind === 'error' && <p className="settings-error">Failed to resolve zip: {zipStatus.message}</p>}
             {detail.files.length === 0 ? (
-              <p className="empty">No files yet.</p>
+              <p className="empty">
+                {detail.files_error ? `Couldn't get files: ${detail.files_error}` : 'No files yet.'}
+              </p>
             ) : (
               <table className="detail-files">
                 <thead>

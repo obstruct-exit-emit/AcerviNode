@@ -40,6 +40,12 @@ export interface DownloadFile {
 
 export interface DownloadDetail extends Download {
   files: DownloadFile[]
+  // Set only when files came back empty *because* the live provider query
+  // failed — e.g. the provider genuinely no longer has this download at all
+  // (deleted directly through its own site). Distinguishes that from the
+  // ordinary "not processed yet" case, which also has an empty files array
+  // but no files_error.
+  files_error?: string
 }
 
 export class ApiError extends Error {

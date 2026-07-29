@@ -76,6 +76,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Clicking download on a Manual download whose provider item had vanished
+  entirely (deleted directly through TorBox's own site — spotted live by the
+  user, confirmed by querying the real account directly: the torrent was
+  genuinely gone from TorBox's own list, not just slow to load) showed "No
+  files available to download yet" — technically true but actively
+  misleading, since it reads as "still processing," not "gone for good."
+  `GET /api/v1/downloads/{id}` gained `files_error` (present only when the
+  live provider query actually failed, omitted entirely on the ordinary
+  empty-because-not-processed-yet path), and the web UI now shows that real
+  reason instead of the generic message, in both the row-level alert and the
+  detail view. Also documented (`docs/providers.md#managed-vs-manual`) a
+  related, deliberately-not-yet-fixed gap this surfaced: nothing proactively
+  detects a vanished Manual download ahead of time — it only shows up when
+  the user actually tries to download — since Manual downloads are never in
+  `internal/importer`'s fetch-retry path, which is what catches this for a
+  Managed download within a few ticks. Left as a 💡 in ROADMAP.md; fixing it
+  properly needs a debounce so a download that's merely slow to be freshly
+  indexed doesn't get wrongly flagged "gone" after one missed poll.
 - Manual downloads sitting at `provider_completed` showed a "Fetching" state
   badge — spotted by the user directly in the Manual tab right after
   shipping it. That label was accurate for a Managed download (where

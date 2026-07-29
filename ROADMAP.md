@@ -419,6 +419,14 @@ designing it solo.
   browser download, not File System Access — it's tracked in the browser's
   own download manager and survives the tab closing, which streaming can't
   offer either way.
+- Bug found live by the user: a Manual download whose provider item had
+  vanished entirely (confirmed by querying the real TorBox account directly
+  — genuinely gone from `mylist`, not just slow) showed the misleading "No
+  files available to download yet" on click, instead of the real reason.
+  Fixed: `GET /api/v1/downloads/{id}` now includes `files_error` (the
+  underlying provider error, present only when the live query actually
+  failed) and the web UI shows it directly. See the 💡 below for the deeper,
+  deliberately-deferred half of this.
 
 💡 **Manual categories**: brainstormed with the user and deliberately left
 out for now. Category only drives real behavior for Managed downloads (it's
@@ -431,3 +439,18 @@ while — a simple client-side search/filter-by-name is the lighter-weight
 alternative worth trying first, before reaching for full categorization
 (which would also need an edit-after-the-fact story, since a discovered
 download starts with no category and TorBox gives it none to inherit).
+
+💡 **Proactively detect a vanished Manual download**: right now nothing
+notices a Manual download's provider item is gone until the user actually
+clicks download and hits `files_error` live — `RefreshFromProvider` only
+updates rows it finds a matching status for, and a Manual download is never
+in `internal/importer`'s fetch-retry path (the thing that catches this for a
+Managed download within a few ticks, since the fetch attempt itself fails
+and eventually gives up with a clear reason). Not fixed proactively yet on
+purpose: doing it safely needs a debounce — mark a row as gone only after
+it's been missing from a *successful* provider listing for several
+consecutive ticks, not the first miss, since a brand-new add can legitimately
+take a while to be indexed anywhere (mylist or the pre-processing queue) and
+a single-miss rule would wrongly flag it "gone" while it's still just new.
+That's real design work (a missing-since timestamp or counter, tuned against
+how long TorBox actually takes to index something), not a one-line fix.

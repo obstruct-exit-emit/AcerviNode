@@ -92,6 +92,18 @@ specific file — see [Direct file downloads](#direct-file-downloads) below. Thi
 live query against the provider on every call, not a local cache — a queued
 or still-processing download simply has an empty `files` array, not an error.
 
+An empty `files` array can mean two different things, and `files_error`
+(present only when the live query actually failed, omitted entirely
+otherwise) is what tells them apart: absent means "not processed yet, ask
+again later"; present means the provider query itself failed — e.g. the
+provider genuinely no longer has this download at all, which is a real,
+observed case for a Manual/discovered download (deleted directly through the
+provider's own site — nothing else ever detects this for a Manual download,
+since it's never in `internal/importer`'s fetch-retry path, which is the
+only other place a "provider forgot about this" error would normally
+surface). The web UI shows `files_error` directly instead of a generic
+"no files yet" when present.
+
 ## Adding downloads directly
 
 `POST /api/v1/downloads/torrent` and `POST /api/v1/downloads/usenet` let you add

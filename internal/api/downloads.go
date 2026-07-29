@@ -127,15 +127,23 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 // processed it, and there's nowhere in AcerviNode that persists them
 // locally otherwise. A provider error here (e.g. still queued, nothing to
 // list yet) isn't a hard failure — it just means an empty file list, not a
-// broken download page.
+// broken download page — but the reason is still worth keeping: an empty
+// list because nothing's processed yet and an empty list because the
+// provider genuinely has no record of this download anymore (e.g. deleted
+// directly through the provider's own site — a real, observed case for a
+// Manual/discovered download, which nothing else ever detects since it's
+// never in internal/importer's fetch-retry path) look identical to a caller
+// unless the underlying error comes along too. See FilesError below.
 func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.downloadByID(w, r)
 	if !ok {
 		return
 	}
 	files, err := s.filesForDownload(r.Context(), d)
+	var filesError string
 	if err != nil {
 		files = nil
+		filesError = err.Error()
 	}
 	fileResp := make([]downloadFileResponse, len(files))
 	for i, f := range files {
@@ -143,8 +151,9 @@ func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, struct {
 		downloadResponse
-		Files []downloadFileResponse `json:"files"`
-	}{toDownloadResponse(d), fileResp})
+		Files      []downloadFileResponse `json:"files"`
+		FilesError string                 `json:"files_error,omitempty"`
+	}{toDownloadResponse(d), fileResp, filesError})
 }
 
 // filesForDownload queries the provider for a download's current file list —

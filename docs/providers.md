@@ -244,6 +244,24 @@ overrides key on (see [Configuration](configuration.md#categories-and-save-paths
 categorization concept at all. Brainstormed with the user and left as a 💡
 item in ROADMAP.md to revisit if the Manual tab ever gets hard to navigate.
 
+**Known limitation: a Manual download whose provider item vanishes entirely
+stays looking "Available" forever**, not because of a bug in the polling
+itself but because nothing ever runs the check for it. `RefreshFromProvider`
+only *updates* rows it finds a matching status for; a row whose
+`provider_download_id` is simply absent from the provider's current list —
+e.g. deleted directly through the provider's own site — is silently skipped,
+same as always (there was never a "this ID used to exist, now it's gone"
+branch). For a Managed download this self-corrects within a few ticks:
+`internal/importer`'s own fetch attempt fails, retries, and eventually
+lands in `error` with a clear reason. A Manual download is never in that
+fetch-retry path at all, so nothing ever notices — the row just sits there
+looking done until the user actually clicks download and hits the error
+live (see `files_error` in [API](api.md)). Deliberately not auto-detected
+proactively yet: doing so safely needs a debounce (a download that's
+merely slow to be freshly indexed by the provider would otherwise get
+wrongly flagged "gone" after a single missed poll), which is real design
+work, not a one-line fix — tracked as a 💡 follow-up in ROADMAP.md.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent
