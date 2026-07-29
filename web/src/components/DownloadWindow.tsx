@@ -14,7 +14,7 @@ type BatchState = {
   filesDone: number
   filesTotal: number
   failed: FailedFile[]
-  status: 'needs-permission' | 'downloading' | 'done' | 'error'
+  status: 'needs-permission' | 'downloading' | 'done' | 'error' | 'stopped'
 }
 
 // Guards against two Downloads popups both actually processing batches —
@@ -53,13 +53,24 @@ export function DownloadWindow() {
   // instance holds it (the only state where it's actually the active
   // popup); false if another instance already holds it.
   const [isPrimary, setIsPrimary] = useState<boolean | null>(null)
-  // Batches already being processed — general protection against handling
-  // the same add-batch message twice (e.g. a duplicate broadcast).
+  // Batches currently being processed — general protection against
+  // handling the same add-batch message twice (e.g. a duplicate
+  // broadcast), and against a stale re-click while one's still running.
+  // Cleared the moment a batch finishes, however it finishes (done, error,
+  // or stopped), so re-downloading afterward always works.
   const processing = useRef<Set<string>>(new Set())
   // Batches parked waiting on a "Grant folder access" click — see
   // handleBatch below. Needs the original message (for its files/
   // directoryHandle) plus the size total already computed for it.
   const pending = useRef<Record<string, { batch: AddBatchMessage; totalBytes: number }>>({})
+  // The most recent add-batch message per download id, kept around after
+  // completion so "Retry failed" can rebuild a batch containing just the
+  // files that didn't make it, without the main window having to resend
+  // anything.
+  const lastBatch = useRef<Record<string, AddBatchMessage>>({})
+  // One AbortController per in-flight batch — Stop calls .abort() on it;
+  // processBatch checks it between (and cancels mid-) files.
+  const controllers = useRef<Record<string, AbortController>>({})
   const channelRef = useRef<BroadcastChannel | null>(null)
   const baseTitleRef = useRef(document.title)
 
@@ -86,32 +97,146 @@ export function DownloadWindow() {
     }
   }
 
+  async function handleBatch(batch: AddBatchMessage) {
+    if (processing.current.has(batch.downloadId)) return
+    processing.current.add(batch.downloadId)
+    lastBatch.current[batch.downloadId] = batch
+    bumpToForeground()
+
+    const totalBytes = batch.files.reduce((sum, f) => sum + f.sizeBytes, 0)
+
+    // A directory handle's write grant is checked per top-level browsing
+    // context, not just per origin — the main window already had it
+    // granted, but that doesn't carry over to this popup automatically,
+    // even though it's the very same handle (structured-clone-transferred).
+    // Asking for it here needs this window's own user gesture, so if it's
+    // not already granted, processing pauses on a "Grant folder access"
+    // button instead of failing every file silently.
+    const state = await queryWritePermission(batch.directoryHandle)
+    if (state === 'granted') {
+      setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'downloading') }))
+      processBatch(batch, totalBytes)
+    } else {
+      pending.current[batch.downloadId] = { batch, totalBytes }
+      setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'needs-permission') }))
+    }
+  }
+
+  async function grantAccess(downloadId: string) {
+    const entry = pending.current[downloadId]
+    if (!entry) return
+    const state = await requestWritePermission(entry.batch.directoryHandle)
+    if (state !== 'granted') {
+      processing.current.delete(downloadId)
+      setBatches((prev) => ({
+        ...prev,
+        [downloadId]: { ...prev[downloadId], status: 'error', failed: [{ path: '(all files)', error: 'Folder access was denied.' }] },
+      }))
+      return
+    }
+    delete pending.current[downloadId]
+    setBatches((prev) => ({ ...prev, [downloadId]: { ...prev[downloadId], status: 'downloading' } }))
+    processBatch(entry.batch, entry.totalBytes)
+  }
+
+  async function processBatch(batch: AddBatchMessage, totalBytes: number) {
+    const apiKey = getStoredApiKey()
+    if (!apiKey) {
+      processing.current.delete(batch.downloadId)
+      setBatches((prev) => ({
+        ...prev,
+        [batch.downloadId]: { ...prev[batch.downloadId], status: 'error', failed: [{ path: '(all files)', error: 'Not signed in to AcerviNode in this window.' }] },
+      }))
+      return
+    }
+
+    const controller = new AbortController()
+    controllers.current[batch.downloadId] = controller
+
+    let loaded = 0
+    let filesDone = 0
+    const failed: FailedFile[] = []
+
+    for (const f of batch.files) {
+      if (controller.signal.aborted) break
+      try {
+        const { url } = await getFileLink(apiKey, batch.downloadId, f.providerFileId)
+        if (controller.signal.aborted) break
+        const resp = await fetch(url, { signal: controller.signal })
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+        await writeFileToDirectory(batch.directoryHandle, f.path, resp, (chunkBytes) => {
+          loaded += chunkBytes
+          setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], loaded } } : prev))
+          reportProgress(batch.downloadId, loaded, totalBytes)
+        })
+      } catch (err) {
+        if (controller.signal.aborted) break // deliberate Stop, not a real failure
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`Failed to download ${f.path}`, err)
+        failed.push({ path: f.path, error: message })
+      }
+      filesDone++
+      setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], filesDone } } : prev))
+    }
+
+    const stopped = controller.signal.aborted
+    delete controllers.current[batch.downloadId]
+    processing.current.delete(batch.downloadId)
+
+    setBatches((prev) =>
+      prev[batch.downloadId]
+        ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], status: stopped ? 'stopped' : failed.length > 0 ? 'error' : 'done', failed } }
+        : prev,
+    )
+    // A deliberate Stop is reported as a no-op completion (empty failed
+    // list) — it's not a failure, and every main window's row should just
+    // go back to idle rather than showing a failure alert for it.
+    reportComplete(batch.downloadId, stopped ? [] : failed)
+  }
+
+  function stopBatch(downloadId: string) {
+    controllers.current[downloadId]?.abort()
+  }
+
+  // Rebuilds a batch containing just the files that failed last time and
+  // reprocesses it under the same download id — reuses handleBatch's own
+  // permission check rather than assuming access is still granted.
+  function retryFailed(downloadId: string) {
+    const original = lastBatch.current[downloadId]
+    const current = batches[downloadId]
+    if (!original || !current || current.failed.length === 0) return
+    const failedPaths = new Set(current.failed.map((f) => f.path))
+    const retryBatch: AddBatchMessage = { ...original, files: original.files.filter((f) => failedPaths.has(f.path)) }
+    if (retryBatch.files.length === 0) return
+    handleBatch(retryBatch)
+  }
+
+  function dismissBatch(downloadId: string) {
+    setBatches((prev) => {
+      if (!(downloadId in prev)) return prev
+      const next = { ...prev }
+      delete next[downloadId]
+      return next
+    })
+    delete lastBatch.current[downloadId]
+    delete pending.current[downloadId]
+  }
+
+  // Both report functions are best-effort: broadcasting works fine with
+  // zero listeners (every main tab may be closed), which is the whole point
+  // of this window existing.
+  function reportProgress(downloadId: string, loaded: number, total: number) {
+    const msg: BatchProgressMessage = { type: 'batch-progress', downloadId, loaded, total }
+    channelRef.current?.postMessage(msg)
+  }
+
+  function reportComplete(downloadId: string, failed: FailedFile[]) {
+    const msg: BatchCompleteMessage = { type: 'batch-complete', downloadId, failed }
+    channelRef.current?.postMessage(msg)
+  }
+
   useEffect(() => {
     let cancelled = false
-
-    async function handleBatch(batch: AddBatchMessage) {
-      if (processing.current.has(batch.downloadId)) return
-      processing.current.add(batch.downloadId)
-      bumpToForeground()
-
-      const totalBytes = batch.files.reduce((sum, f) => sum + f.sizeBytes, 0)
-
-      // A directory handle's write grant is checked per top-level browsing
-      // context, not just per origin — the main window already had it
-      // granted, but that doesn't carry over to this popup automatically,
-      // even though it's the very same handle (structured-clone-transferred).
-      // Asking for it here needs this window's own user gesture, so if it's
-      // not already granted, processing pauses on a "Grant folder access"
-      // button instead of failing every file silently.
-      const state = await queryWritePermission(batch.directoryHandle)
-      if (state === 'granted') {
-        setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'downloading') }))
-        processBatch(batch, totalBytes)
-      } else {
-        pending.current[batch.downloadId] = { batch, totalBytes }
-        setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'needs-permission') }))
-      }
-    }
 
     // ifAvailable: true resolves the callback with null immediately instead
     // of queueing if another instance already holds the lock — exactly the
@@ -160,74 +285,6 @@ export function DownloadWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function grantAccess(downloadId: string) {
-    const entry = pending.current[downloadId]
-    if (!entry) return
-    const state = await requestWritePermission(entry.batch.directoryHandle)
-    if (state !== 'granted') {
-      setBatches((prev) => ({
-        ...prev,
-        [downloadId]: { ...prev[downloadId], status: 'error', failed: [{ path: '(all files)', error: 'Folder access was denied.' }] },
-      }))
-      return
-    }
-    delete pending.current[downloadId]
-    setBatches((prev) => ({ ...prev, [downloadId]: { ...prev[downloadId], status: 'downloading' } }))
-    processBatch(entry.batch, entry.totalBytes)
-  }
-
-  async function processBatch(batch: AddBatchMessage, totalBytes: number) {
-    const apiKey = getStoredApiKey()
-    if (!apiKey) {
-      setBatches((prev) => ({
-        ...prev,
-        [batch.downloadId]: { ...prev[batch.downloadId], status: 'error', failed: [{ path: '(all files)', error: 'Not signed in to AcerviNode in this window.' }] },
-      }))
-      return
-    }
-
-    let loaded = 0
-    let filesDone = 0
-    const failed: FailedFile[] = []
-
-    for (const f of batch.files) {
-      try {
-        const { url } = await getFileLink(apiKey, batch.downloadId, f.providerFileId)
-        const resp = await fetch(url)
-        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-        await writeFileToDirectory(batch.directoryHandle, f.path, resp, (chunkBytes) => {
-          loaded += chunkBytes
-          setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], loaded } } : prev))
-          reportProgress(batch.downloadId, loaded, totalBytes)
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`Failed to download ${f.path}`, err)
-        failed.push({ path: f.path, error: message })
-      }
-      filesDone++
-      setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], filesDone } } : prev))
-    }
-
-    setBatches((prev) =>
-      prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], status: failed.length > 0 ? 'error' : 'done', failed } } : prev,
-    )
-    reportComplete(batch.downloadId, failed)
-  }
-
-  // Both report functions are best-effort: broadcasting works fine with
-  // zero listeners (every main tab may be closed), which is the whole point
-  // of this window existing.
-  function reportProgress(downloadId: string, loaded: number, total: number) {
-    const msg: BatchProgressMessage = { type: 'batch-progress', downloadId, loaded, total }
-    channelRef.current?.postMessage(msg)
-  }
-
-  function reportComplete(downloadId: string, failed: FailedFile[]) {
-    const msg: BatchCompleteMessage = { type: 'batch-complete', downloadId, failed }
-    channelRef.current?.postMessage(msg)
-  }
-
   // A duplicate (lost the singleton lock race) tries to close itself right
   // away — window.close() only works on a window script actually opened
   // (true here, via openDownloadWindow()'s window.open() call), but some
@@ -265,10 +322,23 @@ export function DownloadWindow() {
         <ul className="download-window-list">
           {active.map((b) => {
             const pct = b.total > 0 ? Math.min(100, Math.round((b.loaded / b.total) * 100)) : 0
+            const canDismiss = b.status === 'done' || b.status === 'error' || b.status === 'stopped' || b.status === 'needs-permission'
             return (
               <li key={b.downloadId} className="download-window-item">
-                <div className="download-window-item-name" title={b.downloadName}>
-                  {b.downloadName}
+                <div className="download-window-item-header">
+                  <div className="download-window-item-name" title={b.downloadName}>
+                    {b.downloadName}
+                  </div>
+                  {b.status === 'downloading' && (
+                    <button className="download-window-icon-btn stop" onClick={() => stopBatch(b.downloadId)} title="Stop this download">
+                      ⏹
+                    </button>
+                  )}
+                  {canDismiss && (
+                    <button className="download-window-icon-btn dismiss" onClick={() => dismissBatch(b.downloadId)} title="Dismiss">
+                      ✕
+                    </button>
+                  )}
                 </div>
                 {b.status === 'needs-permission' ? (
                   <div className="download-window-item-meta">
@@ -287,6 +357,9 @@ export function DownloadWindow() {
                         </span>
                       )}
                       {b.status === 'done' && <span className="settings-success">Done — {b.filesTotal} files</span>}
+                      {b.status === 'stopped' && (
+                        <span className="text-muted">Stopped — {b.filesDone}/{b.filesTotal} files</span>
+                      )}
                       {b.status === 'error' && (
                         <span className="settings-error">
                           {b.failed.length > 0 ? `${b.failed.length} of ${b.filesTotal} file(s) failed` : 'Failed'}
@@ -294,13 +367,18 @@ export function DownloadWindow() {
                       )}
                     </div>
                     {b.status === 'error' && b.failed.length > 0 && (
-                      <ul className="download-window-item-errors">
-                        {b.failed.map((f) => (
-                          <li key={f.path}>
-                            <span title={f.path}>{f.path}</span>: {f.error}
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        <ul className="download-window-item-errors">
+                          {b.failed.map((f) => (
+                            <li key={f.path}>
+                              <span title={f.path}>{f.path}</span>: {f.error}
+                            </li>
+                          ))}
+                        </ul>
+                        <button className="download-window-retry-btn" onClick={() => retryFailed(b.downloadId)}>
+                          ↻ Retry failed ({b.failed.length})
+                        </button>
+                      </>
                     )}
                   </>
                 )}

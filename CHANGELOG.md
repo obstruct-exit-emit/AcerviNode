@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Stop, retry-failed, and dismiss controls in the Downloads popup**
+  (`web/src/components/DownloadWindow.tsx`): each batch's header now shows
+  a small icon button — ⏹ Stop while it's actively downloading, ✕ Dismiss
+  once it's done, failed, stopped, or waiting on a permission grant.
+  Stopping aborts cleanly via a per-batch `AbortController` wired into the
+  `fetch()` call, rather than just letting the transfer run to completion —
+  a deliberate Stop is reported to every main window as a no-op completion
+  (empty failed list) rather than a failure, so nothing shows a scary "N
+  files failed" alert for it. The partially-written file is deliberately
+  left on disk rather than deleted: it costs nothing extra now and doubles
+  as the starting point for the real pause/resume feature already scoped
+  on the roadmap. A new "stopped" status (shown in muted text, distinct
+  from the red "error" state) reflects how many files actually finished
+  before the stop.
+
+  A failed batch gets a "↻ Retry failed (N)" button below its per-file
+  error list — rebuilds a batch containing just the files that didn't make
+  it (matched by path against the last add-batch message, kept around for
+  exactly this) and reprocesses it under the same download id, going
+  through the same permission check as a fresh add rather than assuming
+  access is still granted.
+
+  Fixed a real, previously-documented bug as a side effect: the
+  "already processing" guard (`processing` — prevents handling the same
+  add-batch twice) was never cleared once a batch finished, so re-clicking
+  "Download all" for anything already tracked in the popup silently did
+  nothing. It's now cleared the moment a batch finishes, however it
+  finishes (done, error, or stopped), so re-downloading — from the main
+  app or the popup's own Retry button — always works.
 - **Fixed a real bug found live: some torrents never got a real hash.** The
   user noticed some Manual torrents had a hash and some didn't and asked
   why. Traced against their real TorBox account: a torrent's provider-side

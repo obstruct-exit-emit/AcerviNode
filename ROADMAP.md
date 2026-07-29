@@ -473,6 +473,16 @@ designing it solo.
   automatically the next time the provider is polled; verified live, both
   torrents picked up their real hash and real name on the very next
   importer tick after deploying. See the [CHANGELOG](CHANGELOG.md).
+- Immediate follow-on, requested by the user: Stop/retry-failed/dismiss
+  controls added to the Downloads popup's per-batch header, styled as
+  small icon buttons rather than several separate buttons bolted on.
+  Stopping uses a real `AbortController` (not just hiding the row), and
+  deliberately leaves the partial file on disk — free groundwork for the
+  pause/resume item above, not thrown away. Fixed a real bug as a side
+  effect: the popup's own "already processing" guard was never cleared
+  after a batch finished, so re-downloading anything already tracked there
+  silently did nothing; it's cleared on completion now regardless of
+  outcome. See the [CHANGELOG](CHANGELOG.md).
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across

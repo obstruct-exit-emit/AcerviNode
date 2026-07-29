@@ -583,13 +583,42 @@ table.downloads tbody tr:hover {
   padding-bottom: 12px;
 }
 
+.download-window-item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .download-window-item-name {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.download-window-icon-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+.download-window-icon-btn.stop:hover {
+  color: var(--state-error);
+  background: color-mix(in srgb, var(--state-error) 10%, transparent);
+}
+
+.download-window-icon-btn.dismiss:hover {
+  color: var(--text);
+  background: var(--border);
 }
 
 .download-window-item .progress-track {
@@ -630,6 +659,21 @@ table.downloads tbody tr:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.download-window-retry-btn {
+  margin-top: 8px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.download-window-retry-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .delete-btn:hover {
