@@ -595,6 +595,34 @@ table.downloads tbody tr:hover {
   font-family: var(--mono);
 }
 
+.download-window-item-meta p {
+  margin: 0 0 8px;
+}
+
+.download-window-item-meta button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.download-window-item-errors {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--state-error);
+  font-family: var(--mono);
+}
+
+.download-window-item-errors li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .delete-btn:hover {
   color: var(--state-error);
   background: color-mix(in srgb, var(--state-error) 10%, transparent);

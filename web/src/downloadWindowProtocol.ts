@@ -36,10 +36,15 @@ export interface BatchProgressMessage {
   total: number
 }
 
+export interface FailedFile {
+  path: string
+  error: string
+}
+
 export interface BatchCompleteMessage {
   type: 'batch-complete'
   downloadId: string
-  failed: string[]
+  failed: FailedFile[]
 }
 
 // Sent popup -> main window once, right after the popup's own listener is

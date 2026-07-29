@@ -145,6 +145,21 @@ async function hasReadWritePermission(handle: FileSystemDirectoryHandle, request
   return (await permissible.requestPermission({ mode: 'readwrite' })) === 'granted'
 }
 
+// queryWritePermission/requestWritePermission are exported for the Downloads
+// popup window (see components/DownloadWindow.tsx): a directory handle's
+// write grant is checked per top-level browsing context, not just per
+// origin, so a handle that already has permission in the main window still
+// reads back as 'prompt' once it arrives in the popup via postMessage — the
+// popup has to query (and, on a real click there, request) its own grant
+// before it can actually write anything, even though it's the same handle.
+export async function queryWritePermission(handle: FileSystemDirectoryHandle): Promise<PermissionState> {
+  return (handle as unknown as PermissibleHandle).queryPermission({ mode: 'readwrite' })
+}
+
+export async function requestWritePermission(handle: FileSystemDirectoryHandle): Promise<PermissionState> {
+  return (handle as unknown as PermissibleHandle).requestPermission({ mode: 'readwrite' })
+}
+
 // getDefaultDirectory returns the remembered folder if one is stored and
 // still has live permission, without prompting — safe to call any time, not
 // just inside a click handler.

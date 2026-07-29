@@ -108,7 +108,7 @@ export default function App() {
         setDownloadingAllId((current) => (current === msg.downloadId ? null : current))
         setDownloadProgress(null)
         if (msg.failed.length > 0) {
-          alert(`${msg.failed.length} file(s) failed to download:\n${msg.failed.join('\n')}`)
+          alert(`${msg.failed.length} file(s) failed to download:\n${msg.failed.map((f) => `${f.path}: ${f.error}`).join('\n')}`)
         }
       }
     })

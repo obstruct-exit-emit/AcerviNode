@@ -55,6 +55,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   indicator also only ever reflects the most recently active batch if more
   than one is running in the popup at once — the popup's own list is the
   real, always-accurate source of truth for concurrent downloads regardless.
+  - **Fixed live, immediately after first real use**: every file failed
+    silently the first time this was tried against a real download, with no
+    folder prompt at all. Root cause confirmed: a `FileSystemDirectoryHandle`'s
+    write permission is checked per top-level browsing context, not just per
+    origin — the main window already had it granted (via the earlier
+    remembered-default-folder feature, which is why no prompt appeared; that
+    part was working as designed, not a bug), but that grant doesn't carry
+    over to the popup automatically even though it's the very same
+    postMessage-cloned handle. The popup now calls `queryWritePermission()`
+    (`web/src/fsAccess.ts`) on a batch's handle before touching it; if not
+    already granted there, processing pauses on a "Grant folder access"
+    button in the popup itself instead of failing every file — clicking it
+    calls `requestWritePermission()` with the popup's own real user gesture,
+    which is what a cross-context grant actually requires, then resumes.
+    Also surfaced the previously-swallowed per-file error: `failed` is now
+    `{path, error}[]` end to end (`downloadWindowProtocol.ts`,
+    `DownloadWindow.tsx`, the `App.tsx` relay's alert) instead of bare
+    filenames, and the popup lists each failure's real reason inline —
+    closes the gap that made this specific bug invisible without opening
+    DevTools in the first place. This resolves caveat (1) from above (the
+    handle itself clones and travels fine; it was the permission grant, not
+    the handle, that didn't carry over) but caveats (2)–(5) remain unverified
+    by a real click.
 - **Progress bar for the Manual tab's multi-file "Download all"**: the
   streamed-to-folder path (File System Access) previously just showed a
   static "…" for the whole batch, however long it took. `writeFileToDirectory`
