@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -107,6 +108,20 @@ func (c *Client) doPostJSON(ctx context.Context, path string, body any, out any)
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	return c.do(req, out)
+}
+
+// doPostForm POSTs as application/x-www-form-urlencoded — confirmed against
+// TorBox's real OpenAPI spec that createwebdownload uses this (not multipart
+// like createtorrent/createusenetdownload, which also accept a file upload;
+// Web Downloads is link-only, nothing to upload).
+func (c *Client) doPostForm(ctx context.Context, path string, form url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path), strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	return c.do(req, out)
 }

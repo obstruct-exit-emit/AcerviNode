@@ -22,10 +22,11 @@ server logs or `config.yaml`.
 |---|---|---|
 | `GET` | `/api/v1/health` | Unauthenticated liveness check |
 | `GET` | `/api/v1/version` | Build version string |
-| `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`) |
-| `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first. Optional `?added_via=arr\|manual` scopes to just the web UI's Managed or Manual tab (see [Providers](providers.md#managed-vs-manual)); omitted or unrecognized returns everything |
+| `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`/`webdl_capable`) |
+| `GET` | `/api/v1/downloads` | Every download — torrent, usenet, or web download — most recently added first. Optional `?added_via=arr\|manual` scopes to just the web UI's Managed or Manual tab (see [Providers](providers.md#managed-vs-manual)); omitted or unrecognized returns everything |
 | `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category`. Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
 | `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
+| `POST` | `/api/v1/downloads/webdl` | Adds a direct hoster link (Mega, 1Fichier, Mediafire, and ~160 others — see [Providers](providers.md#web-downloads)) — `application/x-www-form-urlencoded` body with `link` (required) and optional `category`. Link-only, no file-upload variant. Same response shape/status codes as the other two add endpoints |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
 | `GET` | `/api/v1/downloads/{id}/files/{fileId}/link` | Resolves a direct, provider-hosted download URL for one file — `fileId` is a file's `provider_file_id` from the download's `files` array. Fresh on every call, not cached; the URL is the provider's own CDN link, good for a browser to download straight from (no `Authorization` header needed for that second request — it's not one of ours). `503` if the relevant provider isn't configured; `502` for any other provider-side failure |
 | `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Direct file downloads](#direct-file-downloads)). Same error shape as the per-file endpoint above |
@@ -41,6 +42,7 @@ server logs or `config.yaml`.
 | `GET` | `/api/v1/settings/categories` | `{"torrent": [...], "usenet": [...], "paths": {"category": "override-dir", ...}}` — every category name each compat shim currently knows about (populated reactively as *arr apps declare them), plus any per-category save-path overrides currently set |
 | `POST` | `/api/v1/settings/categories` | Body `{"protocol": "torrent"\|"usenet", "name": "..."}` — manually registers a category, the same way an *arr app declaring one does. Not exposed in the web UI (a save-path override can be set for any category name directly, with no need to pre-declare it — see `PUT .../categories/path` below) but still available directly |
 | `PUT` | `/api/v1/settings/categories/path` | Body `{"category": "...", "path": "..."}` — sets category's override destination directory, used by Completed Download Handling instead of `download_dir`/`<category>` (see [Configuration](configuration.md#categories-and-save-paths)). An empty `path` clears a previously set override. Takes effect immediately (no restart) and is persisted to `config.yaml`. 400 if `category` is empty |
+| `GET` | `/api/v1/settings/account` | The configured provider's own account status (plan tier, subscription state, premium expiry, lifetime bytes downloaded) — a live call, not a cached snapshot. Always HTTP 200: `{"available": false, "error": "..."}` if nothing's configured yet or the provider doesn't support this; `{"available": true, "plan_name": "...", "is_subscribed": bool, "premium_expires_at": "...", "total_bytes_downloaded": N}` otherwise. See [Providers](providers.md#accountprovider) |
 
 ## Download JSON shape
 
@@ -66,12 +68,14 @@ server logs or `config.yaml`.
 `state` is AcerviNode's own vocabulary (`queued`, `downloading`,
 `provider_completed`, `ready_for_import`, `error`) — never either compat shim's
 own state strings (qBittorrent's `downloading`/`uploading`/etc., or SABnzbd's
-`Queued`/`Downloading`/etc.). `protocol` (`torrent` or `usenet`) is which of the
-two compat shims' worlds this download belongs to — internally this is
+`Queued`/`Downloading`/etc.). `protocol` (`torrent`, `usenet`, or `webdl`) is
+which debrid service this download belongs to — internally this is
 `database.Kind`; it's named `protocol` here because that reads better to API
 consumers than the Go-internal name (`Kind` avoids a clash with Go's own `type`
 keyword, and matches the standard library's own `reflect.Kind` naming
-convention for "which variant of a thing this is"). `id` is AcerviNode's own
+convention for "which variant of a thing this is"). `webdl` has no *arr-facing
+compat shim behind it at all (see [Providers](providers.md#webdownloadprovider))
+— every `webdl` row is always `added_via: "manual"`. `id` is AcerviNode's own
 identifier,
 not the provider's — use it for `/downloads/{id}` calls, not `hash` or a
 provider ID.
@@ -106,18 +110,22 @@ surface). The web UI shows `files_error` directly instead of a generic
 
 ## Adding downloads directly
 
-`POST /api/v1/downloads/torrent` and `POST /api/v1/downloads/usenet` let you add
-a download without going through Sonarr/Radarr or faking being one against a
-compat shim — this is what the web UI's "+ Add" button uses. Always lands as
-`added_via: "manual"` (shown in the Manual tab, never auto-fetched to local
-disk) — see [Providers](providers.md#managed-vs-manual). Both endpoints still
-accept an optional `category` field for programmatic callers, but the web
-UI's "+ Add" form doesn't offer it — category has no effect on a Manual
-download (see [Providers](providers.md#managed-vs-manual) for why it was
-deliberately left out). Errors:
-`400` if neither a link (`magnet`/`url`) nor a `file` is given, `503` if the
-relevant provider isn't configured yet, `502` for any other provider-side
-failure (e.g. an invalid magnet or a real upstream error).
+`POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
+`POST /api/v1/downloads/webdl` let you add a download without going through
+Sonarr/Radarr or faking being one against a compat shim — this is what the web
+UI's "+ Add" button uses. Always lands as `added_via: "manual"` (shown in the
+Manual tab, never auto-fetched to local disk) — see
+[Providers](providers.md#managed-vs-manual). All three endpoints still accept
+an optional `category` field for programmatic callers, but the web UI's "+
+Add" form doesn't offer it — category has no effect on a Manual download (see
+[Providers](providers.md#managed-vs-manual) for why it was deliberately left
+out). The `webdl` endpoint is genuinely link-only — a plain
+`application/x-www-form-urlencoded` body, not `multipart/form-data` — since
+TorBox's own Web Downloads service has no file-upload variant either. Errors:
+`400` if neither a link (`magnet`/`url`/`link`) nor a `file` is given (`webdl`
+only ever accepts `link`, never a `file`), `503` if the relevant provider isn't
+configured yet, `502` for any other provider-side failure (e.g. an invalid
+magnet, an unsupported hoster, or a real upstream error).
 
 Debrid providers dedupe by content: adding a magnet whose hash the provider
 already has cached under an earlier add returns the *existing* tracked

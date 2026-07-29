@@ -131,6 +131,40 @@ func (p *Provider) CheckCached(ctx context.Context, hashes []string) (map[string
 	return result, nil
 }
 
+// Account satisfies debrid.AccountProvider — GetUserData's response has many
+// more fields than modeled here (see UserData's own doc comment); only what
+// the settings UI's account status display actually uses is surfaced.
+func (p *Provider) Account(ctx context.Context) (debrid.AccountStatus, error) {
+	data, err := p.client.GetUserData(ctx)
+	if err != nil {
+		return debrid.AccountStatus{}, fmt.Errorf("torbox: account: %w", err)
+	}
+	return debrid.AccountStatus{
+		PlanName:             planName(data.Plan),
+		IsSubscribed:         data.IsSubscribed,
+		PremiumExpiresAt:     data.PremiumExpiresAt,
+		TotalBytesDownloaded: int64(data.TotalBytesDownloaded),
+	}, nil
+}
+
+// planName maps TorBox's numeric plan tier to a display name — confirmed
+// live against the real account (plan: 2, a real Pro subscription) alongside
+// the docs' own stated mapping.
+func planName(plan float64) string {
+	switch int(plan) {
+	case 0:
+		return "Free"
+	case 1:
+		return "Essential"
+	case 2:
+		return "Pro"
+	case 3:
+		return "Standard"
+	default:
+		return "Unknown"
+	}
+}
+
 func torrentToStatus(t Torrent) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
 		ID:         debrid.ProviderDownloadID(formatID(t.ID)),

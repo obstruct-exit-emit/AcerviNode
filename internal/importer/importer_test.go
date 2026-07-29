@@ -1056,3 +1056,67 @@ func TestSetConfig_ResetsTickerInterval(t *testing.T) {
 		}
 	}
 }
+
+// TestSetWebDownloadProvider_NilSkipsWebDLKindEntirely proves refreshKind's
+// nil check applies to the web-download provider exactly like it already
+// does for torrentProvider/usenetProvider — no provider set yet means Tick
+// doesn't touch KindWebDL at all (nothing to List against, nothing to
+// discover), rather than erroring.
+func TestSetWebDownloadProvider_NilSkipsWebDLKindEntirely(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindWebDL)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("KindWebDL downloads = %d, want 0 (no web-download provider configured)", len(rows))
+	}
+}
+
+// TestSetWebDownloadProvider_DiscoversManualWebDownloads proves
+// SetWebDownloadProvider wires a web-download-capable provider into
+// refreshStatuses' third refreshKind call — a hoster link that shows up in
+// the provider's List() after the baseline is seeded gets adopted as a
+// KindWebDL/AddedViaManual download, the same discovery flow already proven
+// for torrent/usenet in TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded.
+func TestSetWebDownloadProvider_DiscoversManualWebDownloads(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{}
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im.SetWebDownloadProvider(provider)
+
+	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	provider.statuses = append(provider.statuses, debrid.DownloadStatus{
+		ID: "webdl-1", Name: "Dragon Ball Z", Hash: "WEBHASH", State: debrid.StateCompleted, SizeBytes: 2048,
+	})
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindWebDL)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("KindWebDL downloads = %d, want 1", len(rows))
+	}
+	got := rows[0]
+	if got.ProviderDownloadID != "webdl-1" || got.AddedVia != database.AddedViaManual {
+		t.Errorf("adopted row = %+v, want provider_download_id=webdl-1 added_via=manual", got)
+	}
+	if got.Name != "Dragon Ball Z" || got.SizeBytes != 2048 {
+		t.Errorf("adopted row = %+v, want it to reflect the provider's status", got)
+	}
+}

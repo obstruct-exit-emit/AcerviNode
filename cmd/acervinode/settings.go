@@ -30,15 +30,16 @@ import (
 // since a handful of tests build a liveSettings without going through the
 // full startup sequence.
 type liveSettings struct {
-	mu         sync.Mutex
-	cfg        *config.Config
-	configPath string
-	torrentDyn *debrid.DynamicTorrentProvider
-	usenetDyn  *debrid.DynamicUsenetProvider
-	levelVar   *slog.LevelVar
-	imp        *importer.Importer
-	qbt        *qbittorrent.Server
-	sab        *sabnzbd.Server
+	mu             sync.Mutex
+	cfg            *config.Config
+	configPath     string
+	torrentDyn     *debrid.DynamicTorrentProvider
+	usenetDyn      *debrid.DynamicUsenetProvider
+	webDownloadDyn *debrid.DynamicWebDownloadProvider
+	levelVar       *slog.LevelVar
+	imp            *importer.Importer
+	qbt            *qbittorrent.Server
+	sab            *sabnzbd.Server
 }
 
 // SetLevelVar wires in the live log-level control built in run() — see
@@ -85,9 +86,10 @@ func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	torrentProvider, usenetProvider := newTorBoxProviders(apiKey)
+	torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(apiKey)
 	s.torrentDyn.Set(torrentProvider)
 	s.usenetDyn.Set(usenetProvider)
+	s.webDownloadDyn.Set(webDownloadProvider)
 
 	if s.cfg.Providers == nil {
 		s.cfg.Providers = map[string]config.ProviderConfig{}
@@ -288,6 +290,14 @@ func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string)
 		s.imp.SetCategoryPaths(copyCategoryPaths(s.cfg.CategoryPaths))
 	}
 	return nil
+}
+
+// AccountStatus reports the configured TorBox account's own plan/usage —
+// see debrid.DynamicTorrentProvider.Account, which this delegates to
+// directly (torrentDyn already holds whichever concrete provider is
+// currently active, live-swapped the same way as everything else here).
+func (s *liveSettings) AccountStatus(ctx context.Context) (debrid.AccountStatus, error) {
+	return s.torrentDyn.Account(ctx)
 }
 
 func copyCategoryPaths(src map[string]string) map[string]string {

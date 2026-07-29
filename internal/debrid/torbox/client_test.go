@@ -332,6 +332,193 @@ func TestListUsenetDownloads(t *testing.T) {
 	}
 }
 
+// TestCreateWebDownload pins createwebdownload's request shape — confirmed
+// live against the real API: application/x-www-form-urlencoded, not
+// multipart (this endpoint is link-only, no file upload option), link is the
+// only required field. webdownload_id comes back as a JSON number — confirmed
+// live against a real account (a raw API call against a real web download
+// returned {"webdownload_id": 1462379, ...}), the same mismatch against the
+// SDK's own docs (which claim it's a string) that usenetdownload_id turned
+// out to have.
+func TestCreateWebDownload(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/createwebdownload" {
+			t.Errorf("path = %s", got)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+			t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", ct)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm() error = %v", err)
+		}
+		if got := r.FormValue("link"); got != "https://mega.nz/folder/abc123" {
+			t.Errorf("link field = %q", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"webdownload_id": 123, "hash": "webhash"},
+		})
+	})
+
+	id, hash, err := client.CreateWebDownload(context.Background(), CreateWebDownloadRequest{
+		Link: "https://mega.nz/folder/abc123",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebDownload() error = %v", err)
+	}
+	if id != "123" {
+		t.Errorf("id = %q, want 123", id)
+	}
+	if hash != "webhash" {
+		t.Errorf("hash = %q, want webhash", hash)
+	}
+}
+
+func TestControlWebDownload(t *testing.T) {
+	var gotBody map[string]any
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/controlwebdownload" {
+			t.Errorf("path = %s", got)
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		json.NewEncoder(w).Encode(map[string]any{"success": true})
+	})
+
+	if err := client.ControlWebDownload(context.Background(), "123", OpDelete); err != nil {
+		t.Fatalf("ControlWebDownload() error = %v", err)
+	}
+	if gotBody["webdl_id"] != "123" || gotBody["operation"] != "delete" {
+		t.Errorf("request body = %+v, want webdl_id=123 operation=delete", gotBody)
+	}
+}
+
+func TestRequestWebDownloadLink(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/requestdl" {
+			t.Errorf("path = %s", got)
+		}
+		q := r.URL.Query()
+		if q.Get("web_id") != "123" || q.Get("file_id") != "1" || q.Get("token") != "test-api-key" {
+			t.Errorf("query = %v", q)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": "https://cdn.torbox.app/webdl/file"})
+	})
+
+	url, err := client.RequestWebDownloadLink(context.Background(), "123", "1")
+	if err != nil {
+		t.Fatalf("RequestWebDownloadLink() error = %v", err)
+	}
+	if url != "https://cdn.torbox.app/webdl/file" {
+		t.Errorf("url = %q", url)
+	}
+}
+
+// TestRequestWebDownloadZipDownloadLink pins the query shape mirroring the
+// torrent/usenet zip_link trick — the parameter's existence is confirmed via
+// TorBox's real OpenAPI spec, but this exact call is NOT confirmed live (see
+// RequestWebDownloadZipDownloadLink's doc comment).
+func TestRequestWebDownloadZipDownloadLink(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("web_id") != "123" || q.Get("zip_link") != "true" || q.Get("file_id") != "" {
+			t.Errorf("query = %v, want web_id=123 zip_link=true no file_id", q)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": "https://cdn.torbox.app/webdl/zip"})
+	})
+
+	url, err := client.RequestWebDownloadZipDownloadLink(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("RequestWebDownloadZipDownloadLink() error = %v", err)
+	}
+	if url != "https://cdn.torbox.app/webdl/zip" {
+		t.Errorf("url = %q", url)
+	}
+}
+
+func TestListWebDownloads(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/mylist" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": []map[string]any{
+				{
+					"id": 123, "hash": "webhash", "name": "Dragon Ball Z",
+					"size": 2048.0, "download_state": "cached", "progress": 1.0,
+					// A legitimate file id of 0 — confirmed live against a real
+					// Mega folder download, and formatID handles it fine.
+					"files": []map[string]any{{"id": 0, "name": "video.mkv", "size": 2048.0}},
+				},
+			},
+		})
+	})
+
+	downloads, err := client.ListWebDownloads(context.Background())
+	if err != nil {
+		t.Fatalf("ListWebDownloads() error = %v", err)
+	}
+	if len(downloads) != 1 || downloads[0].Name != "Dragon Ball Z" {
+		t.Errorf("downloads = %+v", downloads)
+	}
+	if len(downloads[0].Files) != 1 || downloads[0].Files[0].ID != 0 {
+		t.Errorf("files = %+v", downloads[0].Files)
+	}
+}
+
+func TestGetHosterList(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/hosters" {
+			t.Errorf("path = %s", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": []map[string]any{
+				{"name": "Mega", "domains": []string{"mega.nz"}, "status": true, "type": "hoster"},
+				{"name": "YouTube", "domains": []string{"youtube.com"}, "status": true, "type": "stream"},
+			},
+		})
+	})
+
+	hosters, err := client.GetHosterList(context.Background())
+	if err != nil {
+		t.Fatalf("GetHosterList() error = %v", err)
+	}
+	if len(hosters) != 2 || hosters[0].Name != "Mega" || !hosters[0].Status {
+		t.Errorf("hosters = %+v", hosters)
+	}
+}
+
+func TestGetUserData(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/user/me" {
+			t.Errorf("path = %s", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"plan": 2, "is_subscribed": true,
+				"premium_expires_at":     "2027-01-01T00:00:00Z",
+				"total_bytes_downloaded": 1099511627776.0,
+			},
+		})
+	})
+
+	data, err := client.GetUserData(context.Background())
+	if err != nil {
+		t.Fatalf("GetUserData() error = %v", err)
+	}
+	if data.Plan != 2 || !data.IsSubscribed {
+		t.Errorf("data = %+v", data)
+	}
+	if data.TotalBytesDownloaded != 1099511627776.0 {
+		t.Errorf("TotalBytesDownloaded = %v", data.TotalBytesDownloaded)
+	}
+}
+
 func TestDo_NonSuccessHTTPStatus(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

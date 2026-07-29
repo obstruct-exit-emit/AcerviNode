@@ -14,6 +14,7 @@ import (
 var (
 	_ debrid.TorrentProvider = (*Provider)(nil)
 	_ debrid.UsenetProvider  = (*UsenetProvider)(nil)
+	_ debrid.AccountProvider = (*Provider)(nil)
 )
 
 // TestMapDownloadState proves TorBox's real download_state vocabulary maps
@@ -213,6 +214,52 @@ func TestProvider_StatusFindsQueuedDownload(t *testing.T) {
 	}
 	if status.State != debrid.StateQueued || status.Hash != "backlogged" {
 		t.Errorf("status = %+v", status)
+	}
+}
+
+// TestProvider_Account proves GetUserData's plan/usage fields map onto
+// debrid.AccountStatus correctly, including planName's numeric-tier mapping
+// (2 = Pro, confirmed live against the real account).
+func TestProvider_Account(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/api/user/me" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"plan": 2, "is_subscribed": true,
+				"premium_expires_at":     "2027-01-01T00:00:00Z",
+				"total_bytes_downloaded": 1024.0,
+			},
+		})
+	}))
+	defer server.Close()
+
+	p := NewProvider("test-key", WithBaseURL(server.URL))
+	status, err := p.Account(context.Background())
+	if err != nil {
+		t.Fatalf("Account() error = %v", err)
+	}
+	if status.PlanName != "Pro" {
+		t.Errorf("PlanName = %q, want Pro", status.PlanName)
+	}
+	if !status.IsSubscribed || status.PremiumExpiresAt != "2027-01-01T00:00:00Z" || status.TotalBytesDownloaded != 1024 {
+		t.Errorf("status = %+v", status)
+	}
+}
+
+func TestPlanName(t *testing.T) {
+	cases := []struct {
+		plan float64
+		want string
+	}{
+		{0, "Free"}, {1, "Essential"}, {2, "Pro"}, {3, "Standard"}, {99, "Unknown"},
+	}
+	for _, c := range cases {
+		if got := planName(c.plan); got != c.want {
+			t.Errorf("planName(%v) = %q, want %q", c.plan, got, c.want)
+		}
 	}
 }
 

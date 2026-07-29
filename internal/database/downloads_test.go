@@ -59,6 +59,39 @@ func TestInsertAndGetDownload(t *testing.T) {
 	}
 }
 
+// TestInsertDownload_WebDLKind is a regression test for migration
+// 0005_webdl_kind.sql: the downloads table's CHECK constraint had to be
+// widened (via SQLite's recreate-table pattern, since CHECK can't be altered
+// in place) to allow kind='webdl' alongside 'torrent'/'usenet' — this proves
+// a webdl row actually inserts and round-trips cleanly, not just that the
+// migration runs without erroring.
+func TestInsertDownload_WebDLKind(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindWebDL)
+	d.Hash = "" // a web download's hash isn't known until the provider resolves it
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload(webdl) error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got == nil || got.Kind != KindWebDL {
+		t.Errorf("GetDownloadByID() = %+v, want kind=webdl", got)
+	}
+
+	rows, err := db.ListDownloads(ctx, KindWebDL)
+	if err != nil {
+		t.Fatalf("ListDownloads(webdl) error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != d.ID {
+		t.Errorf("ListDownloads(webdl) = %+v, want only %s", rows, d.ID)
+	}
+}
+
 func TestGetDownloadByID_NotFound(t *testing.T) {
 	db := openTestDB(t)
 	got, err := db.GetDownloadByID(context.Background(), "does-not-exist")

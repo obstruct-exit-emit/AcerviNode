@@ -1,6 +1,6 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 and 5–7 are
+Where the project has been and where it's going. Phases 0–3 and 5–8 are
 complete; Phase 4 (more debrid providers) is blocked for now. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
@@ -18,6 +18,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [5 — Hardening & release](#phase-5--hardening--release-) | systemd unit, packaged Linux binaries, release automation | ✅ |
 | [6 — Full QA pass](#phase-6--full-qa-pass-) | Systematic review + live testing of every existing ability; 3 real bugs found and fixed | ✅ |
 | [7 — Managed vs. Manual downloads](#phase-7--managed-vs-manual-downloads-) | Split the web UI into two tabs by how a download was added, plus discovering items added directly through TorBox | ✅ |
+| [8 — Web Downloads & account status](#phase-8--web-downloads--account-status-) | TorBox's generic hoster-debrid service (Mega, 1Fichier, and ~160 others), plus a TorBox account status display | ✅ |
 
 ---
 
@@ -607,3 +608,78 @@ resume it, confirm via request headers that it genuinely resumed with Range
 rather than restarting, then check the finished file's integrity. That's a
 dedicated session's worth of hands-on-the-browser verification, not
 something to tack onto the end of an already-long one.
+
+## Phase 8 — Web Downloads & account status ✅
+
+Prompted directly by the user asking "can we add Torbox's mega api support?
+should we add a few others while we do that?" — built fully autonomously per
+explicit go-ahead ("do this without me as I will be gone for a few hours").
+"Mega API support" doesn't mean anything Mega-specific in TorBox's real API —
+it turned out to mean TorBox's generic Web Downloads (hoster-debrid) service,
+confirmed by researching TorBox's real OpenAPI spec directly rather than
+assuming, and confirmed live that Mega is one of ~160 currently active hosters
+on it. Evaluated the TorBox SDK's remaining 6 service categories against
+AcerviNode's actual purpose before deciding what else to add: Integrations
+pushes files the wrong direction for this project's model (it's about
+debriding *into* AcerviNode, not pushing out to a NAS/upload target),
+RssFeeds would duplicate Sonarr/Radarr's own job, Notifications/General
+aren't relevant to a download client, and Queued is already implemented
+(TorBox's pre-processing queue, since Phase 3's status-update-speed
+investigation). Landed on: Web Downloads (the real ask) + a small
+UserService-based account-status display, everything else skipped.
+
+- **`debrid.WebDownloadProvider`** — a third optional provider interface
+  (`AddLink`/`Status`/`List`/`Files`/`RequestDownloadLink`/
+  `RequestZipDownloadLink`/`Delete`), same "not every provider needs it"
+  shape as `UsenetProvider`. Genuinely link-only, unlike torrent/usenet adds —
+  TorBox's own `createwebdownload` has no file-upload variant either. New
+  `downloads.kind = 'webdl'` (migration `0005_webdl_kind.sql`, recreating the
+  table since SQLite can't `ALTER` a `CHECK` constraint in place) — every
+  `webdl` row is always `added_via: manual`, since there's no *arr-facing
+  shim that could add one on Sonarr/Radarr's behalf.
+- **`debrid.AccountProvider`** — a one-method interface (`Account`) backing
+  a live TorBox account-status display (plan tier, subscription state,
+  premium expiry, lifetime bytes downloaded). `DynamicTorrentProvider.Account`
+  delegates to its inner provider via a type assertion rather than needing a
+  whole fourth `Dynamic*Provider` wrapper for one read-only call.
+- New endpoints: `POST /api/v1/downloads/webdl` and
+  `GET /api/v1/settings/account` — both follow existing conventions exactly
+  (dedup/provider-status-fallback for the add endpoint; the routine
+  "available: false, not a hard error" stance already established by every
+  other settings endpoint for the account one).
+- Web UI: a third "Web Link" tab in "+ Add" (no file-upload mode shown for
+  it, matching the endpoint), and a TorBox account section in Settings.
+- **Every claim ended up confirmed live**, including two that briefly looked
+  unverifiable: two earlier attempts at a safe test web download failed (a
+  GitHub raw-file link came back `UNSUPPORTED_SITE`; PixelDrain's anonymous
+  upload now requires its own API key), but `archive.org` turned out to be
+  one of TorBox's own ~160 supported hosters, and a small public-domain test
+  file it hosts made a real, safe end-to-end test possible. Confirmed:
+  `createwebdownload`'s response field `webdownload_id` (documented as a
+  string, initially handled defensively via a `flexibleID` type pending
+  confirmation) is actually a JSON number — a raw API call returned
+  `{"webdownload_id": 1462379, ...}` — the same mismatch `usenetdownload_id`
+  turned out to have (see Phase 3's status-update-speed entry); `flexibleID`
+  was then simplified back to a plain `float64`. `RequestWebDownloadZipDownloadLink`
+  was confirmed too: the resolved URL served a real `application/zip` with the
+  correct `content-disposition`. The full add → status → files →
+  per-file-link → zip-link → delete cycle ran end to end through AcerviNode's
+  own live API, and the provider-side delete was independently confirmed by
+  querying TorBox's own `webdl/mylist` directly afterward. Also confirmed:
+  the account's real Mega folder download history (since expired), Mega's
+  active status among TorBox's hosters, and the real account's actual
+  `GET /user/me` response (a genuine Pro/`plan: 2` subscription, with far
+  more fields than the SDK's own docs or Go types declare). See
+  [Providers](docs/providers.md#web-downloads).
+- Full test coverage added at every layer touched: TorBox client
+  (`httptest` fakes for all six new client methods), a provider-adapter
+  test file mirroring the existing ones, `internal/debrid`'s Dynamic-wrapper
+  tests, `internal/api` handler tests, an `internal/importer` test proving
+  the new provider wires into discovery/status-refresh correctly, and an
+  `internal/database` regression test for the migration itself (a `webdl`
+  row actually inserts and round-trips, not just that the migration runs
+  without erroring). Windows Application Control blocked running
+  `internal/debrid`'s own test binary locally during this session (unrelated
+  to any of this session's code — every other package's tests ran fine); the
+  full suite, including that package, was instead run and confirmed green
+  from a WSL environment against the same working tree.

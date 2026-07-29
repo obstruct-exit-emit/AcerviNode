@@ -331,3 +331,189 @@ func (c *Client) ListQueued(ctx context.Context, kind string) ([]QueuedDownload,
 func formatID(n float64) string {
 	return strconv.FormatInt(int64(n), 10)
 }
+
+// --- Web Downloads -----------------------------------------------------------
+//
+// TorBox's "Web Downloads" service debrids direct links from ~160 supported
+// hosters (Mega, 1Fichier, Mediafire, PixelDrain, and more — see
+// GetHosterList), confirmed live against the real account: Mega itself is
+// active right now, and a real (if since-expired) Mega folder download
+// already existed in the account's own history, confirming the shape below
+// against real data rather than SDK docs alone — see docs/providers.md.
+// Genuinely link-only, unlike createtorrent/createusenetdownload — no file
+// upload option exists for this endpoint.
+
+// CreateWebDownloadRequest mirrors createwebdownload's form fields (per
+// TorBox's real OpenAPI spec, application/x-www-form-urlencoded — confirmed
+// directly, not assumed from the SDK's docs). Link is the only required
+// field; Name overrides the display name TorBox would otherwise infer.
+type CreateWebDownloadRequest struct {
+	Link string
+	Name string
+}
+
+type createWebDownloadData struct {
+	WebdownloadID float64 `json:"webdownload_id"`
+	Hash          string  `json:"hash"`
+}
+
+// CreateWebDownload submits a hoster link. Returns TorBox's assigned id and
+// hash the same way CreateTorrent/CreateUsenetDownload do. webdownload_id
+// comes back as a JSON number — confirmed live against a real account
+// (documented as a string in the SDK's own docs, the same mismatch
+// usenetdownload_id turned out to have — see CreateUsenetDownload).
+func (c *Client) CreateWebDownload(ctx context.Context, req CreateWebDownloadRequest) (id string, hash string, err error) {
+	form := url.Values{"link": {req.Link}}
+	if req.Name != "" {
+		form.Set("name", req.Name)
+	}
+	var env envelope[createWebDownloadData]
+	if err := c.doPostForm(ctx, "/webdl/createwebdownload", form, &env); err != nil {
+		return "", "", err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return "", "", err
+	}
+	return formatID(env.Data.WebdownloadID), env.Data.Hash, nil
+}
+
+// ControlWebDownload performs delete on a web download — the only control
+// operation that's meaningful here, unlike torrents/usenet (no pause/resume/
+// reannounce concept for a direct-link fetch). webID is sent as a JSON
+// string in the body; TorBox's real OpenAPI spec declares webdl_id as an
+// integer, same as torrent_id/usenet_id, but both of those have been sent as
+// strings in this client all along without issue (confirmed by every real
+// delete this session) — TorBox's backend evidently coerces it.
+func (c *Client) ControlWebDownload(ctx context.Context, webID, operation string) error {
+	body := map[string]any{"webdl_id": webID, "operation": operation}
+	var env envelope[any]
+	if err := c.doPostJSON(ctx, "/webdl/controlwebdownload", body, &env); err != nil {
+		return err
+	}
+	return checkSuccess(env.Success, env.Detail)
+}
+
+// RequestWebDownloadLink resolves a real CDN URL for one file of a web download.
+func (c *Client) RequestWebDownloadLink(ctx context.Context, webID, fileID string) (string, error) {
+	q := url.Values{
+		"token":   {c.apiKey},
+		"web_id":  {webID},
+		"file_id": {fileID},
+	}
+	var env envelope[string]
+	if err := c.doGet(ctx, "/webdl/requestdl", q, &env); err != nil {
+		return "", err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return "", err
+	}
+	return env.Data, nil
+}
+
+// RequestWebDownloadZipDownloadLink mirrors RequestTorrentZipDownloadLink's
+// zip_link=true trick — confirmed live against a real web download (a small
+// public-domain archive.org file): the returned URL served a real
+// Content-Type: application/zip with the correct content-disposition.
+func (c *Client) RequestWebDownloadZipDownloadLink(ctx context.Context, webID string) (string, error) {
+	q := url.Values{
+		"token":    {c.apiKey},
+		"web_id":   {webID},
+		"zip_link": {"true"},
+	}
+	var env envelope[string]
+	if err := c.doGet(ctx, "/webdl/requestdl", q, &env); err != nil {
+		return "", err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return "", err
+	}
+	return env.Data, nil
+}
+
+// WebDownloadFile is one file within a web download, per mylist's embedded
+// file list — confirmed live (a real Mega folder download's files carried
+// exactly these fields, including a file id of 0, which formatID handles
+// fine).
+type WebDownloadFile struct {
+	ID   float64 `json:"id"`
+	Name string  `json:"name"`
+	Size float64 `json:"size"`
+}
+
+// WebDownload is one entry from ListWebDownloads.
+type WebDownload struct {
+	ID               float64           `json:"id"`
+	Hash             string            `json:"hash"`
+	Name             string            `json:"name"`
+	Size             float64           `json:"size"`
+	DownloadState    string            `json:"download_state"`
+	Progress         float64           `json:"progress"`
+	DownloadFinished bool              `json:"download_finished"`
+	Eta              float64           `json:"eta"`
+	Files            []WebDownloadFile `json:"files"`
+}
+
+// ListWebDownloads returns every web download on the account. Same
+// bypass_cache reasoning as ListTorrents/ListUsenetDownloads.
+func (c *Client) ListWebDownloads(ctx context.Context) ([]WebDownload, error) {
+	var env envelope[[]WebDownload]
+	if err := c.doGet(ctx, "/webdl/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
+		return nil, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}
+
+// Hoster is one entry from GetHosterList — TorBox's currently-supported
+// hoster list for Web Downloads. Confirmed live: 160 entries as of this
+// writing, Mega active (status true) among them.
+type Hoster struct {
+	Name    string   `json:"name"`
+	Domains []string `json:"domains"`
+	Status  bool     `json:"status"`
+	Type    string   `json:"type"` // "hoster" or "stream" (e.g. YouTube, Twitch)
+}
+
+// GetHosterList returns every hoster Web Downloads currently supports —
+// dynamic and TorBox-authoritative rather than a hardcoded (and inevitably
+// stale) list AcerviNode would otherwise have to maintain itself.
+func (c *Client) GetHosterList(ctx context.Context) ([]Hoster, error) {
+	var env envelope[[]Hoster]
+	if err := c.doGet(ctx, "/webdl/hosters", nil, &env); err != nil {
+		return nil, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}
+
+// --- User -------------------------------------------------------------------
+
+// UserData is a subset of GET /user/me's response — just what AcerviNode's
+// own account-status display needs. Confirmed live against the real
+// account: the actual response has many more fields than either the
+// official SDK's docs or its own Go types declare (e.g. total_bytes_downloaded,
+// torrents_downloaded, web_downloads_downloaded weren't documented anywhere
+// found) — this only models what's actually used, using the field names
+// confirmed from that real response.
+type UserData struct {
+	Plan                 float64 `json:"plan"` // 0 Free, 1 Essential, 2 Pro, 3 Standard
+	IsSubscribed         bool    `json:"is_subscribed"`
+	PremiumExpiresAt     string  `json:"premium_expires_at"`
+	TotalBytesDownloaded float64 `json:"total_bytes_downloaded"`
+}
+
+// GetUserData returns the current account's plan/usage info.
+func (c *Client) GetUserData(ctx context.Context) (UserData, error) {
+	var env envelope[UserData]
+	if err := c.doGet(ctx, "/user/me", nil, &env); err != nil {
+		return UserData{}, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return UserData{}, err
+	}
+	return env.Data, nil
+}

@@ -47,11 +47,15 @@ can be configured either way and land on the same download pipeline underneath.
 
 **🔌 Debrid providers**
 
-| Provider | Torrents | Usenet | Status |
-|---|---|---|---|
-| TorBox | ✅ | ✅ | working |
-| Real-Debrid | — | — | planned |
-| Others (Debrid-Link, AllDebrid, Premiumize) | — | — | planned |
+| Provider | Torrents | Usenet | Web Downloads | Status |
+|---|---|---|---|---|
+| TorBox | ✅ | ✅ | ✅ | working |
+| Real-Debrid | — | — | — | planned |
+| Others (Debrid-Link, AllDebrid, Premiumize) | — | — | — | planned |
+
+"Web Downloads" debrids a direct link from a hoster (Mega, 1Fichier, Mediafire,
+and ~160 others TorBox currently supports) — no torrent or NZB involved, just a
+plain URL.
 
 The provider interface is deliberately thin: a new torrent-only provider (like
 Real-Debrid) is a pure addition — no changes to either compat shim, no changes to
@@ -73,23 +77,23 @@ the storage layer.
 **🖥️ Native API + web UI**
 
 - Versioned REST API (`/api/v1`): health, version, provider status, download
-  listing/management/**adding** (magnet, .torrent, NZB URL, or .nzb file — no
-  need to go through Sonarr/Radarr or fake being one), settings — API-key
-  authenticated, the exact API the UI itself uses
+  listing/management/**adding** (magnet, .torrent, NZB URL/.nzb file, or a
+  direct hoster link — no need to go through Sonarr/Radarr or fake being
+  one), settings — API-key authenticated, the exact API the UI itself uses
 - A React (Vite) single-page dashboard, embedded into the binary, split into
   **Managed** (added through Sonarr/Radarr, auto-fetched to disk) and
   **Manual** (added directly, or discovered already sitting in your TorBox
   account — never auto-fetched, browse and grab files on demand instead) —
   live state/progress, provider status, one-click delete, a "+ Add" button
-  to push a magnet/torrent file/NZB straight in, a per-download detail view
-  (full metadata, file list, retry status), and a Settings tab to add/change
-  your TorBox key without touching `config.yaml` — takes effect immediately,
-  no restart
+  to push a magnet/torrent file/NZB/hoster link straight in, a per-download
+  detail view (full metadata, file list, retry status), and a Settings tab
+  to add/change your TorBox key without touching `config.yaml` — takes
+  effect immediately, no restart
 - The Settings tab also surfaces AcerviNode's own configuration (port, data/download
-  dirs, log level, import settings) and its own API key — copyable straight from
+  dirs, log level, import settings), its own API key — copyable straight from
   the UI instead of digging through server logs or `config.yaml`, with a
   one-click regenerate that applies immediately across the native API and both
-  compat shims
+  compat shims — and your TorBox account's own plan/subscription/usage status
 
 **🗄️ Storage**
 

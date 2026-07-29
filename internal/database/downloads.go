@@ -12,12 +12,18 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// Kind distinguishes the two compat shims' rows in the shared downloads table.
+// Kind distinguishes what a downloads row actually is. Torrent/usenet back
+// the two compat shims (Sonarr/Radarr-facing); webdl (TorBox's Web Downloads
+// / hoster-debrid service — Mega, 1Fichier, Mediafire, and ~160 others) has
+// no *arr-facing shim at all, since neither qBittorrent nor SABnzbd has a
+// "paste a hoster link" download-client concept — every webdl row is always
+// AddedViaManual, added through the native API/web UI directly.
 type Kind string
 
 const (
 	KindTorrent Kind = "torrent"
 	KindUsenet  Kind = "usenet"
+	KindWebDL   Kind = "webdl"
 )
 
 // State values for the downloads.state local state machine. This is

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { addTorrent, addUsenet, ApiError, type ProviderStatus } from '../api'
+import { addTorrent, addUsenet, addWebDownload, ApiError, type ProviderStatus } from '../api'
 
-type Protocol = 'torrent' | 'usenet'
+type Protocol = 'torrent' | 'usenet' | 'webdl'
 type InputMode = 'link' | 'file'
 
 interface Props {
@@ -11,11 +11,26 @@ interface Props {
   onAdded: () => void
 }
 
+const PROTOCOL_LABELS: Record<Protocol, string> = {
+  torrent: 'Torrent',
+  usenet: 'Usenet',
+  webdl: 'Web Link',
+}
+
 export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
   const torrentAvailable = providers.some((p) => p.torrent_capable)
   const usenetAvailable = providers.some((p) => p.usenet_capable)
+  const webdlAvailable = providers.some((p) => p.webdl_capable)
+  const availableProtocols: Protocol[] = [
+    ...(torrentAvailable ? (['torrent'] as const) : []),
+    ...(usenetAvailable ? (['usenet'] as const) : []),
+    ...(webdlAvailable ? (['webdl'] as const) : []),
+  ]
 
-  const [protocol, setProtocol] = useState<Protocol>(torrentAvailable ? 'torrent' : 'usenet')
+  const [protocol, setProtocol] = useState<Protocol>(availableProtocols[0] ?? 'torrent')
+  // Web Downloads is genuinely link-only — TorBox's own createwebdownload API
+  // has no file-upload variant, unlike torrent/usenet — so there's no mode
+  // toggle to show for it (see handleSubmit's protocol==='webdl' branch).
   const [mode, setMode] = useState<InputMode>('link')
   const [link, setLink] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -31,8 +46,9 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (mode === 'link' && !link.trim()) return
-    if (mode === 'file' && !file) return
+    if (protocol !== 'webdl' && mode === 'link' && !link.trim()) return
+    if (protocol !== 'webdl' && mode === 'file' && !file) return
+    if (protocol === 'webdl' && !link.trim()) return
 
     setStatus({ kind: 'saving' })
     try {
@@ -46,15 +62,26 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
       if (protocol === 'torrent') {
         if (mode === 'file') await addTorrent(apiKey, { file: file as File })
         else await addTorrent(apiKey, { magnet: link.trim() })
-      } else {
+      } else if (protocol === 'usenet') {
         if (mode === 'file') await addUsenet(apiKey, { file: file as File })
         else await addUsenet(apiKey, { url: link.trim() })
+      } else {
+        await addWebDownload(apiKey, { link: link.trim() })
       }
       onAdded()
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
+
+  function selectProtocol(p: Protocol) {
+    setProtocol(p)
+    setMode('link')
+    setStatus({ kind: 'idle' })
+  }
+
+  const protocolAvailable =
+    protocol === 'torrent' ? torrentAvailable : protocol === 'usenet' ? usenetAvailable : webdlAvailable
 
   return (
     <div className="detail-overlay" onClick={onClose}>
@@ -66,52 +93,50 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
           </button>
         </div>
 
-        {torrentAvailable && usenetAvailable && (
+        {availableProtocols.length > 1 && (
           <div className="protocol-tabs">
-            <button
-              type="button"
-              className={protocol === 'torrent' ? 'tab tab-active' : 'tab'}
-              onClick={() => {
-                setProtocol('torrent')
-                setStatus({ kind: 'idle' })
-              }}
-            >
-              Torrent
-            </button>
-            <button
-              type="button"
-              className={protocol === 'usenet' ? 'tab tab-active' : 'tab'}
-              onClick={() => {
-                setProtocol('usenet')
-                setStatus({ kind: 'idle' })
-              }}
-            >
-              Usenet
-            </button>
+            {availableProtocols.map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={protocol === p ? 'tab tab-active' : 'tab'}
+                onClick={() => selectProtocol(p)}
+              >
+                {PROTOCOL_LABELS[p]}
+              </button>
+            ))}
           </div>
         )}
 
-        {!torrentAvailable && !usenetAvailable && (
+        {availableProtocols.length === 0 && (
           <p className="settings-help">No provider is configured yet — add one under Settings first.</p>
         )}
 
-        {(protocol === 'torrent' ? torrentAvailable : usenetAvailable) && (
+        {protocolAvailable && (
           <form onSubmit={handleSubmit}>
-            <div className="mode-toggle">
-              <label>
-                <input type="radio" checked={mode === 'link'} onChange={() => setMode('link')} />
-                {protocol === 'torrent' ? 'Magnet link' : 'NZB URL'}
-              </label>
-              <label>
-                <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
-                Upload file
-              </label>
-            </div>
+            {protocol !== 'webdl' && (
+              <div className="mode-toggle">
+                <label>
+                  <input type="radio" checked={mode === 'link'} onChange={() => setMode('link')} />
+                  {protocol === 'torrent' ? 'Magnet link' : 'NZB URL'}
+                </label>
+                <label>
+                  <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
+                  Upload file
+                </label>
+              </div>
+            )}
 
-            {mode === 'link' ? (
+            {protocol === 'webdl' || mode === 'link' ? (
               <input
                 type="text"
-                placeholder={protocol === 'torrent' ? 'magnet:?xt=urn:btih:...' : 'https://example.com/release.nzb'}
+                placeholder={
+                  protocol === 'torrent'
+                    ? 'magnet:?xt=urn:btih:...'
+                    : protocol === 'usenet'
+                      ? 'https://example.com/release.nzb'
+                      : 'https://mega.nz/folder/...'
+                }
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
                 autoFocus
@@ -126,7 +151,10 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
 
             <button
               type="submit"
-              disabled={status.kind === 'saving' || (mode === 'link' ? !link.trim() : !file)}
+              disabled={
+                status.kind === 'saving' ||
+                (protocol === 'webdl' ? !link.trim() : mode === 'link' ? !link.trim() : !file)
+              }
             >
               {status.kind === 'saving' ? 'Adding…' : 'Add'}
             </button>

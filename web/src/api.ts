@@ -5,12 +5,13 @@ export interface ProviderStatus {
   name: string
   torrent_capable: boolean
   usenet_capable: boolean
+  webdl_capable: boolean
 }
 
 export interface Download {
   id: string
   provider: string
-  protocol: 'torrent' | 'usenet'
+  protocol: 'torrent' | 'usenet' | 'webdl'
   hash?: string
   name: string
   category?: string
@@ -168,6 +169,21 @@ export function addUsenet(
   return request('/api/v1/downloads/usenet', apiKey, { method: 'POST', body: form })
 }
 
+// addWebDownload submits a direct hoster link (Mega, 1Fichier, Mediafire, and
+// ~160 others TorBox's Web Downloads service supports) — link-only, unlike
+// addTorrent/addUsenet: there's no file-upload variant for this endpoint
+// (TorBox's own createwebdownload API has none either).
+export function addWebDownload(apiKey: string, input: { link: string; category?: string }): Promise<Download> {
+  const body = new URLSearchParams()
+  body.set('link', input.link)
+  if (input.category) body.set('category', input.category)
+  return request('/api/v1/downloads/webdl', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+}
+
 export interface ProviderSettings {
   [providerName: string]: { configured: boolean }
 }
@@ -260,4 +276,23 @@ export function setCategoryPath(apiKey: string, category: string, path: string):
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ category, path }),
   })
+}
+
+// TorBoxAccount is GET /api/v1/settings/account's response — a live call to
+// the configured provider, not a cached snapshot. available is false (with a
+// reason in error) whenever nothing's configured yet, or the configured
+// provider doesn't support reporting account status at all — that's routine,
+// not a failure, so the Settings page just hides the section rather than
+// showing an error state.
+export interface TorBoxAccount {
+  available: boolean
+  error?: string
+  plan_name?: string
+  is_subscribed?: boolean
+  premium_expires_at?: string
+  total_bytes_downloaded?: number
+}
+
+export function getTorBoxAccount(apiKey: string): Promise<TorBoxAccount> {
+  return request('/api/v1/settings/account', apiKey)
 }

@@ -831,6 +831,10 @@ table.downloads tbody tr:hover {
   font-size: 12.5px;
 }
 
+.account-status {
+  margin-top: 16px;
+}
+
 .detail-error-message {
   color: var(--state-error);
   font-size: 13px;

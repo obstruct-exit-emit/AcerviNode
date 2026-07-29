@@ -3,6 +3,7 @@ package debrid
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -126,6 +127,22 @@ func (d *DynamicTorrentProvider) CheckCached(ctx context.Context, hashes []strin
 	return p.CheckCached(ctx, hashes)
 }
 
+// Account satisfies debrid.AccountProvider by delegating to the current
+// inner provider, if it happens to implement AccountProvider too — reuses
+// this wrapper's existing live-swap machinery rather than needing a whole
+// separate DynamicAccountProvider just for one read-only call.
+func (d *DynamicTorrentProvider) Account(ctx context.Context) (AccountStatus, error) {
+	p, err := d.current()
+	if err != nil {
+		return AccountStatus{}, err
+	}
+	ap, ok := p.(AccountProvider)
+	if !ok {
+		return AccountStatus{}, fmt.Errorf("debrid: provider %q does not support account status", d.name)
+	}
+	return ap.Account(ctx)
+}
+
 // DynamicUsenetProvider is DynamicTorrentProvider's counterpart for
 // UsenetProvider — see its docs for the rationale.
 type DynamicUsenetProvider struct {
@@ -218,6 +235,97 @@ func (d *DynamicUsenetProvider) RequestZipDownloadLink(ctx context.Context, id P
 }
 
 func (d *DynamicUsenetProvider) Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error {
+	p, err := d.current()
+	if err != nil {
+		return err
+	}
+	return p.Delete(ctx, id, deleteFiles)
+}
+
+// DynamicWebDownloadProvider is DynamicTorrentProvider's counterpart for
+// WebDownloadProvider — see its docs for the rationale.
+type DynamicWebDownloadProvider struct {
+	name  string
+	mu    sync.RWMutex
+	inner WebDownloadProvider
+}
+
+func NewDynamicWebDownloadProvider(name string) *DynamicWebDownloadProvider {
+	return &DynamicWebDownloadProvider{name: name}
+}
+
+func (d *DynamicWebDownloadProvider) Set(p WebDownloadProvider) {
+	d.mu.Lock()
+	d.inner = p
+	d.mu.Unlock()
+}
+
+func (d *DynamicWebDownloadProvider) Configured() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.inner != nil
+}
+
+func (d *DynamicWebDownloadProvider) current() (WebDownloadProvider, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.inner == nil {
+		return nil, ErrNoProvider
+	}
+	return d.inner, nil
+}
+
+func (d *DynamicWebDownloadProvider) Name() string { return d.name }
+
+func (d *DynamicWebDownloadProvider) AddLink(ctx context.Context, link string, opts AddOptions) (ProviderDownloadID, error) {
+	p, err := d.current()
+	if err != nil {
+		return "", err
+	}
+	return p.AddLink(ctx, link, opts)
+}
+
+func (d *DynamicWebDownloadProvider) Status(ctx context.Context, id ProviderDownloadID) (DownloadStatus, error) {
+	p, err := d.current()
+	if err != nil {
+		return DownloadStatus{}, err
+	}
+	return p.Status(ctx, id)
+}
+
+func (d *DynamicWebDownloadProvider) List(ctx context.Context) ([]DownloadStatus, error) {
+	p, err := d.current()
+	if err != nil {
+		return nil, err
+	}
+	return p.List(ctx)
+}
+
+func (d *DynamicWebDownloadProvider) Files(ctx context.Context, id ProviderDownloadID) ([]DownloadFile, error) {
+	p, err := d.current()
+	if err != nil {
+		return nil, err
+	}
+	return p.Files(ctx, id)
+}
+
+func (d *DynamicWebDownloadProvider) RequestDownloadLink(ctx context.Context, id ProviderDownloadID, fileID string) (string, error) {
+	p, err := d.current()
+	if err != nil {
+		return "", err
+	}
+	return p.RequestDownloadLink(ctx, id, fileID)
+}
+
+func (d *DynamicWebDownloadProvider) RequestZipDownloadLink(ctx context.Context, id ProviderDownloadID) (string, error) {
+	p, err := d.current()
+	if err != nil {
+		return "", err
+	}
+	return p.RequestZipDownloadLink(ctx, id)
+}
+
+func (d *DynamicWebDownloadProvider) Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error {
 	p, err := d.current()
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -16,10 +17,10 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// fakeProvider satisfies both torrentAdder and usenetAdder — every test that
-// previously only exercised Delete keeps working unchanged (the extra
-// methods are simply unused in those cases), and add-download tests
-// configure addID/addErr/statusResp/statusErr as needed.
+// fakeProvider satisfies torrentAdder, usenetAdder, and webDownloadAdder —
+// every test that previously only exercised Delete keeps working unchanged
+// (the extra methods are simply unused in those cases), and add-download
+// tests configure addID/addErr/statusResp/statusErr as needed.
 type fakeProvider struct {
 	providerName string
 
@@ -32,6 +33,7 @@ type fakeProvider struct {
 	addErr        error
 	addedMagnet   string
 	addedURL      string
+	addedLink     string
 	addedFilename string
 	addedFile     []byte
 
@@ -98,6 +100,14 @@ func (f *fakeProvider) AddNZBFile(_ context.Context, filename string, data []byt
 	return f.addID, nil
 }
 
+func (f *fakeProvider) AddLink(_ context.Context, link string, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.addedLink = link
+	if f.addErr != nil {
+		return "", f.addErr
+	}
+	return f.addID, nil
+}
+
 func (f *fakeProvider) Status(_ context.Context, _ debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
 	if f.statusErr != nil {
 		return debrid.DownloadStatus{}, f.statusErr
@@ -152,6 +162,9 @@ type fakeSettings struct {
 	categoryPaths       map[string]string
 	setCategoryPathCall *setCategoryPathRequest
 	setCategoryPathErr  error
+
+	accountStatus debrid.AccountStatus
+	accountErr    error
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -232,6 +245,13 @@ func (f *fakeSettings) SetCategoryPath(_ context.Context, category, path string)
 	return nil
 }
 
+func (f *fakeSettings) AccountStatus(_ context.Context) (debrid.AccountStatus, error) {
+	if f.accountErr != nil {
+		return debrid.AccountStatus{}, f.accountErr
+	}
+	return f.accountStatus, nil
+}
+
 func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
@@ -242,7 +262,24 @@ func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider us
 	if settings == nil {
 		settings = &fakeSettings{}
 	}
-	return NewServer("dev", db, torrentProvider, usenetProvider, settings), db
+	return NewServer("dev", db, torrentProvider, usenetProvider, nil, settings), db
+}
+
+// newTestServerWithWebDownload is newTestServer's counterpart for exercising
+// the Web Downloads endpoints specifically — kept separate rather than
+// adding a fourth parameter to newTestServer, which every one of its ~75
+// existing call sites would otherwise need to pass nil for.
+func newTestServerWithWebDownload(t *testing.T, webDownloadProvider webDownloadAdder, settings Settings) (*Server, *database.DB) {
+	t.Helper()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if settings == nil {
+		settings = &fakeSettings{}
+	}
+	return NewServer("dev", db, nil, nil, webDownloadProvider, settings), db
 }
 
 func authedRequest(method, target string) *http.Request {
@@ -1682,6 +1719,158 @@ func TestHandleAddUsenet_RequiresAuth(t *testing.T) {
 	req.Header.Del("Authorization")
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// formURLEncodedRequest builds a request handleAddWebDownload can parse via
+// r.ParseForm() — unlike torrent/usenet adds, this endpoint is genuinely
+// link-only (no file-upload variant, matching TorBox's own createwebdownload
+// endpoint), so it takes a plain application/x-www-form-urlencoded body
+// rather than multipart.
+func formURLEncodedRequest(t *testing.T, target string, fields map[string]string) *http.Request {
+	t.Helper()
+	values := url.Values{}
+	for k, v := range fields {
+		if v != "" {
+			values.Set(k, v)
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(values.Encode()))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer secret")
+	return req
+}
+
+func TestHandleAddWebDownload_Link(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "123", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServerWithWebDownload(t, provider, nil)
+
+	const link = "https://mega.nz/folder/abc123"
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": link, "category": "movies"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedLink != link {
+		t.Errorf("AddLink called with %q, want %q", provider.addedLink, link)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Protocol != "webdl" {
+		t.Errorf("protocol = %q, want webdl", got.Protocol)
+	}
+	if got.Name != link {
+		t.Errorf("name = %q, want the link (fallback, since provider status wasn't available yet)", got.Name)
+	}
+
+	d, err := db.GetDownloadByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if d == nil || d.ProviderDownloadID != "123" || d.Kind != database.KindWebDL || d.Source != link {
+		t.Errorf("persisted row = %+v, want provider_download_id=123 kind=webdl source=%s", d, link)
+	}
+}
+
+func TestHandleAddWebDownload_RequiresLink(t *testing.T) {
+	srv, _ := newTestServerWithWebDownload(t, &fakeProvider{}, nil)
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"category": "movies"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleAddWebDownload_NoProviderConfigured(t *testing.T) {
+	srv, _ := newTestServerWithWebDownload(t, nil, nil)
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": "https://mega.nz/folder/abc123"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleAddWebDownload_ProviderError(t *testing.T) {
+	provider := &fakeProvider{addErr: errors.New("torbox: unsupported hoster")}
+	srv, _ := newTestServerWithWebDownload(t, provider, nil)
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": "https://mega.nz/folder/abc123"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+}
+
+func TestHandleAddWebDownload_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServerWithWebDownload(t, &fakeProvider{}, nil)
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": "https://mega.nz/folder/abc123"})
+	req.Header.Del("Authorization")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleGetAccountStatus_Available(t *testing.T) {
+	settings := &fakeSettings{accountStatus: debrid.AccountStatus{
+		PlanName: "Pro", IsSubscribed: true, PremiumExpiresAt: "2027-01-01T00:00:00Z", TotalBytesDownloaded: 1024,
+	}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/account"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got accountStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Available || got.PlanName != "Pro" || !got.IsSubscribed || got.TotalBytesDownloaded != 1024 {
+		t.Errorf("response = %+v", got)
+	}
+}
+
+// TestHandleGetAccountStatus_Unavailable proves a provider error (not
+// configured, or configured but doesn't support AccountProvider) is reported
+// as a routine "available: false" rather than a hard HTTP error — see
+// handleGetAccountStatus's doc comment.
+func TestHandleGetAccountStatus_Unavailable(t *testing.T) {
+	settings := &fakeSettings{accountErr: errors.New("debrid: no provider configured")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/account"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a provider error is routine, not fatal), body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got accountStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Available || got.Error == "" {
+		t.Errorf("response = %+v, want available=false with an error message", got)
+	}
+}
+
+func TestHandleGetAccountStatus_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/account", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

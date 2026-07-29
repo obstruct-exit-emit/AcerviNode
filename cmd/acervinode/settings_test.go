@@ -27,7 +27,7 @@ func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
 	if settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = true before Set, want false")
 	}
@@ -39,8 +39,8 @@ func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
 	if !settings.TorBoxConfigured() {
 		t.Error("TorBoxConfigured() = false after SetTorBoxAPIKey, want true")
 	}
-	if !torrentDyn.Configured() || !usenetDyn.Configured() {
-		t.Error("Dynamic providers should both be configured after SetTorBoxAPIKey")
+	if !torrentDyn.Configured() || !usenetDyn.Configured() || !webDownloadDyn.Configured() {
+		t.Error("Dynamic providers should all three be configured after SetTorBoxAPIKey")
 	}
 
 	// Persisted to disk, so a restart would pick it up too.
@@ -78,8 +78,8 @@ func TestSettingsAPI_SetKeyThenUseShimImmediately(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
-	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -136,7 +136,7 @@ func TestLiveSettings_RegenerateAPIKey_PersistsAndApplies(t *testing.T) {
 	}
 	oldKey := cfg.APIKey
 
-	_, _, settings := setupProviders(cfg, configPath)
+	_, _, _, settings := setupProviders(cfg, configPath)
 
 	newKey, err := settings.RegenerateAPIKey(context.Background())
 	if err != nil {
@@ -166,7 +166,7 @@ func TestLiveSettings_General_ReflectsConfig(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 
-	_, _, settings := setupProviders(cfg, configPath)
+	_, _, _, settings := setupProviders(cfg, configPath)
 	got := settings.General()
 
 	if got.APIKey != cfg.APIKey || got.Port != cfg.Port || got.DataDir != cfg.DataDir ||
@@ -193,8 +193,8 @@ func TestSettingsAPI_RegenerateAPIKey_OldKeyStopsWorkingNewKeyWorks(t *testing.T
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
-	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -284,7 +284,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	torrentDyn, usenetDyn, _, settings := setupProviders(cfg, configPath)
 
 	levelVar := new(slog.LevelVar)
 	levelVar.Set(slog.LevelInfo)
@@ -347,7 +347,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, settings := setupProviders(cfg, configPath)
+	_, _, _, settings := setupProviders(cfg, configPath)
 
 	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port + 1, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -371,7 +371,7 @@ func TestLiveSettings_UpdateGeneral_RejectsInvalidValues(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 	originalLogLevel := cfg.LogLevel
-	_, _, settings := setupProviders(cfg, configPath)
+	_, _, _, settings := setupProviders(cfg, configPath)
 
 	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -395,7 +395,7 @@ func TestLiveSettings_TestTorBoxConnection_NotConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, settings := setupProviders(cfg, configPath)
+	_, _, _, settings := setupProviders(cfg, configPath)
 
 	if _, err := settings.TestTorBoxConnection(context.Background()); err == nil {
 		t.Error("TestTorBoxConnection() with nothing configured: expected an error, got nil")
@@ -417,8 +417,8 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
-	buildHandler(db, torrentDyn, usenetDyn, settings) // wires SetShimServers as a side effect
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect
 
 	if err := settings.AddCategory("torrent", "movies"); err != nil {
 		t.Fatalf("AddCategory(torrent) error = %v", err)
@@ -460,7 +460,7 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	torrentDyn, usenetDyn, _, settings := setupProviders(cfg, configPath)
 	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, time.Minute, 5)
 	settings.SetImporter(imp)
 

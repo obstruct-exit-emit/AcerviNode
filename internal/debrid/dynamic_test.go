@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	_ TorrentProvider = (*DynamicTorrentProvider)(nil)
-	_ UsenetProvider  = (*DynamicUsenetProvider)(nil)
+	_ TorrentProvider     = (*DynamicTorrentProvider)(nil)
+	_ UsenetProvider      = (*DynamicUsenetProvider)(nil)
+	_ WebDownloadProvider = (*DynamicWebDownloadProvider)(nil)
 )
 
 type stubTorrentProvider struct{ name string }
@@ -130,5 +131,89 @@ func TestDynamicUsenetProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.T) {
 	}
 	if id != "nzb-2" {
 		t.Errorf("id = %q, want nzb-2", id)
+	}
+}
+
+type stubWebDownloadProvider struct{}
+
+func (s *stubWebDownloadProvider) Name() string { return "torbox" }
+func (s *stubWebDownloadProvider) AddLink(context.Context, string, AddOptions) (ProviderDownloadID, error) {
+	return "web-1", nil
+}
+func (s *stubWebDownloadProvider) Status(context.Context, ProviderDownloadID) (DownloadStatus, error) {
+	return DownloadStatus{State: StateCompleted}, nil
+}
+func (s *stubWebDownloadProvider) List(context.Context) ([]DownloadStatus, error) { return nil, nil }
+func (s *stubWebDownloadProvider) Files(context.Context, ProviderDownloadID) ([]DownloadFile, error) {
+	return nil, nil
+}
+func (s *stubWebDownloadProvider) RequestDownloadLink(context.Context, ProviderDownloadID, string) (string, error) {
+	return "https://example.test/webdl", nil
+}
+func (s *stubWebDownloadProvider) RequestZipDownloadLink(context.Context, ProviderDownloadID) (string, error) {
+	return "https://example.test/webdl.zip", nil
+}
+func (s *stubWebDownloadProvider) Delete(context.Context, ProviderDownloadID, bool) error { return nil }
+
+func TestDynamicWebDownloadProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.T) {
+	d := NewDynamicWebDownloadProvider("torbox")
+	if d.Configured() {
+		t.Error("Configured() = true before Set(), want false")
+	}
+	if _, err := d.AddLink(context.Background(), "https://example.test/file", AddOptions{}); !errors.Is(err, ErrNoProvider) {
+		t.Errorf("AddLink() error = %v, want ErrNoProvider", err)
+	}
+
+	d.Set(&stubWebDownloadProvider{})
+	if !d.Configured() {
+		t.Error("Configured() = false after Set(), want true")
+	}
+	id, err := d.AddLink(context.Background(), "https://example.test/file", AddOptions{})
+	if err != nil {
+		t.Fatalf("AddLink() error = %v", err)
+	}
+	if id != "web-1" {
+		t.Errorf("id = %q, want web-1", id)
+	}
+
+	status, err := d.Status(context.Background(), "web-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.State != StateCompleted {
+		t.Errorf("state = %q, want completed", status.State)
+	}
+}
+
+// stubAccountingTorrentProvider is a stubTorrentProvider that also implements
+// AccountProvider, used to prove DynamicTorrentProvider.Account delegates via
+// type assertion when the inner provider supports it.
+type stubAccountingTorrentProvider struct {
+	stubTorrentProvider
+}
+
+func (s *stubAccountingTorrentProvider) Account(context.Context) (AccountStatus, error) {
+	return AccountStatus{PlanName: "Pro", IsSubscribed: true, TotalBytesDownloaded: 1024}, nil
+}
+
+func TestDynamicTorrentProvider_Account(t *testing.T) {
+	d := NewDynamicTorrentProvider("torbox")
+
+	if _, err := d.Account(context.Background()); !errors.Is(err, ErrNoProvider) {
+		t.Errorf("Account() error = %v, want ErrNoProvider before Set()", err)
+	}
+
+	d.Set(&stubTorrentProvider{name: "torbox"})
+	if _, err := d.Account(context.Background()); err == nil {
+		t.Error("Account() error = nil, want an error since the inner provider doesn't implement AccountProvider")
+	}
+
+	d.Set(&stubAccountingTorrentProvider{stubTorrentProvider{name: "torbox"}})
+	status, err := d.Account(context.Background())
+	if err != nil {
+		t.Fatalf("Account() error = %v", err)
+	}
+	if status.PlanName != "Pro" || !status.IsSubscribed || status.TotalBytesDownloaded != 1024 {
+		t.Errorf("status = %+v", status)
 	}
 }

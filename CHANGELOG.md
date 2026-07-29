@@ -8,6 +8,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **TorBox Web Downloads + account status**, built autonomously per explicit
+  user go-ahead ("Web Downloads (the real ask) + a small TorBox account-status
+  display (UserService), skip the rest"), after evaluating all 7 of the
+  TorBox SDK's service categories against AcerviNode's actual purpose and
+  ruling out the other 6 (Integrations pushes files the wrong direction for
+  this project's model, RssFeeds duplicates Sonarr/Radarr's own job,
+  Notifications/General aren't relevant, Queued is already implemented).
+  "Mega API support" turned out to mean TorBox's generic hoster-debrid
+  service, not something Mega-specific — confirmed by fetching TorBox's real
+  OpenAPI spec directly (`https://api.torbox.app/openapi.json`) rather than
+  trusting the SDK's docs a second time, since those had already been wrong
+  once this project (`usenetdownload_id`'s real type).
+  - New `debrid.WebDownloadProvider` interface (`AddLink`/`Status`/`List`/
+    `Files`/`RequestDownloadLink`/`RequestZipDownloadLink`/`Delete` — link-only,
+    no file-upload variant, matching TorBox's own `createwebdownload` which has
+    none either) and `debrid.AccountProvider` (`Account`, one method) — both
+    optional, structural interfaces like `UsenetProvider`, not every provider
+    needs either. `torbox.WebDownloadProvider` and `torbox.Provider.Account`
+    implement them; `DynamicWebDownloadProvider` mirrors the existing
+    Dynamic*Provider live-swap pattern, and `DynamicTorrentProvider.Account`
+    delegates to its inner provider via a type assertion rather than adding a
+    whole fourth Dynamic wrapper for one read-only call.
+  - New `downloads.kind = 'webdl'` (migration `0005_webdl_kind.sql` — SQLite
+    can't `ALTER` a `CHECK` constraint in place, so this recreates the table
+    with the widened constraint, same pattern as any other CHECK-widening
+    migration). Every `webdl` row is always `added_via: manual` — there's no
+    *arr-facing shim for this kind, so nothing else could add one.
+  - New endpoints: `POST /api/v1/downloads/webdl` (link-only,
+    `application/x-www-form-urlencoded`, mirrors the torrent/usenet add
+    endpoints otherwise — dedup, provider-status fallback, `readd` support)
+    and `GET /api/v1/settings/account` (plan tier, subscription state, premium
+    expiry, lifetime bytes downloaded — always HTTP 200, `available: false`
+    with a reason if nothing's configured or the provider doesn't support it,
+    the same "routine, not fatal" stance as the rest of the settings API).
+  - `internal/importer` gained `SetWebDownloadProvider` (a post-construction
+    setter, not a third `New()` param — every existing test call site would
+    otherwise need an argument it doesn't care about) so both proactive
+    status-refresh and discovery (a hoster link added directly through
+    TorBox's own site, not through AcerviNode) work for `webdl` exactly like
+    they already do for torrent/usenet.
+  - Web UI: a third "Web Link" tab in "+ Add" (link-only, no mode toggle since
+    there's no file-upload variant to offer), and a TorBox account section in
+    Settings showing plan/subscription/premium-expiry/total-downloaded, fed by
+    the new endpoint.
+  - **Everything was eventually confirmed live**, including the two things
+    that briefly looked unverifiable — two earlier attempts at a safe test
+    web download failed (a GitHub raw-file link came back
+    `UNSUPPORTED_SITE`, PixelDrain's anonymous upload now requires its own
+    API key), but `archive.org` turned out to be one of the ~160 supported
+    hosters itself, and a small public-domain test audio file it hosts
+    (`archive.org/download/testmp3testfile/mpthreetest.mp3`) made a real,
+    safe end-to-end test possible after all: `createwebdownload`'s response
+    field `webdownload_id` — documented as a string, initially handled
+    defensively via a `flexibleID` type pending confirmation — was confirmed
+    via a raw API call to be a JSON number (`{"webdownload_id": 1462379,
+    ...}`), the same mismatch `usenetdownload_id` turned out to have;
+    `flexibleID` was then simplified back to a plain `float64` field, same as
+    every other provider-assigned id. `RequestWebDownloadZipDownloadLink` was
+    confirmed live too: the resolved URL served a real `application/zip` with
+    the correct `content-disposition`. The full add → status → files →
+    per-file-link → zip-link → delete cycle was run end to end through
+    AcerviNode's own live API against that test file, and the provider-side
+    delete was independently confirmed by querying TorBox's own
+    `webdl/mylist` directly afterward — genuinely gone from the account, not
+    just the local row. See [Providers](docs/providers.md#web-downloads).
+  - Also confirmed live against the real account: Mega is active among
+    TorBox's ~160 supported hosters (`GET /webdl/hosters`), a real (if
+    since-expired) Mega folder download already existed in the account's own
+    history — which is what confirmed `mylist`'s actual JSON shape (including
+    a legitimate file `id: 0`) — and `GET /user/me`'s real response has far
+    more fields than either the SDK's docs or its own Go types declare,
+    confirming the account is a real Pro (`plan: 2`) subscription.
+  - New tests throughout: TorBox client (`httptest` fakes for
+    `CreateWebDownload`/`ControlWebDownload`/`RequestWebDownloadLink`/
+    `ListWebDownloads`/`GetHosterList`/`GetUserData`), a
+    `webdl_provider_test.go` mirroring the existing provider tests,
+    `DynamicWebDownloadProvider`/`DynamicTorrentProvider.Account` tests in
+    `internal/debrid`, `internal/api` handler tests for
+    `handleAddWebDownload`/`handleGetAccountStatus`, an `internal/importer`
+    test proving `SetWebDownloadProvider` wiring discovers a manually-added
+    web download, and an `internal/database` regression test confirming a
+    `kind='webdl'` row actually inserts and round-trips (not just that the
+    migration runs without erroring).
+
 - **Systematic code-review pass over Phases 1–6** (TorBox client, both
   compat shims, `internal/importer`, the native API), done proactively
   while the user was at work — everything shipped in this session's recent

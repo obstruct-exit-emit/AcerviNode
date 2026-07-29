@@ -3,6 +3,7 @@ import {
   getCategories,
   getGeneralSettings,
   getProviderSettings,
+  getTorBoxAccount,
   regenerateApiKey,
   setCategoryPath,
   setTorBoxApiKey,
@@ -13,9 +14,11 @@ import {
   type GeneralSettings,
   type GeneralUpdateInput,
   type ProviderSettings,
+  type TorBoxAccount,
 } from '../api'
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
 import { getDownloadMode, setDownloadMode, type DownloadMode } from '../preferences'
+import { formatBytes } from '../format'
 
 // One row of the "Save path overrides" list — kept as its own component,
 // keyed by category name, so an in-progress edit in one row survives a
@@ -85,6 +88,7 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
   const [testStatus, setTestStatus] = useState<{ kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>({
     kind: 'idle',
   })
+  const [account, setAccount] = useState<TorBoxAccount | null>(null)
   const [categories, setCategories] = useState<Categories | null>(null)
   const [newOverrideCategory, setNewOverrideCategory] = useState('')
   const [newOverridePath, setNewOverridePath] = useState('')
@@ -95,13 +99,19 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
 
   async function load() {
     try {
-      const [providerSettings, generalSettings, cats] = await Promise.all([
+      const [providerSettings, generalSettings, cats, accountStatus] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
+        // Not configured, or configured with a provider that doesn't support
+        // account status, both come back as available:false rather than
+        // throwing — see handleGetAccountStatus's doc comment — so this is
+        // safe to call unconditionally alongside the rest of load().
+        getTorBoxAccount(apiKey),
       ])
       setSettings(providerSettings)
       setGeneral(generalSettings)
+      setAccount(accountStatus)
       setForm({
         port: generalSettings.port,
         data_dir: generalSettings.data_dir,
@@ -394,6 +404,24 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
             )}
             {testStatus.kind === 'error' && <p className="settings-error">Connection failed: {testStatus.message}</p>}
           </>
+        )}
+
+        {account?.available && (
+          <dl className="detail-meta account-status">
+            <dt>Plan</dt>
+            <dd>
+              {account.plan_name}
+              {account.is_subscribed ? ' (subscribed)' : ''}
+            </dd>
+            {account.premium_expires_at && (
+              <>
+                <dt>Premium expires</dt>
+                <dd>{new Date(account.premium_expires_at).toLocaleDateString()}</dd>
+              </>
+            )}
+            <dt>Total downloaded</dt>
+            <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
+          </dl>
         )}
       </section>
 

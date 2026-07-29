@@ -18,6 +18,7 @@ type ProviderStatus struct {
 	Name           string `json:"name"`
 	TorrentCapable bool   `json:"torrent_capable"`
 	UsenetCapable  bool   `json:"usenet_capable"`
+	WebDLCapable   bool   `json:"webdl_capable"`
 }
 
 // deleter is the subset of debrid.TorrentProvider/debrid.UsenetProvider that
@@ -53,6 +54,19 @@ type usenetAdder interface {
 	Name() string
 	AddNZBURL(ctx context.Context, link string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	AddNZBFile(ctx context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
+	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
+	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
+	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
+	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
+}
+
+// webDownloadAdder is torrentAdder/usenetAdder's Web Downloads counterpart,
+// backing POST /api/v1/downloads/webdl — link-only, no file-upload variant
+// (TorBox's own Web Downloads service has none either).
+type webDownloadAdder interface {
+	deleter
+	Name() string
+	AddLink(ctx context.Context, link string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error)
 	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
@@ -135,27 +149,33 @@ type Settings interface {
 	// SetCategoryPath sets (or, if path is empty, clears) category's
 	// override destination directory, applies it live, and persists it.
 	SetCategoryPath(ctx context.Context, category, path string) error
+	// AccountStatus reports the configured provider's own account status
+	// (plan tier, premium expiry, lifetime usage) — a live call, not a
+	// snapshot, so it always reflects the actual current TorBox account. An
+	// error here (e.g. not configured yet, or the provider doesn't support
+	// this) is routine and shown as "unavailable" rather than a hard failure.
+	AccountStatus(ctx context.Context) (debrid.AccountStatus, error)
 }
 
 // Server is AcerviNode's native API.
 type Server struct {
-	version         string
-	db              *database.DB
-	torrentProvider torrentAdder // nil if no torrent-capable provider is configured
-	usenetProvider  usenetAdder  // nil if no usenet-capable provider is configured
-	settings        Settings
-	mux             *http.ServeMux
+	version             string
+	db                  *database.DB
+	torrentProvider     torrentAdder     // nil if no torrent-capable provider is configured
+	usenetProvider      usenetAdder      // nil if no usenet-capable provider is configured
+	webDownloadProvider webDownloadAdder // nil if no web-download-capable provider is configured
+	settings            Settings
+	mux                 *http.ServeMux
 }
 
 // NewServer builds the native API server. version is a free-form build
-// identifier. torrentProvider/usenetProvider may be nil. Auth checks
-// settings.APIKey() live on every request rather than a value captured at
-// construction, so a regenerated key takes effect immediately — see
-// requireAuth.
-func NewServer(version string, db *database.DB, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) *Server {
+// identifier. Any provider may be nil. Auth checks settings.APIKey() live on
+// every request rather than a value captured at construction, so a
+// regenerated key takes effect immediately — see requireAuth.
+func NewServer(version string, db *database.DB, torrentProvider torrentAdder, usenetProvider usenetAdder, webDownloadProvider webDownloadAdder, settings Settings) *Server {
 	s := &Server{
 		version: version, db: db,
-		torrentProvider: torrentProvider, usenetProvider: usenetProvider,
+		torrentProvider: torrentProvider, usenetProvider: usenetProvider, webDownloadProvider: webDownloadProvider,
 		settings: settings,
 	}
 	s.mux = http.NewServeMux()
@@ -176,6 +196,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/downloads", s.requireAuth(s.handleListDownloads))
 	s.mux.HandleFunc("POST /api/v1/downloads/torrent", s.requireAuth(s.handleAddTorrent))
 	s.mux.HandleFunc("POST /api/v1/downloads/usenet", s.requireAuth(s.handleAddUsenet))
+	s.mux.HandleFunc("POST /api/v1/downloads/webdl", s.requireAuth(s.handleAddWebDownload))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}", s.requireAuth(s.handleGetDownload))
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/retry", s.requireAuth(s.handleRetryDownload))
@@ -191,6 +212,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAuth(s.handleGetCategories))
 	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAuth(s.handleAddCategory))
 	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAuth(s.handleSetCategoryPath))
+	s.mux.HandleFunc("GET /api/v1/settings/account", s.requireAuth(s.handleGetAccountStatus))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +229,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := []ProviderStatus{}
 	if s.settings.TorBoxConfigured() {
-		providers = append(providers, ProviderStatus{Name: "torbox", TorrentCapable: true, UsenetCapable: true})
+		providers = append(providers, ProviderStatus{Name: "torbox", TorrentCapable: true, UsenetCapable: true, WebDLCapable: true})
 	}
 	writeJSON(w, providers)
 }

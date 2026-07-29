@@ -180,12 +180,78 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 	writeAddResponse(w, d, existed)
 }
 
+// handleAddWebDownload implements POST /api/v1/downloads/webdl — adds a
+// hoster link directly (Mega, 1Fichier, Mediafire, and ~160 others TorBox's
+// Web Downloads service supports — see docs/providers.md). Link-only, no
+// file-upload variant: TorBox's own createwebdownload endpoint has none
+// either, unlike the torrent/usenet add endpoints.
+func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
+	if s.webDownloadProvider == nil {
+		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	category := r.FormValue("category")
+	link := strings.TrimSpace(r.FormValue("link"))
+	if link == "" {
+		http.Error(w, "link is required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := s.webDownloadProvider.AddLink(ctx, link, debrid.AddOptions{})
+	if err != nil {
+		writeProviderError(w, "web download", err)
+		return
+	}
+
+	status, statusErr := s.webDownloadProvider.Status(ctx, id)
+	if statusErr != nil {
+		slog.Warn("api: provider status not yet available after web download add, using fallback", "id", id, "error", statusErr)
+		status = debrid.DownloadStatus{ID: id, Name: link, State: debrid.StateQueued}
+	}
+	if status.Name == "" {
+		status.Name = link
+	}
+
+	d := &database.Download{
+		ID:                 uuid.NewString(),
+		Provider:           s.webDownloadProvider.Name(),
+		ProviderDownloadID: string(id),
+		Kind:               database.KindWebDL,
+		Hash:               strings.ToLower(status.Hash),
+		Name:               status.Name,
+		Category:           category,
+		SizeBytes:          status.SizeBytes,
+		State:              database.LocalStateFromProvider(status.State),
+		Progress:           status.Progress,
+		// Source is the link itself — always present, since there's no
+		// file-upload variant for this kind — so handleReAddDownload can
+		// always resubmit it, unlike torrent/usenet where a file-uploaded
+		// download has no Source to re-add from.
+		Source: link,
+		// AddedViaManual: no *arr-facing shim exists for this kind at all —
+		// see database.KindWebDL.
+		AddedVia: database.AddedViaManual,
+	}
+	d, existed, err := s.existingOrInsert(ctx, s.webDownloadProvider.Name(), string(id), d)
+	if err != nil {
+		slog.Error("api: store new web download failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeAddResponse(w, d, existed)
+}
+
 // handleReAddDownload implements POST /api/v1/downloads/{id}/retry's
 // stronger sibling, POST /api/v1/downloads/{id}/readd — for when the
 // original provider-side download itself is gone (e.g. expired from the
 // provider's own list, as opposed to a transient fetch failure RetryDownload
 // alone can recover from). Resubmits the download's stored Source (the
-// original magnet/NZB URL) to the provider as a brand new add, then points
+// original magnet/NZB URL/hoster link) to the provider as a brand new add, then points
 // the local row at the new provider_download_id. Only valid for a download
 // that's actually given up (StateError) and was added via a link rather
 // than an uploaded file (Source is empty for file uploads — nothing to
@@ -225,6 +291,13 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		provName = s.usenetProvider.Name()
 		newID, err = s.usenetProvider.AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+	case database.KindWebDL:
+		if s.webDownloadProvider == nil {
+			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		provName = s.webDownloadProvider.Name()
+		newID, err = s.webDownloadProvider.AddLink(ctx, d.Source, debrid.AddOptions{Name: d.Name})
 	default:
 		http.Error(w, "unknown download kind", http.StatusInternalServerError)
 		return
@@ -274,6 +347,8 @@ func (s *Server) deleterForKind(kind database.Kind) deleter {
 		return s.torrentProvider
 	case database.KindUsenet:
 		return s.usenetProvider
+	case database.KindWebDL:
+		return s.webDownloadProvider
 	default:
 		return nil
 	}

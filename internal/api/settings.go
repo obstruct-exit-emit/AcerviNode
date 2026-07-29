@@ -137,6 +137,36 @@ func (s *Server) handleSetCategoryPath(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type accountStatusResponse struct {
+	Available            bool   `json:"available"`
+	Error                string `json:"error,omitempty"`
+	PlanName             string `json:"plan_name,omitempty"`
+	IsSubscribed         bool   `json:"is_subscribed,omitempty"`
+	PremiumExpiresAt     string `json:"premium_expires_at,omitempty"`
+	TotalBytesDownloaded int64  `json:"total_bytes_downloaded,omitempty"`
+}
+
+// handleGetAccountStatus implements GET /api/v1/settings/account — a live
+// call to the configured provider, not a cached snapshot. Not configured
+// yet, or a provider that doesn't support account status at all, are both
+// routine ("available": false, with a reason), not a hard failure — the
+// settings UI just doesn't show the section rather than erroring the whole
+// page.
+func (s *Server) handleGetAccountStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.settings.AccountStatus(r.Context())
+	if err != nil {
+		writeJSON(w, accountStatusResponse{Available: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, accountStatusResponse{
+		Available:            true,
+		PlanName:             status.PlanName,
+		IsSubscribed:         status.IsSubscribed,
+		PremiumExpiresAt:     status.PremiumExpiresAt,
+		TotalBytesDownloaded: status.TotalBytesDownloaded,
+	})
+}
+
 // handleRegenerateAPIKey implements POST /api/v1/settings/api-key/regenerate.
 // The new key applies immediately (every route checks settings.APIKey()
 // live) and is persisted to config.yaml — see cmd/acervinode's liveSettings.

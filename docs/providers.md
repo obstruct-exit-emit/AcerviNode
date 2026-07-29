@@ -49,6 +49,43 @@ provider-assigned numeric spaces with no guarantee against collision, so a singl
 as `torbox.Provider` and `torbox.UsenetProvider`, each wrapping the same underlying
 `torbox.Client`, avoids that ambiguity.
 
+## `WebDownloadProvider`
+
+Backs `POST /api/v1/downloads/webdl` directly — there's no *arr-facing compat shim
+for this one (no protocol Sonarr/Radarr speaks maps onto "debrid a direct hoster
+link"), so it's only reachable through the native API/web UI. Same shape as
+`UsenetProvider`, minus a file-upload variant (a hoster link is always a URL):
+
+- `Name() string`
+- `AddLink(ctx, link string, opts AddOptions) (ProviderDownloadID, error)`
+- `Status`, `List`, `Files`, `RequestDownloadLink`, `RequestZipDownloadLink`,
+  `Delete` — identical semantics to `TorrentProvider`/`UsenetProvider`'s versions
+
+Also a **separate, optional** interface for the same reason `UsenetProvider` is:
+not every debrid service exposes a generic "debrid any hoster link" service the
+way TorBox's Web Downloads does. Every `downloads` row of this kind is always
+`AddedViaManual` — there's no *arr-facing shim that could add one on an app's
+behalf, so `database.KindWebDL` documents that directly rather than leaving it
+implicit (see [Managed vs. Manual](#managed-vs-manual)).
+
+## `AccountProvider`
+
+A third, separate, optional interface — one method, `Account(ctx) (AccountStatus,
+error)` — for a provider that can report its own account status (plan tier,
+subscription state, premium expiry, lifetime bytes downloaded). Backs
+`GET /api/v1/settings/account` (see [API](api.md)) and the Settings page's TorBox
+account section. Not every provider needs to implement it; one that doesn't simply
+doesn't satisfy the interface, and the settings UI has nothing to show for it — the
+same "structural, not every provider needs every capability" approach as
+`UsenetProvider`/`WebDownloadProvider`.
+
+`debrid.DynamicTorrentProvider.Account` is the one place this gets a little
+different from the other two Dynamic wrappers: rather than a whole separate
+`DynamicAccountProvider` type, it type-asserts its already-`Set()` inner provider
+against `AccountProvider` and delegates if it matches, erroring otherwise. This
+reuses the existing live-provider-swap machinery instead of adding a fourth
+parallel wrapper for one read-only call.
+
 ## What the interfaces deliberately leave out
 
 Categories and save paths are a compat-shim/database concern, not a provider
@@ -352,11 +389,66 @@ wasn't independently confirmed — by the time it was written, every usenet
 download on the test account had expired from `mylist` (0 items), leaving
 nothing live to test `zip_link` against on that side specifically.
 
+### Web Downloads
+
+TorBox's third service, alongside torrents and usenet: debrids direct links from
+~160 supported hosters (Mega, 1Fichier, Mediafire, PixelDrain, and more —
+`GET /webdl/hosters` returns the current list dynamically, no hardcoded copy kept
+here since it would just go stale). Confirmed live against the real account: Mega
+itself is active (`status: true`), and a real (if since-expired) Mega folder
+download already existed in the account's own history from before this feature was
+built, which is what confirmed `mylist`'s actual JSON shape (including a
+legitimate file `id: 0`) against real data rather than docs alone.
+
+Genuinely link-only — `POST /webdl/createwebdownload` (confirmed directly against
+TorBox's real OpenAPI spec, not the SDK's docs, since those have already been wrong
+once for this project) takes `application/x-www-form-urlencoded`, not multipart,
+and has no file-upload field at all, unlike `createtorrent`/`createusenetdownload`.
+`link` is the only required field. Otherwise the same shape as the other two
+services: `POST /webdl/controlwebdownload` (delete), `GET /webdl/requestdl`
+(`web_id`/`file_id`/`token`, plus the same undocumented `zip_link=true` trick),
+`GET /webdl/mylist` (`bypass_cache=true`, same 600-second caching behavior as the
+other two `mylist` endpoints).
+
+**Both `createwebdownload`'s response shape and the zip-link trick are now
+confirmed live**, using `archive.org` (itself one of the ~160 supported
+hosters) as a safe test target — a small, public-domain audio file
+(`archive.org/download/testmp3testfile/mpthreetest.mp3`) let this get
+verified end to end without touching anyone's copyrighted content, after two
+earlier attempts failed (a GitHub raw-file link came back `UNSUPPORTED_SITE`;
+PixelDrain's anonymous upload now requires its own API key):
+
+- `createwebdownload`'s response field `webdownload_id` is documented as a
+  string, but — confirmed via a raw API call directly against a real account
+  (`{"webdownload_id": 1462379, ...}`) — comes back as a JSON number, the
+  same mismatch `usenetdownload_id` turned out to have (see above). `types.go`
+  models it as a plain `float64`, the same as every other provider-assigned id.
+- `RequestWebDownloadZipDownloadLink` — confirmed live: the resolved URL
+  served a real `application/zip` with the correct `content-disposition`.
+- The full add → status → files → per-file-link → zip-link → delete cycle
+  was verified end to end through AcerviNode's own live API, and the
+  provider-side delete was independently confirmed by querying TorBox's own
+  `webdl/mylist` directly afterward — the test download was actually gone
+  from the account, not just the local row.
+
+### Account status
+
+`GET /user/me` backs `Provider.Account` (`debrid.AccountProvider` — see above).
+Confirmed live against the real account: the actual response has far more fields
+than either the official SDK's docs or its own Go types declare (e.g.
+`total_bytes_downloaded`, `torrents_downloaded`, `web_downloads_downloaded` weren't
+documented anywhere found during research) — `UserData` in
+`internal/debrid/torbox/types.go` only models the subset AcerviNode's own account
+status display actually uses: `plan` (an integer tier — 0 Free, 1 Essential, 2 Pro,
+3 Standard, confirmed live against the real account, which is a Pro/`plan: 2`
+subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`.
+
 ## Adding a new provider
 
 1. New subpackage under `internal/debrid/<name>/`.
-2. Implement `debrid.TorrentProvider`. Implement `debrid.UsenetProvider` too, only
-   if the service has a real usenet backend.
+2. Implement `debrid.TorrentProvider`. Implement `debrid.UsenetProvider`,
+   `debrid.WebDownloadProvider`, and/or `debrid.AccountProvider` too, only for
+   whichever of those the service actually has a real backend for.
 3. Register it in `cmd/acervinode`'s provider construction (`newTorBoxProviders`
    and `liveSettings`, or their equivalents for the new provider) — that's the
    only place a concrete provider type is referenced outside its own package.

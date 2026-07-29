@@ -69,7 +69,7 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, settings := setupProviders(cfg, configPath)
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
 	settings.SetLevelVar(levelVar)
 	slog.Info("torbox provider", "configured", torrentDyn.Configured())
 	// Logged so a config.yaml without an explicit api_key is still usable —
@@ -78,13 +78,14 @@ func run(ctx context.Context) error {
 	// explicitly once you've picked it, so it survives restarts.
 	slog.Info("api key for the native API and both compat shims", "api_key", cfg.APIKey)
 
-	handler := buildHandler(db, torrentDyn, usenetDyn, settings)
+	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 
 	// Completed Download Handling: fetches provider_completed downloads to
 	// local disk so *arr apps' import step has real files to find. Shares
 	// the same dynamic provider instances as everything else above.
 	importInterval := time.Duration(cfg.ImportIntervalSeconds) * time.Second
 	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
+	imp.SetWebDownloadProvider(webDownloadDyn)
 	settings.SetImporter(imp)
 	go imp.Run(ctx)
 
@@ -126,14 +127,14 @@ func run(ctx context.Context) error {
 // because the compat shim servers built here get wired back into it via
 // SetShimServers — the settings API's category endpoints read/write their
 // category stores directly (see docs/configuration.md).
-func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, settings *liveSettings) http.Handler {
+func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, webDownloadProvider debrid.WebDownloadProvider, settings *liveSettings) http.Handler {
 	mux := http.NewServeMux()
 
 	qbtServer := qbittorrent.NewServer(torrentProvider, db, settings)
 	sabServer := sabnzbd.NewServer(usenetProvider, db, settings)
 	settings.SetShimServers(qbtServer, sabServer)
 
-	mux.Handle("/api/v1/", api.NewServer(version, db, torrentProvider, usenetProvider, settings))
+	mux.Handle("/api/v1/", api.NewServer(version, db, torrentProvider, usenetProvider, webDownloadProvider, settings))
 	mux.Handle("/api/v2/", qbtServer)
 	// SABnzbd's real API is a single fixed endpoint, not a subtree.
 	mux.Handle("/api", sabServer)
@@ -169,8 +170,8 @@ func parseLogLevel(level string) slog.Level {
 // newTorBoxProviders is the one place a concrete provider package (torbox) is
 // referenced outside its own package — adding Real-Debrid later means adding
 // a case here (and in liveSettings), nothing else (see docs/providers.md).
-func newTorBoxProviders(apiKey string) (debrid.TorrentProvider, debrid.UsenetProvider) {
-	return torbox.NewProvider(apiKey), torbox.NewUsenetProvider(apiKey)
+func newTorBoxProviders(apiKey string) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
+	return torbox.NewProvider(apiKey), torbox.NewUsenetProvider(apiKey), torbox.NewWebDownloadProvider(apiKey)
 }
 
 // setupProviders builds the Dynamic*Provider wrappers that are the single
@@ -181,14 +182,16 @@ func newTorBoxProviders(apiKey string) (debrid.TorrentProvider, debrid.UsenetPro
 // Pre-populated from cfg if a key is already there. Split out from run() so
 // tests can build the same wiring without going through the full startup
 // sequence.
-func setupProviders(cfg *config.Config, configPath string) (*debrid.DynamicTorrentProvider, *debrid.DynamicUsenetProvider, *liveSettings) {
+func setupProviders(cfg *config.Config, configPath string) (*debrid.DynamicTorrentProvider, *debrid.DynamicUsenetProvider, *debrid.DynamicWebDownloadProvider, *liveSettings) {
 	torrentDyn := debrid.NewDynamicTorrentProvider("torbox")
 	usenetDyn := debrid.NewDynamicUsenetProvider("torbox")
+	webDownloadDyn := debrid.NewDynamicWebDownloadProvider("torbox")
 	if torboxCfg, ok := cfg.Providers["torbox"]; ok && torboxCfg.APIKey != "" {
-		tp, up := newTorBoxProviders(torboxCfg.APIKey)
+		tp, up, wp := newTorBoxProviders(torboxCfg.APIKey)
 		torrentDyn.Set(tp)
 		usenetDyn.Set(up)
+		webDownloadDyn.Set(wp)
 	}
-	settings := &liveSettings{cfg: cfg, configPath: configPath, torrentDyn: torrentDyn, usenetDyn: usenetDyn}
-	return torrentDyn, usenetDyn, settings
+	settings := &liveSettings{cfg: cfg, configPath: configPath, torrentDyn: torrentDyn, usenetDyn: usenetDyn, webDownloadDyn: webDownloadDyn}
+	return torrentDyn, usenetDyn, webDownloadDyn, settings
 }

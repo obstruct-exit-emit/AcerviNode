@@ -171,6 +171,11 @@ func (s *Server) filesForDownload(ctx context.Context, d *database.Download) ([]
 			return nil, debrid.ErrNoProvider
 		}
 		return s.usenetProvider.Files(ctx, id)
+	case database.KindWebDL:
+		if s.webDownloadProvider == nil {
+			return nil, debrid.ErrNoProvider
+		}
+		return s.webDownloadProvider.Files(ctx, id)
 	default:
 		return nil, fmt.Errorf("unknown download kind %q", d.Kind)
 	}
@@ -213,6 +218,12 @@ func (s *Server) handleGetFileLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		url, err = s.usenetProvider.RequestDownloadLink(ctx, id, fileID)
+	case database.KindWebDL:
+		if s.webDownloadProvider == nil {
+			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.webDownloadProvider.RequestDownloadLink(ctx, id, fileID)
 	default:
 		http.Error(w, "unknown download kind", http.StatusInternalServerError)
 		return
@@ -256,6 +267,12 @@ func (s *Server) handleGetZipLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		url, err = s.usenetProvider.RequestZipDownloadLink(ctx, id)
+	case database.KindWebDL:
+		if s.webDownloadProvider == nil {
+			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
+			return
+		}
+		url, err = s.webDownloadProvider.RequestZipDownloadLink(ctx, id)
 	default:
 		http.Error(w, "unknown download kind", http.StatusInternalServerError)
 		return

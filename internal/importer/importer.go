@@ -54,17 +54,18 @@ type Importer struct {
 	httpClient      *http.Client
 
 	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
-	// fetchTimeout, which SetConfig/SetCategoryPaths/SetMaxConcurrent/
-	// SetFetchTimeout can change live (see cmd/acervinode's liveSettings) —
-	// everything else on Importer is set once at construction and never
-	// mutated afterward.
-	mu            sync.Mutex
-	downloadDir   string
-	interval      time.Duration // also the backoff base: attempt N waits ~interval*2^N
-	maxRetries    int
-	categoryPaths map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
-	maxConcurrent int               // how many downloads Tick fetches to disk at once
-	fetchTimeout  time.Duration     // per-file fetch deadline — see fetchFile
+	// fetchTimeout/webDownloadProvider, which SetConfig/SetCategoryPaths/
+	// SetMaxConcurrent/SetFetchTimeout/SetWebDownloadProvider can change live
+	// (see cmd/acervinode's liveSettings) — everything else on Importer is
+	// set once at construction and never mutated afterward.
+	mu                  sync.Mutex
+	downloadDir         string
+	interval            time.Duration // also the backoff base: attempt N waits ~interval*2^N
+	maxRetries          int
+	categoryPaths       map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
+	maxConcurrent       int               // how many downloads Tick fetches to disk at once
+	fetchTimeout        time.Duration     // per-file fetch deadline — see fetchFile
+	webDownloadProvider provider          // nil if no web-download-capable provider is configured — see SetWebDownloadProvider
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
 	// live SetConfig call can reset the ticker without Run having to poll
@@ -171,6 +172,27 @@ func (im *Importer) CategoryPaths() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// SetWebDownloadProvider sets (or, with nil, clears) the web-download-
+// capable provider — a post-construction setter rather than a New() param
+// like torrentProvider/usenetProvider, deliberately: this capability was
+// added later, and every existing caller of New() (every test in this
+// package included) would otherwise need a third provider argument they
+// don't care about. cmd/acervinode calls this once during startup wiring,
+// the same timing as SetCategoryPaths/SetImporter. A nil provider here just
+// means refreshKind skips it, same as torrentProvider/usenetProvider being
+// nil already does.
+func (im *Importer) SetWebDownloadProvider(p provider) {
+	im.mu.Lock()
+	im.webDownloadProvider = p
+	im.mu.Unlock()
+}
+
+func (im *Importer) getWebDownloadProvider() provider {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.webDownloadProvider
 }
 
 // SetMaxConcurrent updates how many provider_completed downloads Tick fetches
@@ -299,6 +321,13 @@ func (im *Importer) Tick(ctx context.Context) error {
 func (im *Importer) refreshStatuses(ctx context.Context) {
 	im.refreshKind(ctx, database.KindTorrent, im.torrentProvider)
 	im.refreshKind(ctx, database.KindUsenet, im.usenetProvider)
+	// Every webdl row is always AddedViaManual (no *arr-facing shim exists
+	// for it — see database.KindWebDL), but discovery/status-refresh still
+	// applies the same way it does for a discovered Manual torrent/usenet
+	// download: this is what makes a hoster link added directly through
+	// TorBox's own site show up here too, not just links added through
+	// AcerviNode's own "+ Add" form.
+	im.refreshKind(ctx, database.KindWebDL, im.getWebDownloadProvider())
 }
 
 func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provider) {
