@@ -497,3 +497,54 @@ take a while to be indexed anywhere (mylist or the pre-processing queue) and
 a single-miss rule would wrongly flag it "gone" while it's still just new.
 That's real design work (a missing-since timestamp or counter, tuned against
 how long TorBox actually takes to index something), not a one-line fix.
+
+💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
+restart**: requested by the user after the Downloads popup work above. Once a
+download link is resolved, AcerviNode's server is already out of the data
+path entirely (the browser streams straight from the provider's CDN to
+disk), so an in-progress transfer already survives a server restart today —
+incidentally, not by design. What's still missing is genuine pause/resume:
+deliberately stopping and picking a transfer back up later, including after
+the popup itself is closed or the browser restarts, without redownloading
+from byte zero.
+
+The one real unknown was checked live before adding this here rather than
+assumed: **TorBox's CDN fully supports HTTP Range requests** — confirmed
+against a real 83MB file (`nexus-216.cnam.tb-cdn.io`), a `Range:
+bytes=1000-2000` request correctly returned `206 Partial Content` with an
+accurate `Content-Range` header. That was the one fact that could have killed
+the whole idea; it didn't. Two of the other building blocks are already in
+place from existing features: a `FileSystemDirectoryHandle` already survives
+a full browser restart via IndexedDB (proven by the remembered-default-folder
+feature), and File System Access already supports resume-from-offset writes
+natively (`createWritable({ keepExistingData: true })` +
+`write({ type: 'write', position: N, data })`).
+
+What's actually left to build:
+- A new IndexedDB store recording bytes-written per file, throttled rather
+  than updated on every chunk, reconciled against the real on-disk file size
+  (not blindly trusted) on resume in case of a crash mid-write.
+- Resume-aware fetch/write logic: `Range: bytes=N-` on the request, position-
+  based writes on the response, with a per-request fallback (not just a
+  one-time assumption) in case a specific response ever comes back `200`
+  instead of `206`.
+- Popup rehydration: on load, `DownloadWindow.tsx` needs to check IndexedDB
+  for anything left unfinished from a previous session (not just wait for a
+  live `add-batch`) and offer to resume it — new UI states (paused,
+  resuming, needs-permission-to-resume) on top of what's there today.
+  Resuming needs a fresh link each time (TorBox links expire after ~3 hours),
+  which is a normal API call that can itself fail if AcerviNode happens to be
+  down right at that moment — handled the same way as any other API error,
+  not a special case.
+- Pause/resume controls in the popup UI.
+
+Deliberately not started yet: this is sized larger than any single feature
+shipped this session (roughly the original popup feature plus all four of
+its follow-on fixes combined), and — like everything else in this
+subsystem — it can't be verified headlessly. Confirming it actually works
+means live-driving the browser: start a large download, actually kill and
+restart the AcerviNode server mid-transfer, confirm it paused cleanly,
+resume it, confirm via request headers that it genuinely resumed with Range
+rather than restarting, then check the finished file's integrity. That's a
+dedicated session's worth of hands-on-the-browser verification, not
+something to tack onto the end of an already-long one.
