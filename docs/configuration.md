@@ -32,9 +32,12 @@ paths respectively).
 Both compat shims track category names *arr apps declare (purely so
 `/api/v2/torrents/categories`/`mode=get_config` have something to report back —
 AcerviNode never interprets a category itself). `GET /api/v1/settings/categories`
-and `POST /api/v1/settings/categories` (or the web UI's Settings tab) let you view
-them and pre-declare one manually, e.g. to populate the "Add Download" form's
-category field before Sonarr/Radarr has ever added anything.
+reports them (and, separately, `POST /api/v1/settings/categories` still lets a
+caller pre-declare one directly, the same way an *arr app's own createCategory
+call does) — but the web UI's Settings tab no longer surfaces that as its own
+step. Setting a save-path override (below) doesn't require a category to be
+"known" first: `PUT /api/v1/settings/categories/path` accepts any category
+name directly, declared or not.
 
 ## Example
 
@@ -80,8 +83,10 @@ when one was supplied — an explicit `save_path` from the *arr app always wins.
 When no `save_path` was supplied, AcerviNode falls back to `download_dir`, organized
 as `<download_dir>/<category>/<name>/` — unless that category has its own override
 configured via `category_paths` (`PUT /api/v1/settings/categories/path`, or the web
-UI's Settings tab under Categories → "Save path overrides"), in which case files land
+UI's Settings tab's "Save path overrides" section), in which case files land
 directly under `<override>/<name>/` instead. Useful for routing one category to a
 different disk or mount than the rest — e.g. movies to a large secondary drive while
-everything else stays on `download_dir`. `GET /api/v1/settings/categories`'s `paths`
+everything else stays on `download_dir`. Setting one doesn't require the category to
+have been declared/seen by Sonarr/Radarr first — the web UI's "Add override" form
+takes any category name directly. `GET /api/v1/settings/categories`'s `paths`
 field reports the current overrides.

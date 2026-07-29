@@ -483,6 +483,17 @@ designing it solo.
   after a batch finished, so re-downloading anything already tracked there
   silently did nothing; it's cleared on completion now regardless of
   outcome. See the [CHANGELOG](CHANGELOG.md).
+- Immediate follow-on, built overnight while the user slept: once the
+  placeholder category above was gone, the remaining category list's only
+  real job was gating "Save path overrides" behind a category having been
+  "known" first — backwards, since the backend never actually required
+  that (`SetCategoryPath` accepts any name directly, confirmed by reading
+  it). Settings' Categories section is now just "Save path overrides":
+  existing overrides plus a two-field form that works for any category
+  name, no prerequisite declare-it-first step, no separate management UI.
+  Verified live via the API (set/confirm/clear an override for a
+  never-before-seen category name) — the visual layout itself couldn't be
+  checked without a browser and needs a look. See the [CHANGELOG](CHANGELOG.md).
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across

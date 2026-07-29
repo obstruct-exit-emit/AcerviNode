@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
-  addCategory,
   getCategories,
   getGeneralSettings,
   getProviderSettings,
@@ -87,9 +86,9 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
     kind: 'idle',
   })
   const [categories, setCategories] = useState<Categories | null>(null)
-  const [newCategory, setNewCategory] = useState('')
-  const [newCategoryProtocol, setNewCategoryProtocol] = useState<'torrent' | 'usenet'>('torrent')
-  const [categoryStatus, setCategoryStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
+  const [newOverrideCategory, setNewOverrideCategory] = useState('')
+  const [newOverridePath, setNewOverridePath] = useState('')
+  const [newOverrideStatus, setNewOverrideStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   const [downloadMode, setDownloadModeState] = useState<DownloadMode>(() => getDownloadMode())
   const [defaultFolderName, setDefaultFolderName] = useState<string | null>(null)
   const [folderStatus, setFolderStatus] = useState<{ kind: 'idle' | 'error'; message?: string }>({ kind: 'idle' })
@@ -219,17 +218,25 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
     }
   }
 
-  async function handleAddCategory(e: FormEvent) {
+  // Sets a save-path override for a category directly, by name — no
+  // prerequisite "declare this category first" step. The backend never
+  // required one (SetCategoryPath accepts any non-empty name), the old UI
+  // just artificially gated the form on Sonarr/Radarr (or a manual "add
+  // category" step) having been seen first.
+  async function handleAddOverride(e: FormEvent) {
     e.preventDefault()
-    if (!newCategory.trim()) return
-    setCategoryStatus({ kind: 'saving' })
+    const category = newOverrideCategory.trim()
+    const path = newOverridePath.trim()
+    if (!category || !path) return
+    setNewOverrideStatus({ kind: 'saving' })
     try {
-      await addCategory(apiKey, newCategoryProtocol, newCategory.trim())
-      setNewCategory('')
-      setCategoryStatus({ kind: 'idle' })
-      setCategories(await getCategories(apiKey))
+      await setCategoryPath(apiKey, category, path)
+      setNewOverrideCategory('')
+      setNewOverridePath('')
+      setNewOverrideStatus({ kind: 'idle' })
+      await load()
     } catch (err) {
-      setCategoryStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+      setNewOverrideStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -391,72 +398,43 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
       </section>
 
       <section className="settings-card">
-        <h2>Categories</h2>
+        <h2>Save path overrides</h2>
         <p className="settings-help">
-          Populated as Sonarr/Radarr declare categories, or add one manually below — useful for pre-filling the "Add
-          Download" form's category field.
+          Redirect a category's completed downloads to a specific directory instead of the default{' '}
+          <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only affects
+          Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones.
         </p>
-        {categories && (
-          <div className="category-lists">
-            <div>
-              <h3>Torrent</h3>
-              {categories.torrent.length === 0 ? (
-                <p className="text-muted">None yet</p>
-              ) : (
-                <ul className="category-list">
-                  {categories.torrent.map((c) => (
-                    <li key={c}>{c}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <h3>Usenet</h3>
-              {categories.usenet.length === 0 ? (
-                <p className="text-muted">None yet</p>
-              ) : (
-                <ul className="category-list">
-                  {categories.usenet.map((c) => (
-                    <li key={c}>{c}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        )}
-        {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
-          <div className="category-paths">
-            <h3>Save path overrides</h3>
-            <p className="settings-help">
-              Optional — redirect a category's completed downloads to a specific directory
-              instead of the default <code>download_dir/&lt;category&gt;</code> (e.g. to route it
-              to a different disk or mount). Leave blank to use the default.
-            </p>
-            {Array.from(new Set([...categories.torrent, ...categories.usenet]))
-              .sort()
-              .map((name) => (
-                <CategoryPathRow
-                  key={name}
-                  name={name}
-                  currentPath={categories.paths[name] ?? ''}
-                  apiKey={apiKey}
-                  onSaved={load}
-                />
-              ))}
-          </div>
-        )}
 
-        <form className="add-category-form" onSubmit={handleAddCategory}>
-          <select value={newCategoryProtocol} onChange={(e) => setNewCategoryProtocol(e.target.value as 'torrent' | 'usenet')}>
-            <option value="torrent">Torrent</option>
-            <option value="usenet">Usenet</option>
-          </select>
-          <input type="text" placeholder="Category name" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} />
-          <button type="submit" disabled={categoryStatus.kind === 'saving' || !newCategory.trim()}>
-            {categoryStatus.kind === 'saving' ? 'Adding…' : 'Add'}
+        {categories &&
+          Object.entries(categories.paths)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([name, path]) => <CategoryPathRow key={name} name={name} currentPath={path} apiKey={apiKey} onSaved={load} />)}
+
+        <form className="add-category-form" onSubmit={handleAddOverride}>
+          <input
+            type="text"
+            placeholder="Category (e.g. tv-sonarr)"
+            value={newOverrideCategory}
+            onChange={(e) => setNewOverrideCategory(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="Path (e.g. /mnt/tv)"
+            value={newOverridePath}
+            onChange={(e) => setNewOverridePath(e.target.value)}
+          />
+          <button type="submit" disabled={newOverrideStatus.kind === 'saving' || !newOverrideCategory.trim() || !newOverridePath.trim()}>
+            {newOverrideStatus.kind === 'saving' ? 'Adding…' : 'Add override'}
           </button>
         </form>
-        {categoryStatus.kind === 'error' && <p className="settings-error">Failed to add: {categoryStatus.message}</p>}
+        {newOverrideStatus.kind === 'error' && <p className="settings-error">Failed to add: {newOverrideStatus.message}</p>}
+
+        {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
+          <p className="settings-help">
+            Declared by Sonarr/Radarr — torrent: {categories.torrent.join(', ') || 'none'}; usenet:{' '}
+            {categories.usenet.join(', ') || 'none'}.
+          </p>
+        )}
       </section>
 
       <section className="settings-card">

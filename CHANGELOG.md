@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Simplified Settings' Categories section into "Save path overrides."**
+  Built overnight, continuing the conversation from the placeholder-category
+  removal above: once that was gone, the remaining category list's only
+  real job was being a prerequisite — a save-path override could only be
+  set for a category already "known" (declared by Sonarr/Radarr, or
+  manually pre-added), a backwards, confusing gate for a feature the
+  backend never actually required (`PUT /api/v1/settings/categories/path`
+  already accepted any category name directly — confirmed by reading
+  `SetCategoryPath`, which does no existence check at all). The section is
+  now just "Save path overrides": existing overrides listed and editable
+  as before, plus a two-field "Add override" form (category name + path)
+  that works for any name, declared or not. The old two-column Torrent/
+  Usenet category list and its separate "+ Add category" form are gone;
+  what Sonarr/Radarr have actually declared, if anything, now shows as one
+  small line at the bottom instead of its own management UI. The now-dead
+  frontend `addCategory` API helper and its CSS were removed along with it
+  — the backend's `POST /api/v1/settings/categories` endpoint is untouched
+  and still callable directly, just no longer surfaced in the web UI.
+  Verified live via the API directly (the part that can be checked without
+  a browser): set a save-path override for a category name that had never
+  been seen before, confirmed it saved and reported back correctly, then
+  cleared it — exactly the mechanism the new "Add override" form relies on.
+  **Not verified**: how the new layout actually looks — built and deployed
+  overnight without the ability to click through the real UI, so this
+  needs a look once you're back.
 - **Removed the seeded "AcerviNode" placeholder category.** The user asked
   whether it overrode Sonarr/Radarr's real category — confirmed it never
   did (`internal/importer.categoryPath` is a plain exact-string lookup, no

@@ -250,14 +250,6 @@ export function getCategories(apiKey: string): Promise<Categories> {
   return request('/api/v1/settings/categories', apiKey)
 }
 
-export function addCategory(apiKey: string, protocol: 'torrent' | 'usenet', name: string): Promise<void> {
-  return request('/api/v1/settings/categories', apiKey, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ protocol, name }),
-  })
-}
-
 // setCategoryPath sets category's override destination directory — internal/
 // importer uses it instead of download_dir/<category> for downloads in that
 // category. Pass an empty path to clear a previously set override. Applies
