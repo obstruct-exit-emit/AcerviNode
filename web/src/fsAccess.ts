@@ -5,6 +5,7 @@
 // `supportsDirectoryPicker()` and fall back to opening links individually
 // when it's false.
 
+import { DOWNLOAD_CHANNEL_NAME } from './downloadWindowProtocol'
 import type { AddBatchMessage, FromPopupMessage } from './downloadWindowProtocol'
 
 export function supportsDirectoryPicker(): boolean {
@@ -207,26 +208,39 @@ export async function resolveDownloadDirectory(): Promise<FileSystemDirectoryHan
 // hands the whole batch off to a small, separate popup window instead: once
 // it's running there, the main tab is free to close without losing anything,
 // since the popup is its own independent browsing context. One shared window
-// gathers every active batch (not one popup per download) — window.open with
-// a fixed name reuses an already-open window rather than spawning another.
+// gathers every active batch (not one popup per download), coordinated over
+// a BroadcastChannel rather than the window.open()/window.opener references
+// directly — see downloadWindowProtocol.ts for why: two independently-opened
+// tabs of AcerviNode can't always see each other's named popup, and
+// BroadcastChannel is what makes reuse correct regardless.
 
 const DOWNLOAD_WINDOW_NAME = 'acervinode-downloads'
+const POPUP_READY_TIMEOUT_MS = 8000
 
 let downloadWindowRef: Window | null = null
-let downloadWindowReady: Promise<void> | null = null
+let channel: BroadcastChannel | null = null
 
-// openDownloadWindow opens (or focuses/reuses, if already open) the shared
-// popup, and returns both the window reference and a promise that resolves
-// once the popup's own message listener is confirmed registered — postMessage
-// sent before that would just be lost. Must be called synchronously in a
-// click handler, same gesture requirement as showDirectoryPicker — window.open
-// itself is synchronous (no await before it), so calling it first and
-// resolveDownloadDirectory()/the picker right after, with no other await in
-// between, keeps both inside the same activation.
-export function openDownloadWindow(): { popup: Window; ready: Promise<void> } | null {
+function downloadChannel(): BroadcastChannel {
+  if (!channel) channel = new BroadcastChannel(DOWNLOAD_CHANNEL_NAME)
+  return channel
+}
+
+// openDownloadWindow opens the shared popup if none is already known to
+// this tab, or asks whatever popup is actually alive (which may be a
+// different physical window than the one this tab previously opened, or
+// none at all yet) to bring itself to the front. Must be called
+// synchronously in a click handler, same gesture requirement as
+// showDirectoryPicker — window.open itself is synchronous (no await before
+// it), so calling it first, with no other await in between, keeps the
+// activation alive for it.
+export function openDownloadWindow(): { popup: Window } | null {
   if (downloadWindowRef && !downloadWindowRef.closed) {
-    downloadWindowRef.focus()
-    return { popup: downloadWindowRef, ready: downloadWindowReady ?? Promise.resolve() }
+    // Not downloadWindowRef.focus() directly — this tab's own reference
+    // might itself be a duplicate that lost the singleton lock (see
+    // downloadWindowProtocol.ts), in which case the broadcast is what
+    // actually reaches the real active popup instead.
+    downloadChannel().postMessage({ type: 'focus-request' })
+    return { popup: downloadWindowRef }
   }
 
   const popup = window.open(
@@ -237,41 +251,54 @@ export function openDownloadWindow(): { popup: Window; ready: Promise<void> } | 
   if (!popup) return null // blocked by a popup blocker
 
   downloadWindowRef = popup
-  downloadWindowReady = new Promise<void>((resolve) => {
-    function onMessage(e: MessageEvent<FromPopupMessage>) {
-      if (e.source !== popup || e.origin !== window.location.origin) return
-      if (e.data?.type === 'popup-ready') {
-        window.removeEventListener('message', onMessage)
-        resolve()
-      }
-    }
-    window.addEventListener('message', onMessage)
-  })
-  return { popup, ready: downloadWindowReady }
+  // Best-effort: if window.open() actually reused an existing popup this
+  // tab didn't know about (or, rarely, created a genuine duplicate — see
+  // downloadWindowProtocol.ts), this brings whichever one actually holds
+  // the singleton lock to the front, not necessarily the object above.
+  downloadChannel().postMessage({ type: 'focus-request' })
+  return { popup }
 }
 
-// sendBatchToDownloadWindow waits for the popup to confirm it's ready, then
-// posts one download's files for it to fetch and stream to disk on its own.
-export async function sendBatchToDownloadWindow(
-  opened: { popup: Window; ready: Promise<void> },
-  batch: Omit<AddBatchMessage, 'type'>,
-): Promise<void> {
-  await opened.ready
+// sendBatchToDownloadWindow pings for a live popup (its singleton-lock
+// holder specifically — see DownloadWindow.tsx), waits for the reply, then
+// broadcasts one download's files for it to fetch and stream to disk on its
+// own. Doesn't need a Window reference at all — the popup that actually
+// answers ping might not be the object openDownloadWindow() returned.
+export async function sendBatchToDownloadWindow(batch: Omit<AddBatchMessage, 'type'>): Promise<void> {
+  const ch = downloadChannel()
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      ch.removeEventListener('message', onMessage)
+      reject(new Error('Timed out waiting for the Downloads window to be ready.'))
+    }, POPUP_READY_TIMEOUT_MS)
+    function onMessage(e: MessageEvent<FromPopupMessage>) {
+      if (e.data?.type !== 'popup-ready') return
+      clearTimeout(timeout)
+      ch.removeEventListener('message', onMessage)
+      resolve()
+    }
+    ch.addEventListener('message', onMessage)
+    ch.postMessage({ type: 'ping' })
+  })
   const message: AddBatchMessage = { type: 'add-batch', ...batch }
-  opened.popup.postMessage(message, window.location.origin)
+  ch.postMessage(message)
 }
 
 // listenForDownloadWindowMessages relays the popup's progress/completion
 // reports back into the main app's own UI (e.g. the downloads table's
 // per-row progress bar) — best-effort, since the popup works fine without
-// anyone listening. Returns an unsubscribe function.
+// anyone listening. Every open AcerviNode tab receives every report
+// regardless of which one actually triggered that download, which is
+// harmless (a batch-progress/-complete for an unknown id is just ignored by
+// callers) and arguably a feature — every tab reflects the shared popup's
+// real state. Returns an unsubscribe function.
 export function listenForDownloadWindowMessages(onMessage: (msg: FromPopupMessage) => void): () => void {
+  const ch = downloadChannel()
   function handler(e: MessageEvent<FromPopupMessage>) {
-    if (e.origin !== window.location.origin) return
     if (e.data?.type === 'batch-progress' || e.data?.type === 'batch-complete') {
       onMessage(e.data)
     }
   }
-  window.addEventListener('message', handler)
-  return () => window.removeEventListener('message', handler)
+  ch.addEventListener('message', handler)
+  return () => ch.removeEventListener('message', handler)
 }

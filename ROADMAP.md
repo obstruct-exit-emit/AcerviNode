@@ -456,6 +456,13 @@ designing it solo.
   shows before a streamed "Download all" starts, showing the destination
   folder (with a change-folder control) and a checkbox for whether to use
   the Downloads window at all, rather than both being decided silently.
+- Immediate follow-on, found live by the user: the Downloads popup could
+  split across two separate windows when triggered from two independently-
+  opened AcerviNode tabs — `window.open()`'s "reuse by name" trick only
+  works within one browsing-context group. Rebuilt the popup's
+  coordination on `BroadcastChannel` + a singleton `navigator.locks` lock
+  instead of direct window references, which don't care about that
+  topology. See the [CHANGELOG](CHANGELOG.md) for the full design.
 - Docs cleanup: found and fixed a broken cross-reference anchor
   (`#completed-download-handling` vs. the real
   `#completed-download-handling-internalimporter`) affecting 7 links across

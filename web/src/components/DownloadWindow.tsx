@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { getFileLink, getStoredApiKey } from '../api'
 import { queryWritePermission, requestWritePermission, writeFileToDirectory } from '../fsAccess'
-import type { AddBatchMessage, BatchCompleteMessage, BatchProgressMessage, FailedFile } from '../downloadWindowProtocol'
+import { DOWNLOAD_CHANNEL_NAME } from '../downloadWindowProtocol'
+import type { AddBatchMessage, BatchCompleteMessage, BatchProgressMessage, FailedFile, ToPopupMessage } from '../downloadWindowProtocol'
 import { formatBytes } from '../format'
 import '../App.css'
 
@@ -16,33 +17,55 @@ type BatchState = {
   status: 'needs-permission' | 'downloading' | 'done' | 'error'
 }
 
+// Guards against two Downloads popups both actually processing batches —
+// see downloadWindowProtocol.ts: two independently-opened AcerviNode tabs
+// can end up in different browsing-context groups, where window.open()'s
+// "reuse by name" trick can't see an already-open popup and spawns a
+// genuine second one. Only the instance holding this lock (acquired for its
+// whole lifetime, released automatically when the tab closes) ever
+// registers a channel listener or touches a batch; any other instance just
+// shows a "already open elsewhere" message.
+const DOWNLOAD_LOCK_NAME = 'acervinode-downloads-singleton'
+
+function initialBatchState(batch: AddBatchMessage, totalBytes: number, status: BatchState['status']): BatchState {
+  return {
+    downloadId: batch.downloadId,
+    downloadName: batch.downloadName,
+    loaded: 0,
+    total: totalBytes,
+    filesDone: 0,
+    filesTotal: batch.files.length,
+    failed: [],
+    status,
+  }
+}
+
 // The small popup window openDownloadWindow() (see fsAccess.ts) opens —
 // rendered instead of the normal <App> when the URL has ?popup=downloads
-// (see main.tsx). Its whole job: receive a download's files over
-// postMessage from the main window, fetch and stream them to the
+// (see main.tsx). Its whole job: receive a download's files over a shared
+// BroadcastChannel from any AcerviNode tab, fetch and stream them to the
 // already-picked folder itself, and keep doing that independent of whatever
-// happens to the main tab afterward (closed, navigated away, whatever) —
+// happens to any main tab afterward (closed, navigated away, whatever) —
 // this window is what actually survives that, not the main tab.
 export function DownloadWindow() {
   const [batches, setBatches] = useState<Record<string, BatchState>>({})
-  // Batches already being processed — a StrictMode double-effect-run guard,
-  // and general protection against handling the same add-batch message twice.
+  // null while the singleton lock is still being requested; true once this
+  // instance holds it (the only state where it's actually the active
+  // popup); false if another instance already holds it.
+  const [isPrimary, setIsPrimary] = useState<boolean | null>(null)
+  // Batches already being processed — general protection against handling
+  // the same add-batch message twice (e.g. a duplicate broadcast).
   const processing = useRef<Set<string>>(new Set())
-  // Batches parked waiting on a "Grant folder access" click — see onMessage
-  // below. Needs the original message (for its files/directoryHandle) plus
-  // the size total already computed for it.
+  // Batches parked waiting on a "Grant folder access" click — see
+  // handleBatch below. Needs the original message (for its files/
+  // directoryHandle) plus the size total already computed for it.
   const pending = useRef<Record<string, { batch: AddBatchMessage; totalBytes: number }>>({})
+  const channelRef = useRef<BroadcastChannel | null>(null)
 
   useEffect(() => {
-    // Tells the opener it's safe to postMessage batches now — sent once,
-    // right after this listener is registered, so nothing posted before
-    // this point is ever lost waiting for a page that hadn't loaded yet.
-    window.opener?.postMessage({ type: 'popup-ready' }, window.location.origin)
+    let cancelled = false
 
-    async function onMessage(e: MessageEvent<AddBatchMessage>) {
-      if (e.origin !== window.location.origin) return
-      if (e.data?.type !== 'add-batch') return
-      const batch = e.data
+    async function handleBatch(batch: AddBatchMessage) {
       if (processing.current.has(batch.downloadId)) return
       processing.current.add(batch.downloadId)
 
@@ -51,46 +74,64 @@ export function DownloadWindow() {
       // A directory handle's write grant is checked per top-level browsing
       // context, not just per origin — the main window already had it
       // granted, but that doesn't carry over to this popup automatically,
-      // even though it's the very same handle (postMessage-cloned). Asking
-      // for it here needs this window's own user gesture, so if it's not
-      // already granted, processing pauses on a "Grant folder access"
+      // even though it's the very same handle (structured-clone-transferred).
+      // Asking for it here needs this window's own user gesture, so if it's
+      // not already granted, processing pauses on a "Grant folder access"
       // button instead of failing every file silently.
       const state = await queryWritePermission(batch.directoryHandle)
       if (state === 'granted') {
-        setBatches((prev) => ({
-          ...prev,
-          [batch.downloadId]: {
-            downloadId: batch.downloadId,
-            downloadName: batch.downloadName,
-            loaded: 0,
-            total: totalBytes,
-            filesDone: 0,
-            filesTotal: batch.files.length,
-            failed: [],
-            status: 'downloading',
-          },
-        }))
+        setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'downloading') }))
         processBatch(batch, totalBytes)
       } else {
         pending.current[batch.downloadId] = { batch, totalBytes }
-        setBatches((prev) => ({
-          ...prev,
-          [batch.downloadId]: {
-            downloadId: batch.downloadId,
-            downloadName: batch.downloadName,
-            loaded: 0,
-            total: totalBytes,
-            filesDone: 0,
-            filesTotal: batch.files.length,
-            failed: [],
-            status: 'needs-permission',
-          },
-        }))
+        setBatches((prev) => ({ ...prev, [batch.downloadId]: initialBatchState(batch, totalBytes, 'needs-permission') }))
       }
     }
 
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
+    // ifAvailable: true resolves the callback with null immediately instead
+    // of queueing if another instance already holds the lock — exactly the
+    // "is anyone else already the active Downloads window?" check needed
+    // here. The lock is held for as long as the callback's promise stays
+    // pending, i.e. for this window's whole lifetime (never resolved on
+    // purpose — the browser releases it automatically when the tab closes).
+    navigator.locks.request(DOWNLOAD_LOCK_NAME, { ifAvailable: true }, (lock) => {
+      if (cancelled) return Promise.resolve()
+      if (!lock) {
+        setIsPrimary(false)
+        return Promise.resolve()
+      }
+      setIsPrimary(true)
+
+      const ch = new BroadcastChannel(DOWNLOAD_CHANNEL_NAME)
+      channelRef.current = ch
+
+      function onMessage(e: MessageEvent<ToPopupMessage>) {
+        switch (e.data?.type) {
+          case 'ping':
+            ch.postMessage({ type: 'popup-ready' })
+            break
+          case 'focus-request':
+            window.focus()
+            break
+          case 'add-batch':
+            handleBatch(e.data)
+            break
+        }
+      }
+      ch.addEventListener('message', onMessage)
+      // Announce readiness immediately too, in case a main window is
+      // already waiting on a ping sent just before this listener attached.
+      ch.postMessage({ type: 'popup-ready' })
+
+      return new Promise<void>(() => {
+        // Deliberately never resolves — see the comment above.
+      })
+    })
+
+    return () => {
+      cancelled = true
+      channelRef.current?.close()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -149,18 +190,30 @@ export function DownloadWindow() {
     reportComplete(batch.downloadId, failed)
   }
 
-  // Both report functions are best-effort: window.opener is null once the
-  // main tab that opened this popup has closed, which is the whole point of
-  // this window existing — there's simply nobody to relay progress to at
-  // that point, and that's fine, this window doesn't need it either.
+  // Both report functions are best-effort: broadcasting works fine with
+  // zero listeners (every main tab may be closed), which is the whole point
+  // of this window existing.
   function reportProgress(downloadId: string, loaded: number, total: number) {
     const msg: BatchProgressMessage = { type: 'batch-progress', downloadId, loaded, total }
-    window.opener?.postMessage(msg, window.location.origin)
+    channelRef.current?.postMessage(msg)
   }
 
   function reportComplete(downloadId: string, failed: FailedFile[]) {
     const msg: BatchCompleteMessage = { type: 'batch-complete', downloadId, failed }
-    window.opener?.postMessage(msg, window.location.origin)
+    channelRef.current?.postMessage(msg)
+  }
+
+  if (isPrimary === false) {
+    return (
+      <div className="download-window">
+        <h1 className="download-window-title">📦 Downloads</h1>
+        <p className="empty">
+          Another Downloads window is already open and is the one actually tracking your downloads — this extra
+          copy isn't doing anything. Safe to close.
+        </p>
+        <button onClick={() => window.close()}>Close this window</button>
+      </div>
+    )
   }
 
   const active = Object.values(batches)
@@ -170,7 +223,7 @@ export function DownloadWindow() {
       <h1 className="download-window-title">📦 Downloads</h1>
       {active.length === 0 ? (
         <p className="empty">
-          Nothing here yet — this window fills up automatically when you download files from the main AcerviNode
+          Nothing here yet — this window fills up automatically when you download files from any AcerviNode
           window. You can leave it open (even minimized) and close the main tab; downloads already running here
           keep going.
         </p>

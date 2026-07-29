@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Fixed a real bug found live: the Downloads popup window could split
+  across two separate windows.** Reported by the user opening two
+  downloads that landed one each in two different "Downloads" popups
+  instead of the same shared one. Root cause: `window.open(url, name)`'s
+  "reuse an existing window with this name" behavior only works within the
+  same browsing-context group — two independently-opened AcerviNode tabs
+  (not one opened from the other, e.g. two separate browser windows) can
+  land in different groups, so each one's `openDownloadWindow()` call
+  spawned its own popup, and every subsequent download from either tab kept
+  going to whichever popup that tab happened to know about. Direct
+  `window.postMessage`/`window.opener` coordination has no way to see past
+  that boundary at all. Replaced with two Chromium primitives that don't
+  care about browsing-context topology: every main window and the popup now
+  talk over a shared `BroadcastChannel('acervinode-downloads')`
+  (`downloadWindowProtocol.ts`) instead of direct window references, and the
+  popup itself claims a singleton `navigator.locks` lock
+  (`acervinode-downloads-singleton`) on load — if a second physical popup
+  ever does open (the browsing-context-group case can still make
+  `window.open()` create one), it loses the lock race, shows "Another
+  Downloads window is already open — safe to close", and never touches a
+  batch. `sendBatchToDownloadWindow`/`listenForDownloadWindowMessages` no
+  longer take a `Window` reference at all — they ping-and-wait for a
+  `popup-ready` reply and broadcast from there, so whichever popup actually
+  holds the lock receives every batch and progress/completion report,
+  regardless of which tab triggered it or which popup object that tab's own
+  `window.open()` call happened to return.
 - **Confirm dialog before a streamed "Download all" starts**
   (`web/src/components/DownloadOptionsDialog.tsx`): clicking the row button
   used to immediately start fetching — folder and Downloads-popup hand-off

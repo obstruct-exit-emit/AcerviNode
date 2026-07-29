@@ -251,7 +251,7 @@ export default function App() {
         }
         setDownloadingAllId(d.id)
         setDownloadProgress({ loaded: 0, total: files.reduce((sum, f) => sum + f.size_bytes, 0) })
-        await sendBatchToDownloadWindow(opened, {
+        await sendBatchToDownloadWindow({
           downloadId: d.id,
           downloadName: d.name,
           directoryHandle: opts.folder,
