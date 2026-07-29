@@ -82,7 +82,8 @@ export function DownloadOptionsDialog({ download, onClose, onConfirm }: Props) {
         </div>
         <p className="settings-help">
           Files stream straight into this folder. Remembered for next time — change it here, or later
-          in Settings → Downloads.
+          in Settings → Downloads. Note: the browser won't let you pick Desktop/Documents/Downloads
+          itself (a deliberate Chrome restriction) — choose a subfolder inside it instead.
         </p>
 
         <label className="download-manager-check">

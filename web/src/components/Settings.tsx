@@ -502,7 +502,9 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
             <p className="settings-help">
               Default folder for "Individual files" downloads — picked once, then reused silently
               (no prompt) for every download after, as long as this browser still has permission for
-              it. Only the folder's name is shown here; browsers don't expose its full path.
+              it. Only the folder's name is shown here; browsers don't expose its full path. Note: the
+              browser won't let you pick Desktop/Documents/Downloads itself (a deliberate Chrome
+              restriction) — choose a subfolder inside it instead.
             </p>
             {folderStatus.kind === 'error' && <p className="settings-error">Failed to change folder: {folderStatus.message}</p>}
           </>

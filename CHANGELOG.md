@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Documented a real browser restriction found live**: Chrome refuses to
+  grant *any* site read/write access to certain "well-known" folders
+  directly — Desktop, Documents, Downloads, Pictures, Music, Videos, plus
+  actual OS directories — showing a generic "can't open this folder
+  because it contains system files" dialog even though a personal
+  Downloads folder obviously has no such thing. Deliberate anti-abuse
+  policy (stops a site from getting broad standing access to everywhere a
+  user's files land), enforced entirely inside the browser's own picker
+  dialog before any AcerviNode code runs — nothing to catch or work around
+  in JS. Added a note in both `DownloadOptionsDialog.tsx` and Settings'
+  folder picker explaining it and the fix: pick a subfolder inside the
+  blocked folder (e.g. `Downloads/AcerviNode`) instead of the folder
+  itself, which isn't restricted.
 - **Per-row download progress no longer shares one global slot.** Found
   live right after two downloads genuinely overlapped: the row progress
   indicator visibly flickered/glitched, jumping between two different
