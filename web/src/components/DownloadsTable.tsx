@@ -22,12 +22,17 @@ interface Props {
   onDelete: (d: Download) => void
   onRetry: (d: Download) => void
   onDownloadAll: (d: Download) => void
-  downloadingAllId: string | null
-  // Cumulative bytes written so far for the row matching downloadingAllId —
-  // only populated for the streamed-to-folder path (File System Access);
-  // null shows the plain "…" busy indicator instead (the tab-per-file
-  // fallback hands off to the browser immediately, nothing left to track).
-  downloadProgress: { loaded: number; total: number } | null
+  // Every row with a "Download all" currently in flight — a Set (not a
+  // single id) because more than one row can genuinely be downloading at
+  // once now that a batch can be handed off to the Downloads popup window
+  // and another row started right after. Each row only ever reads its own
+  // entry, so they no longer fight over one shared value.
+  busyIds: Set<string>
+  // Cumulative bytes written so far, per row id — only populated for the
+  // streamed-to-folder path (File System Access); a row present in busyIds
+  // but absent here shows the plain "…" indicator instead (zip resolution,
+  // and the tab-per-file fallback, hand off with nothing to track).
+  downloadProgress: Record<string, { loaded: number; total: number }>
   onSelect: (d: Download) => void
   // Retry only makes sense for a Managed (added_via=arr) download that
   // internal/importer's own fetch pipeline can act on — a Manual download is
@@ -52,7 +57,7 @@ export function DownloadsTable({
   onDelete,
   onRetry,
   onDownloadAll,
-  downloadingAllId,
+  busyIds,
   downloadProgress,
   onSelect,
   allowRetry,
@@ -78,7 +83,10 @@ export function DownloadsTable({
         </tr>
       </thead>
       <tbody>
-        {downloads.map((d) => (
+        {downloads.map((d) => {
+          const busy = busyIds.has(d.id)
+          const progress = downloadProgress[d.id]
+          return (
           <tr key={d.id} className="row-clickable" onClick={() => onSelect(d)}>
             <td className="name-cell" title={d.name}>
               {d.name}
@@ -115,14 +123,14 @@ export function DownloadsTable({
                   local disk by internal/importer, so there's nothing to
                   manually grab. */}
               {d.added_via === 'manual' && HAS_FILES_STATES.has(d.state) && (
-                downloadingAllId === d.id && downloadProgress && downloadProgress.total > 0 ? (
+                busy && progress && progress.total > 0 ? (
                   <span
                     className="download-progress-mini"
-                    title={`${formatBytes(downloadProgress.loaded)} / ${formatBytes(downloadProgress.total)}`}
+                    title={`${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`}
                   >
                     <span
                       className="download-progress-mini-fill"
-                      style={{ width: `${Math.min(100, Math.round((downloadProgress.loaded / downloadProgress.total) * 100))}%` }}
+                      style={{ width: `${Math.min(100, Math.round((progress.loaded / progress.total) * 100))}%` }}
                     />
                   </span>
                 ) : (
@@ -132,10 +140,10 @@ export function DownloadsTable({
                       e.stopPropagation()
                       onDownloadAll(d)
                     }}
-                    disabled={downloadingAllId === d.id}
+                    disabled={busy}
                     title={downloadAllTitle()}
                   >
-                    {downloadingAllId === d.id ? '…' : '⬇'}
+                    {busy ? '…' : '⬇'}
                   </button>
                 )
               )}
@@ -151,7 +159,8 @@ export function DownloadsTable({
               </button>
             </td>
           </tr>
-        ))}
+          )
+        })}
       </tbody>
     </table>
   )

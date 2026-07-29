@@ -8,16 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Per-row download progress no longer shares one global slot.** Found
+  live right after two downloads genuinely overlapped: the row progress
+  indicator visibly flickered/glitched, jumping between two different
+  downloads' numbers. Root cause: `downloadingAllId`/`downloadProgress`
+  were single shared values, correct back when only one row could ever be
+  mid-download at a time — no longer true once the Downloads popup could
+  run several batches at once (see the popup entries below). Replaced with
+  `busyIds` (a `Set<string>`) and `downloadProgress` keyed by download id,
+  in both `App.tsx` and `DownloadsTable.tsx`, so each row now reads only
+  its own entry and stops fighting over one value with every other
+  in-flight row.
 - **The Downloads popup tries to bring itself to the front when a download
   is added.** `window.focus()` called on itself from a background
   BroadcastChannel handler (no direct user gesture in that context) is
   exactly the "popup keeps stealing focus" pattern Chromium deliberately
-  blocks, so it's attempted but genuinely best-effort — it may silently do
-  nothing depending on the browser. The part that's guaranteed to work
-  regardless: the tab title changes to "🔴 New download — …" while the
-  window isn't focused, visible in the taskbar/alt-tab switcher even when
-  the actual foreground-bump is blocked, and clears itself the moment the
-  user does bring the window forward.
+  blocks — confirmed live: it does not actually work. The tab title change
+  ("🔴 New download — …" while unfocused, clearing on refocus) is the part
+  that's guaranteed to work regardless, since it needs no permission and
+  can't be blocked the same way.
 - **Fixed a real bug found live: the Downloads popup window could split
   across two separate windows.** Reported by the user opening two
   downloads that landed one each in two different "Downloads" popups

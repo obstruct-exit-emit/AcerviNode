@@ -54,12 +54,40 @@ export default function App() {
   // and choose whether to hand off to the Downloads popup window before
   // anything actually starts. See handleDownloadAll/startStreamedDownload.
   const [downloadDialogFor, setDownloadDialogFor] = useState<Download | null>(null)
-  const [downloadingAllId, setDownloadingAllId] = useState<string | null>(null)
-  // Cumulative bytes written across every file in the batch currently
-  // streaming to disk (the File System Access path only — see
-  // handleDownloadAllIndividual). null while nothing's downloading, or once
-  // a download starts if total size wasn't knowable up front.
-  const [downloadProgress, setDownloadProgress] = useState<{ loaded: number; total: number } | null>(null)
+  // Every row with a "Download all" currently in flight, keyed by download
+  // id rather than a single shared id — more than one row can genuinely be
+  // downloading at once (the Downloads popup can run several batches
+  // concurrently), and a shared single value made every row's progress
+  // indicator flicker between whichever download's messages arrived most
+  // recently, a real bug found live once two downloads actually overlapped.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  // Cumulative bytes written so far, per row id (the File System Access
+  // path only — see startStreamedDownload/handleDownloadAllIndividual). A
+  // row in busyIds but absent here shows the plain "…" indicator instead.
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, { loaded: number; total: number }>>({})
+
+  function markBusy(id: string) {
+    setBusyIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+  }
+  function clearBusy(id: string) {
+    setBusyIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+  function setProgressFor(id: string, progress: { loaded: number; total: number }) {
+    setDownloadProgress((prev) => ({ ...prev, [id]: progress }))
+  }
+  function clearProgressFor(id: string) {
+    setDownloadProgress((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
 
   const handleUnauthorized = useCallback(() => {
     clearStoredApiKey()
@@ -99,19 +127,17 @@ export default function App() {
     return () => clearInterval(interval)
   }, [apiKey, refresh])
 
-  // Relays the Downloads popup window's progress back into this row's own
-  // progress bar — best-effort and, for now, single-row: if two downloads
-  // are both running in the popup at once, this only ever reflects whichever
-  // sent the most recent message. The popup itself always shows every batch
-  // at once regardless, so nothing is actually lost, just not mirrored here.
+  // Relays the Downloads popup window's progress back into each row's own
+  // progress bar, keyed by download id — best-effort, since the popup works
+  // fine without anyone listening.
   useEffect(() => {
     return listenForDownloadWindowMessages((msg) => {
       if (msg.type === 'batch-progress') {
-        setDownloadingAllId(msg.downloadId)
-        setDownloadProgress({ loaded: msg.loaded, total: msg.total })
+        markBusy(msg.downloadId)
+        setProgressFor(msg.downloadId, { loaded: msg.loaded, total: msg.total })
       } else if (msg.type === 'batch-complete') {
-        setDownloadingAllId((current) => (current === msg.downloadId ? null : current))
-        setDownloadProgress(null)
+        clearBusy(msg.downloadId)
+        clearProgressFor(msg.downloadId)
         if (msg.failed.length > 0) {
           alert(`${msg.failed.length} file(s) failed to download:\n${msg.failed.map((f) => `${f.path}: ${f.error}`).join('\n')}`)
         }
@@ -178,14 +204,14 @@ export default function App() {
 
   async function handleDownloadAllZip(d: Download) {
     if (!apiKey) return
-    setDownloadingAllId(d.id)
+    markBusy(d.id)
     try {
       const { url } = await getZipLink(apiKey, d.id)
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
     } finally {
-      setDownloadingAllId(null)
+      clearBusy(d.id)
     }
   }
 
@@ -195,7 +221,7 @@ export default function App() {
   // through DownloadOptionsDialog.
   async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
-    setDownloadingAllId(d.id)
+    markBusy(d.id)
     try {
       const detail = await getDownload(apiKey, d.id)
       const files = detail.files.filter((f) => f.provider_file_id)
@@ -219,7 +245,7 @@ export default function App() {
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
     } finally {
-      setDownloadingAllId(null)
+      clearBusy(d.id)
     }
   }
 
@@ -249,8 +275,8 @@ export default function App() {
           alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
           return
         }
-        setDownloadingAllId(d.id)
-        setDownloadProgress({ loaded: 0, total: files.reduce((sum, f) => sum + f.size_bytes, 0) })
+        markBusy(d.id)
+        setProgressFor(d.id, { loaded: 0, total: files.reduce((sum, f) => sum + f.size_bytes, 0) })
         await sendBatchToDownloadWindow({
           downloadId: d.id,
           downloadName: d.name,
@@ -259,15 +285,15 @@ export default function App() {
         })
       } catch (err) {
         alert(err instanceof Error ? err.message : String(err))
-        setDownloadingAllId(null)
-        setDownloadProgress(null)
+        clearBusy(d.id)
+        clearProgressFor(d.id)
       }
       return
     }
 
     // In-tab streaming: either the checkbox was unchecked, or the popup was
     // blocked — either way, stream straight to the chosen folder here.
-    setDownloadingAllId(d.id)
+    markBusy(d.id)
     try {
       const detail = await getDownload(apiKey, d.id)
       const files = detail.files.filter((f) => f.provider_file_id)
@@ -278,7 +304,7 @@ export default function App() {
 
       const totalBytes = files.reduce((sum, f) => sum + f.size_bytes, 0)
       let loadedBytes = 0
-      setDownloadProgress({ loaded: 0, total: totalBytes })
+      setProgressFor(d.id, { loaded: 0, total: totalBytes })
 
       const failed: string[] = []
       for (const f of files) {
@@ -288,7 +314,7 @@ export default function App() {
           if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
           await writeFileToDirectory(opts.folder, f.path, resp, (chunkBytes) => {
             loadedBytes += chunkBytes
-            setDownloadProgress({ loaded: loadedBytes, total: totalBytes })
+            setProgressFor(d.id, { loaded: loadedBytes, total: totalBytes })
           })
         } catch (err) {
           console.error(`Failed to download ${f.path}`, err)
@@ -301,8 +327,8 @@ export default function App() {
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
     } finally {
-      setDownloadingAllId(null)
-      setDownloadProgress(null)
+      clearBusy(d.id)
+      clearProgressFor(d.id)
     }
   }
 
@@ -352,7 +378,7 @@ export default function App() {
             onDelete={handleDelete}
             onRetry={handleRetry}
             onDownloadAll={handleDownloadAll}
-            downloadingAllId={downloadingAllId}
+            busyIds={busyIds}
             downloadProgress={downloadProgress}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry
@@ -366,7 +392,7 @@ export default function App() {
             onDelete={handleDelete}
             onRetry={handleRetry}
             onDownloadAll={handleDownloadAll}
-            downloadingAllId={downloadingAllId}
+            busyIds={busyIds}
             downloadProgress={downloadProgress}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry={false}
