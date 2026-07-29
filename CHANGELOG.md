@@ -47,6 +47,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     now. The underlying endpoints (`.../files/{fileId}/link`, `.../zip-link`)
     are unchanged and still work for any download's id — this is purely a
     web UI choice about which buttons to show, not a new restriction.
+  - Follow-on: removed category from Manual entirely, after weighing it with
+    the user — no category input in the "+ Add" form, no Category column in
+    the Manual tab's table, no Category row in the detail view for a Manual
+    download. Category only drives real behavior for Managed downloads (via
+    `category_paths` save-path overrides); for Manual it would've been a
+    purely cosmetic label, at odds with mirroring TorBox's own web UI, which
+    has no categorization concept. Noted in ROADMAP.md as a 💡 candidate to
+    revisit if the Manual tab gets hard to navigate once discovery's been
+    running a while.
 
 ### Fixed
 

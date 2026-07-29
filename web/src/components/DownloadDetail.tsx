@@ -145,10 +145,12 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
                 <dt>Provider</dt>
                 <dd>{detail.provider}</dd>
               </div>
-              <div>
-                <dt>Category</dt>
-                <dd>{detail.category || '—'}</dd>
-              </div>
+              {detail.added_via === 'arr' && (
+                <div>
+                  <dt>Category</dt>
+                  <dd>{detail.category || '—'}</dd>
+                </div>
+              )}
               <div>
                 <dt>Size</dt>
                 <dd>{formatBytes(detail.size_bytes)}</dd>

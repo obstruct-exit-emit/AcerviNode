@@ -233,6 +233,17 @@ available for one even in the (currently impossible, since manual downloads
 never reach `error` via a local fetch attempt) hypothetical case Retry/Re-add
 were shown for it.
 
+**Category is deliberately not offered for Manual downloads** — no input on
+the web UI's "+ Add" form, no Category column in the Manual tab, no Category
+row in the detail view (the native API's add endpoints still *accept* an
+optional `category` for programmatic callers, but it has no effect for a
+Manual download and the UI doesn't ask for one). Category only drives real
+behavior for a Managed download — it's what `category_paths` save-path
+overrides key on (see [Configuration](configuration.md#categories-and-save-paths))
+— and Manual downloads are meant to mirror TorBox's own web UI, which has no
+categorization concept at all. Brainstormed with the user and left as a 💡
+item in ROADMAP.md to revisit if the Manual tab ever gets hard to navigate.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

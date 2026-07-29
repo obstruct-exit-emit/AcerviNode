@@ -399,3 +399,23 @@ designing it solo.
   nothing, a later tick adopts a genuinely new item, no duplicate adoption,
   a Manual download is never auto-fetched even sitting in
   `provider_completed`), and `internal/api` (the `?added_via=` query filter).
+- Immediate follow-on: removed the manual-download buttons (per-row
+  "Download all", detail view's per-file "Download"/"Download all (zip)")
+  from Managed rows entirely — a Managed download is already being
+  auto-fetched, so they were redundant there. Manual-tab-only now; the
+  underlying endpoints are unchanged, this was purely a web UI choice.
+- Immediate follow-on: removed category from Manual entirely — no input in
+  the "+ Add" form, no column in the table, no row in the detail view — see
+  💡 **Manual categories** below.
+
+💡 **Manual categories**: brainstormed with the user and deliberately left
+out for now. Category only drives real behavior for Managed downloads (it's
+what `category_paths` save-path overrides key on); for Manual it would be a
+purely cosmetic label, and Manual downloads are meant to mirror TorBox's own
+web UI, which has no categorization concept at all — adding one would be a
+real divergence, not a faithful mirror. Revisit if the Manual tab actually
+becomes unwieldy to navigate once discovery has been adopting things for a
+while — a simple client-side search/filter-by-name is the lighter-weight
+alternative worth trying first, before reaching for full categorization
+(which would also need an edit-after-the-fact story, since a discovered
+download starts with no category and TorBox gives it none to inherit).

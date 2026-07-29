@@ -249,6 +249,7 @@ export default function App() {
             downloadingAllId={downloadingAllId}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry
+            showCategory
             emptyMessage="No managed downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly."
           />
         )}
@@ -261,6 +262,7 @@ export default function App() {
             downloadingAllId={downloadingAllId}
             onSelect={(d) => setSelectedId(d.id)}
             allowRetry={false}
+            showCategory={false}
             emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
           />
         )}

@@ -19,7 +19,6 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
   const [mode, setMode] = useState<InputMode>('link')
   const [link, setLink] = useState('')
   const [file, setFile] = useState<File | null>(null)
-  const [category, setCategory] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
@@ -37,13 +36,19 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
 
     setStatus({ kind: 'saving' })
     try {
-      const cat = category.trim() || undefined
+      // No category — everything added through this form is a Manual
+      // download (see docs/providers.md#managed-vs-manual), and category has
+      // no effect there (it only drives save-path resolution for Managed
+      // downloads, which are the only ones internal/importer auto-fetches).
+      // Deliberately left out for now rather than wired up as a cosmetic-only
+      // label; revisit if the Manual tab ever needs its own organization
+      // scheme — see ROADMAP.md.
       if (protocol === 'torrent') {
-        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: cat })
-        else await addTorrent(apiKey, { magnet: link.trim(), category: cat })
+        if (mode === 'file') await addTorrent(apiKey, { file: file as File })
+        else await addTorrent(apiKey, { magnet: link.trim() })
       } else {
-        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: cat })
-        else await addUsenet(apiKey, { url: link.trim(), category: cat })
+        if (mode === 'file') await addUsenet(apiKey, { file: file as File })
+        else await addUsenet(apiKey, { url: link.trim() })
       }
       onAdded()
     } catch (err) {
@@ -118,8 +123,6 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
             )}
-
-            <input type="text" placeholder="Category (optional)" value={category} onChange={(e) => setCategory(e.target.value)} />
 
             <button
               type="submit"

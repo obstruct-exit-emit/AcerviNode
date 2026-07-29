@@ -98,7 +98,11 @@ or still-processing download simply has an empty `files` array, not an error.
 a download without going through Sonarr/Radarr or faking being one against a
 compat shim — this is what the web UI's "+ Add" button uses. Always lands as
 `added_via: "manual"` (shown in the Manual tab, never auto-fetched to local
-disk) — see [Providers](providers.md#managed-vs-manual). Errors:
+disk) — see [Providers](providers.md#managed-vs-manual). Both endpoints still
+accept an optional `category` field for programmatic callers, but the web
+UI's "+ Add" form doesn't offer it — category has no effect on a Manual
+download (see [Providers](providers.md#managed-vs-manual) for why it was
+deliberately left out). Errors:
 `400` if neither a link (`magnet`/`url`) nor a `file` is given, `503` if the
 relevant provider isn't configured yet, `502` for any other provider-side
 failure (e.g. an invalid magnet or a real upstream error).

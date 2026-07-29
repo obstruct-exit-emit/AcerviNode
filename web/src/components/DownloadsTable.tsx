@@ -30,6 +30,11 @@ interface Props {
   // just reflects the provider's own live state instead. See
   // docs/providers.md#managed-vs-manual.
   allowRetry: boolean
+  // Category only means anything for a Managed download (it drives
+  // save-path resolution — see docs/configuration.md#categories-and-save-paths).
+  // Deliberately not offered for Manual downloads for now — see ROADMAP.md's
+  // "Manual categories" entry for the reasoning and revisit trigger.
+  showCategory: boolean
   emptyMessage: string
 }
 
@@ -37,7 +42,7 @@ interface Props {
 // filesForDownload (backend) can query live from the provider.
 const HAS_FILES_STATES = new Set(['provider_completed', 'ready_for_import'])
 
-export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect, allowRetry, emptyMessage }: Props) {
+export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect, allowRetry, showCategory, emptyMessage }: Props) {
   if (downloads.length === 0) {
     return <p className="empty">{emptyMessage}</p>
   }
@@ -48,7 +53,7 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
         <tr>
           <th>Name</th>
           <th>Protocol</th>
-          <th>Category</th>
+          {showCategory && <th>Category</th>}
           <th>State</th>
           <th>Progress</th>
           <th>Size</th>
@@ -64,7 +69,7 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
               {d.error_message && <div className="error-message">{d.error_message}</div>}
             </td>
             <td>{d.protocol}</td>
-            <td>{d.category || '—'}</td>
+            {showCategory && <td>{d.category || '—'}</td>}
             <td>
               <StateBadge state={d.state} addedVia={d.added_via} />
             </td>
