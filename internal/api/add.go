@@ -84,6 +84,10 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		// Source is the magnet itself for a magnet-based add, empty for a
 		// .torrent file upload — see database.Download.Source.
 		Source: magnet,
+		// AddedViaManual: this endpoint is only ever hit directly (the web
+		// UI's own "+ Add" form) — an *arr app has no way to reach it, it
+		// only knows the qBittorrent/SABnzbd shims — see database.AddedVia.
+		AddedVia: database.AddedViaManual,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash
@@ -162,6 +166,10 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		// Source is the NZB URL itself for a URL-based add, empty for a
 		// .nzb file upload — see database.Download.Source.
 		Source: nzbURL,
+		// AddedViaManual: this endpoint is only ever hit directly (the web
+		// UI's own "+ Add" form) — an *arr app has no way to reach it, it
+		// only knows the qBittorrent/SABnzbd shims — see database.AddedVia.
+		AddedVia: database.AddedViaManual,
 	}
 	d, existed, err := s.existingOrInsert(ctx, s.usenetProvider.Name(), string(id), d)
 	if err != nil {

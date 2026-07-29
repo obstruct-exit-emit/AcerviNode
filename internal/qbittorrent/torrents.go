@@ -124,6 +124,10 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		// .torrent file upload (nothing to resubmit without keeping the raw
 		// bytes) — see database.Download.Source and ReAddDownload.
 		Source: magnet,
+		// AddedViaArr, not AddedViaManual: this shim only exists for *arr
+		// apps, which need the files to land on local disk for their own
+		// import step — see database.AddedVia.
+		AddedVia: database.AddedViaArr,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash

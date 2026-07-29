@@ -5,6 +5,10 @@
 without any special-casing on their end — the same integration decypharr offers
 alongside its qBittorrent shim.
 
+Every download added through this shim is `added_via: "arr"` — auto-fetched
+to local disk by Completed Download Handling and shown in the web UI's
+Managed tab — see [Providers](providers.md#managed-vs-manual).
+
 ## Why offer this alongside the qBittorrent shim
 
 Some \*arr setups are already standardized on a SABnzbd-shaped client, or use

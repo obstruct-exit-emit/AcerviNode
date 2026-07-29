@@ -190,7 +190,11 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
 
             {detail.error_message && <p className="detail-error-message">{detail.error_message}</p>}
 
-            {detail.state === 'error' && (
+            {/* Retry/Re-add only make sense for a Managed download —
+                internal/importer never auto-fetches a Manual one at all, so
+                there's nothing for either action to do; the row just
+                reflects the provider's own live state instead. */}
+            {detail.state === 'error' && detail.added_via === 'arr' && (
               <div className="detail-retry">
                 <button type="button" className="retry-btn" onClick={handleRetry} disabled={retryStatus.kind === 'retrying'}>
                   {retryStatus.kind === 'retrying' ? 'Retrying…' : 'Retry'}

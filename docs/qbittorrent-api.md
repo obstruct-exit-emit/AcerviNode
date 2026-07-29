@@ -6,6 +6,10 @@
 on their end. This is the same integration point
 [decypharr](https://github.com/sirrobot01/decypharr) uses.
 
+Every download added through this shim is `added_via: "arr"` — auto-fetched
+to local disk by Completed Download Handling and shown in the web UI's
+Managed tab — see [Providers](providers.md#managed-vs-manual).
+
 ## Why emulate qBittorrent specifically
 
 \*arr apps don't have an "AcerviNode" client type — they only know how to talk to

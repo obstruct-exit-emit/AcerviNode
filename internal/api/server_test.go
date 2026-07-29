@@ -729,6 +729,56 @@ func TestHandleListDownloads(t *testing.T) {
 	}
 }
 
+// TestHandleListDownloads_FiltersByAddedVia proves ?added_via=arr|manual
+// scopes the response to just the web UI's Managed or Manual tab, and that
+// an unrecognized/omitted value returns everything unfiltered.
+func TestHandleListDownloads_FiltersByAddedVia(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	ctx := context.Background()
+
+	arrDL := &database.Download{
+		ID: "dl-arr-1", Provider: "fake", ProviderDownloadID: "arr-1", Kind: database.KindTorrent,
+		Name: "Arr Download", State: database.StateDownloading, AddedVia: database.AddedViaArr,
+	}
+	manualDL := &database.Download{
+		ID: "dl-manual-1", Provider: "fake", ProviderDownloadID: "manual-1", Kind: database.KindTorrent,
+		Name: "Manual Download", State: database.StateDownloading, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, arrDL); err != nil {
+		t.Fatalf("InsertDownload(arr) error = %v", err)
+	}
+	if err := db.InsertDownload(ctx, manualDL); err != nil {
+		t.Fatalf("InsertDownload(manual) error = %v", err)
+	}
+
+	get := func(query string) []downloadResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads"+query))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", query, rec.Code)
+		}
+		var got []downloadResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+
+	if got := get("?added_via=arr"); len(got) != 1 || got[0].ID != "dl-arr-1" {
+		t.Errorf("?added_via=arr = %+v, want just dl-arr-1", got)
+	}
+	if got := get("?added_via=manual"); len(got) != 1 || got[0].ID != "dl-manual-1" {
+		t.Errorf("?added_via=manual = %+v, want just dl-manual-1", got)
+	}
+	if got := get(""); len(got) != 2 {
+		t.Errorf("no filter = %d results, want 2 (unfiltered)", len(got))
+	}
+	if got := get("?added_via=bogus"); len(got) != 2 {
+		t.Errorf("?added_via=bogus = %d results, want 2 (unrecognized value ignored, unfiltered)", len(got))
+	}
+}
+
 func TestHandleListDownloads_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	rec := httptest.NewRecorder()

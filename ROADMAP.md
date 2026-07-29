@@ -1,6 +1,6 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3, 5, and 6 are
+Where the project has been and where it's going. Phases 0–3 and 5–7 are
 complete; Phase 4 (more debrid providers) is blocked for now. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
@@ -17,6 +17,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
 | [5 — Hardening & release](#phase-5--hardening--release-) | systemd unit, packaged Linux binaries, release automation | ✅ |
 | [6 — Full QA pass](#phase-6--full-qa-pass-) | Systematic review + live testing of every existing ability; 3 real bugs found and fixed | ✅ |
+| [7 — Managed vs. Manual downloads](#phase-7--managed-vs-manual-downloads-) | Split the web UI into two tabs by how a download was added, plus discovering items added directly through TorBox | ✅ |
 
 ---
 
@@ -351,3 +352,50 @@ against the running WSL instance — the SABnzbd delete and the state-mapping
 fix's exact string were both confirmed against real data, not just reasoned
 about. All existing abilities not touched by a fix were re-verified working
 via the full test suite plus live spot checks; nothing else turned up.
+
+## Phase 7 — Managed vs. Manual downloads ✅
+
+Prompted directly by the user: not every download should be auto-fetched to
+local disk — an *arr-added one needs to be (its import step scans `save_path`
+and finds nothing otherwise), but a download added by hand is usually meant
+to be browsed/grabbed on demand, TorBox's-own-web-UI-style, not silently
+written to disk. Brainstormed with the user before building (naming, whether
+the bucket should be convertible, backfill scope for discovery) rather than
+designing it solo.
+
+- **Two tabs, "Managed" and "Manual"**, replacing the single "Downloads" tab.
+  Which bucket a download lands in is decided once, permanently, by *how* it
+  was added — `database.Download.AddedVia` (`arr` or `manual`), set at
+  insert time. The signal turned out to be free: an *arr app only ever talks
+  to the qBittorrent/SABnzbd compat shims, and only a human (via the web
+  UI's "+ Add" form) ever calls the native API's add endpoints directly —
+  no new toggle needed, no ambiguity.
+- **Manual downloads are never auto-fetched**: `ListDownloadsDueForRetry`
+  (what feeds Completed Download Handling's fetch step) now filters to `arr`
+  only. A Manual download sitting in `provider_completed` just stays there;
+  the user grabs files via the same per-file/zip-link endpoints Managed
+  downloads already use. Retry/Re-add are hidden for a Manual download in
+  `error` state, since there's no local fetch attempt to retry.
+- **Discovery**: an item added directly through TorBox's own website/app —
+  not through AcerviNode at all — now shows up in Manual too, not just
+  things added through AcerviNode's own "+ Add" form. `Importer
+  .discoverManual` runs every tick, diffing the same provider `List()` call
+  `refreshStatuses` already makes against what's locally tracked, and
+  adopts anything unmatched as `manual`.
+- **Backfill scope, explicitly decided with the user rather than assumed**:
+  the very first time discovery runs for a given provider+kind, nothing is
+  adopted — every currently-unmatched item is instead recorded into a new
+  `discovery_baseline` table and permanently ignored, so shipping this
+  doesn't flood the Manual tab with an account's entire pre-existing
+  history. Only items that show up *afterward* are ever adopted — the
+  user's own explicit choice ("only going forward") over the alternative of
+  backfilling everything immediately.
+- New migration (`0004_added_via.sql`): `downloads.added_via` defaults to
+  `arr`, so every pre-existing row is correctly classified with no backfill
+  step of its own, plus the `discovery_baseline`/`discovery_seeded` tables
+  backing the point above.
+- Covered by dedicated tests at every layer: `database` (filter behavior,
+  baseline seed/lookup), `internal/importer` (first-run seeding adopts
+  nothing, a later tick adopts a genuinely new item, no duplicate adoption,
+  a Manual download is never auto-fetched even sitting in
+  `provider_completed`), and `internal/api` (the `?added_via=` query filter).

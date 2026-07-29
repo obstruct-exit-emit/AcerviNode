@@ -38,6 +38,8 @@ type fakeProvider struct {
 	requestedAt   []string // fileIDs RequestDownloadLink was called for, in order
 }
 
+func (f *fakeProvider) Name() string { return "faketorbox" }
+
 func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) {
 	f.listCalls.Add(1)
 	if f.listErr != nil {
@@ -510,11 +512,13 @@ func TestTick_RefreshDoesNotRegressReadyForImport(t *testing.T) {
 	}
 }
 
-// TestTick_SkipsListCallWhenNothingTracked proves refreshStatuses doesn't
-// waste a provider API call when there's nothing local to refresh — relevant
-// since this now runs proactively on every tick, not just when something's
-// actively polling.
-func TestTick_SkipsListCallWhenNothingTracked(t *testing.T) {
+// TestTick_CallsListEvenWhenNothingTracked proves List() still runs with
+// nothing tracked locally — an older version of this test asserted the
+// opposite (skipping List() entirely as a minor optimization), but discovery
+// (see discoverManual) needs every tick's List() call to notice a first-ever
+// manually-added download for a kind nothing's tracked yet, so that
+// optimization was removed.
+func TestTick_CallsListEvenWhenNothingTracked(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
@@ -523,8 +527,196 @@ func TestTick_SkipsListCallWhenNothingTracked(t *testing.T) {
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
-	if provider.listCalls.Load() != 0 {
-		t.Errorf("List() called %d times with nothing tracked, want 0", provider.listCalls.Load())
+	if provider.listCalls.Load() != 2 {
+		t.Errorf("List() called %d times, want 2 (once each for torrent/usenet)", provider.listCalls.Load())
+	}
+}
+
+// TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting proves the very
+// first tick that sees unmatched provider items never adopts them — it only
+// records them as a permanent baseline to ignore (see
+// database.SeedDiscoveryBaseline), which is what stops shipping this feature
+// from flooding the Manual tab with an account's entire pre-existing history.
+// TestDiscoverManual_SeedsEvenWithNothingUntrackedYet proves a provider+kind
+// with zero unmatched items on its first tick still gets marked seeded —
+// not just skipped — so a genuinely new item that shows up later is
+// correctly adopted instead of being wrongly absorbed into "pre-existing"
+// (which is what would happen if seeding were gated on there being
+// something to seed at that first-ever check).
+func TestDiscoverManual_SeedsEvenWithNothingUntrackedYet(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{} // nothing tracked, nothing at the provider either
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	seeded, err := db.IsDiscoveryBaselineSeeded(ctx, "faketorbox", database.KindTorrent)
+	if err != nil {
+		t.Fatalf("IsDiscoveryBaselineSeeded() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("IsDiscoveryBaselineSeeded() = false after a first tick with nothing untracked, want true")
+	}
+
+	// A genuinely new item shows up on a later tick — must be adopted, not
+	// silently ignored as if it were part of the (empty) initial baseline.
+	provider.statuses = []debrid.DownloadStatus{
+		{ID: "genuinely-new", Name: "Genuinely New Torrent", State: debrid.StateDownloading, Progress: 0.1},
+	}
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].ProviderDownloadID != "genuinely-new" {
+		t.Errorf("downloads after second tick = %+v, want the new item adopted", rows)
+	}
+}
+
+func TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
+	}}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("downloads after first tick = %d, want 0 (nothing adopted on the seeding run)", len(rows))
+	}
+
+	seeded, err := db.IsDiscoveryBaselineSeeded(ctx, "faketorbox", database.KindTorrent)
+	if err != nil {
+		t.Fatalf("IsDiscoveryBaselineSeeded() error = %v", err)
+	}
+	if !seeded {
+		t.Error("IsDiscoveryBaselineSeeded() = false, want true after the first tick")
+	}
+
+	baseline, err := db.DiscoveryBaseline(ctx, "faketorbox", database.KindTorrent)
+	if err != nil {
+		t.Fatalf("DiscoveryBaseline() error = %v", err)
+	}
+	if !baseline["already-in-torbox-1"] {
+		t.Error("DiscoveryBaseline() doesn't contain the pre-existing item, want it recorded")
+	}
+}
+
+// TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded proves an item
+// present on a later tick, but absent from the baseline recorded on the
+// first tick, gets adopted as a manual download — the actual "show up in
+// Manual" behavior, contrasted with the pre-existing item from
+// TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting, which never is.
+func TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
+	}}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	// A new item shows up alongside the pre-existing (baselined) one.
+	provider.statuses = append(provider.statuses, debrid.DownloadStatus{
+		ID: "newly-added-2", Name: "New Manual Torrent", Hash: "NEWHASH", State: debrid.StateDownloading, Progress: 0.25, SizeBytes: 456,
+	})
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("downloads after second tick = %d, want 1 (only the new item adopted)", len(rows))
+	}
+	got := rows[0]
+	if got.ProviderDownloadID != "newly-added-2" {
+		t.Errorf("adopted ProviderDownloadID = %q, want newly-added-2", got.ProviderDownloadID)
+	}
+	if got.AddedVia != database.AddedViaManual {
+		t.Errorf("adopted AddedVia = %q, want manual", got.AddedVia)
+	}
+	if got.Hash != "newhash" {
+		t.Errorf("adopted Hash = %q, want lowercased newhash", got.Hash)
+	}
+	if got.Name != "New Manual Torrent" || got.SizeBytes != 456 || got.Progress != 0.25 {
+		t.Errorf("adopted row = %+v, want it to reflect the provider's status", got)
+	}
+	if got.State != database.StateDownloading {
+		t.Errorf("adopted State = %q, want downloading", got.State)
+	}
+
+	// A third tick with nothing new shouldn't duplicate the now-tracked item.
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 3 error = %v", err)
+	}
+	rows, err = db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("downloads after third tick = %d, want still 1 (no duplicate adoption)", len(rows))
+	}
+}
+
+// TestTick_NeverAutoFetchesManualDownloads proves an AddedViaManual download
+// sitting in provider_completed is never picked up by Completed Download
+// Handling's fetch step, regardless of how long it's been there — Manual
+// downloads are meant to behave like TorBox's own web UI (grab files on
+// demand), not get silently written to local disk the way an *arr-added
+// download does. RequestDownloadLink being called at all would mean a fetch
+// was attempted.
+func TestTick_NeverAutoFetchesManualDownloads(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "movie.mkv", SizeBytes: 1024}},
+	}
+
+	d := &database.Download{
+		ID: "dl-manual-1", Provider: "fake", ProviderDownloadID: "provider-manual-1", Kind: database.KindTorrent,
+		Hash: "manualhash", Name: "Manually Added Movie", SavePath: t.TempDir(),
+		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if n := provider.requestedCount(); n != 0 {
+		t.Errorf("RequestDownloadLink called %d times, want 0 (manual downloads are never auto-fetched)", n)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateProviderCompleted {
+		t.Errorf("state = %q, want it to stay provider_completed (never auto-fetched)", got.State)
 	}
 }
 

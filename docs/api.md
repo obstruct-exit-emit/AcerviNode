@@ -23,12 +23,12 @@ server logs or `config.yaml`.
 | `GET` | `/api/v1/health` | Unauthenticated liveness check |
 | `GET` | `/api/v1/version` | Build version string |
 | `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`) |
-| `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first |
+| `GET` | `/api/v1/downloads` | Every download, torrent or usenet, most recently added first. Optional `?added_via=arr\|manual` scopes to just the web UI's Managed or Manual tab (see [Providers](providers.md#managed-vs-manual)); omitted or unrecognized returns everything |
 | `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category`. Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
 | `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
 | `GET` | `/api/v1/downloads/{id}/files/{fileId}/link` | Resolves a direct, provider-hosted download URL for one file — `fileId` is a file's `provider_file_id` from the download's `files` array. Fresh on every call, not cached; the URL is the provider's own CDN link, good for a browser to download straight from (no `Authorization` header needed for that second request — it's not one of ours). `503` if the relevant provider isn't configured; `502` for any other provider-side failure |
-| `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Manual downloads](#manual-downloads)). Same error shape as the per-file endpoint above |
+| `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Direct file downloads](#direct-file-downloads)). Same error shape as the per-file endpoint above |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `POST` | `/api/v1/downloads/{id}/retry` | Manually retries a download that gave up after exhausting `import_max_retries` — resets `state` back to `provider_completed` and clears `retry_count`/`error_message`, so `internal/importer`'s very next tick attempts the fetch again from scratch. `409` if the download isn't currently in `error` state |
 | `POST` | `/api/v1/downloads/{id}/readd` | Stronger sibling of `retry`, for when the *original* provider-side download is gone (e.g. expired from the provider's own list) rather than a transient fetch failure. Resubmits the download's stored original magnet/NZB URL to the provider as a brand new add, then points the local row at the new `provider_download_id` (best-effort delete of the old one first). `400` if no source was stored (added via file upload — nothing to resubmit); `409` if not in `error` state, or if the fresh add happens to dedupe back to a different already-tracked download |
@@ -58,7 +58,8 @@ server logs or `config.yaml`.
   "progress": 1,
   "added_at": "2026-07-27T05:15:00Z",
   "updated_at": "2026-07-27T05:16:17Z",
-  "completed_at": "2026-07-27T05:16:17Z"
+  "completed_at": "2026-07-27T05:16:17Z",
+  "added_via": "arr"
 }
 ```
 
@@ -78,12 +79,16 @@ provider ID.
 `retry_count` and `next_retry_at` are omitted entirely (not just zero/null) until
 a download has failed at least once — see
 [Providers](providers.md#completed-download-handling) for what sets them.
+`added_via` (`arr` or `manual`) is permanent from the moment a download is
+added — see [Providers](providers.md#managed-vs-manual) for what it means and
+how a `manual` download can also show up without ever being added through
+AcerviNode at all.
 `GET /api/v1/downloads/{id}` additionally embeds a `files` array
 (`[{"path": "...", "size_bytes": ..., "provider_file_id": "..."}]`), which the
 list endpoint omits since it would mean an extra provider query per row for
 something the table view doesn't show. `provider_file_id` is what
 `.../files/{fileId}/link` needs to resolve a direct download URL for that
-specific file — see [Manual downloads](#manual-downloads) below. This is a
+specific file — see [Direct file downloads](#direct-file-downloads) below. This is a
 live query against the provider on every call, not a local cache — a queued
 or still-processing download simply has an empty `files` array, not an error.
 
@@ -91,7 +96,9 @@ or still-processing download simply has an empty `files` array, not an error.
 
 `POST /api/v1/downloads/torrent` and `POST /api/v1/downloads/usenet` let you add
 a download without going through Sonarr/Radarr or faking being one against a
-compat shim — this is what the web UI's "+ Add" button uses. Errors:
+compat shim — this is what the web UI's "+ Add" button uses. Always lands as
+`added_via: "manual"` (shown in the Manual tab, never auto-fetched to local
+disk) — see [Providers](providers.md#managed-vs-manual). Errors:
 `400` if neither a link (`magnet`/`url`) nor a `file` is given, `503` if the
 relevant provider isn't configured yet, `502` for any other provider-side
 failure (e.g. an invalid magnet or a real upstream error).
@@ -110,7 +117,7 @@ provider-status-not-indexed-yet fallback (using the magnet/URL/filename
 instead) as both compat shims already do on their own adds; see
 [qBittorrent API](qbittorrent-api.md) and [SABnzbd API](sabnzbd-api.md).
 
-## Manual downloads
+## Direct file downloads
 
 `GET /api/v1/downloads/{id}/files/{fileId}/link` resolves a direct,
 provider-hosted URL for one file — for downloading straight through a

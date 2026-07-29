@@ -171,13 +171,62 @@ usable: `GET /api/v1/downloads/{id}/files/{fileId}/link` resolves a direct,
 provider-hosted URL for one file — the exact same `RequestDownloadLink` call
 `fetchFile` above makes, just handed straight back to the caller instead of
 being streamed to disk. Always a live provider call, never cached — see
-[API](api.md#manual-downloads). This also meant `GET /api/v1/downloads/{id}`
+[API](api.md#direct-file-downloads). This also meant `GET /api/v1/downloads/{id}`
 needed a real file list to attach a link to, which surfaced a genuine
 pre-existing bug: the local `download_files` table it read from was defined
 but nothing ever populated it, so `files` was always `[]` in practice, even
 for a fully completed download. Fixed by having it query the provider live
 too, the same way `internal/qbittorrent`'s own file listing already did —
 see CHANGELOG.
+
+### Managed vs. Manual
+
+Not every download should be auto-fetched to local disk. An *arr app strictly
+needs that — its own import step scans `save_path` and finds nothing if the
+files aren't actually there — but a download added directly (through the web
+UI's own "+ Add" form, or sitting in the provider's account entirely outside
+AcerviNode) has no such requirement; the point of adding it that way is
+usually to browse/grab files on demand, the way TorBox's own web UI works,
+not to have it silently land on disk.
+
+`database.Download.AddedVia` is the permanent, immutable record of which of
+the two a given download is — set once at insert time, from *how* it was
+added, never changed afterward:
+
+- **`arr`**: added through the qBittorrent or SABnzbd compat shim — i.e. by
+  an *arr app. Auto-fetched by Completed Download Handling like always. Shown
+  in the web UI's **Managed** tab.
+- **`manual`**: added directly via the native API's add endpoints (the web
+  UI's own "+ Add" form — an *arr app has no way to reach that endpoint, it
+  only knows the compat shims), or *discovered* — see below. Never
+  auto-fetched; `ListDownloadsDueForRetry` filters to `arr` only, so a manual
+  download sitting in `provider_completed` just stays there, and the user
+  grabs files on demand via the same per-file/zip-link endpoints Managed
+  downloads use. Shown in the web UI's **Manual** tab. Retry/Re-add aren't
+  offered for a manual download in `error` state either — there's no local
+  fetch attempt to retry, the row is just reflecting the provider's own live
+  state (see [State mapping](#state-mapping) above for how it gets there).
+
+**Discovery** is what makes an item added directly through TorBox's own
+site/app — not through AcerviNode at all — show up in Manual too, not just
+items added through AcerviNode's own "+ Add" form. Every tick,
+`Importer.discoverManual` diffs the same provider `List()` call
+`refreshStatuses` already makes against what's locally tracked (by
+`provider_download_id`); anything present at the provider with no local row
+at all gets adopted as a fresh `manual` download.
+
+The one wrinkle: the very first time this runs for a given provider+kind,
+nothing is adopted. Every currently-unmatched item is instead recorded into
+`discovery_baseline` (with `discovery_seeded` as the per-provider-per-kind
+marker that seeding has already happened) and permanently ignored — this is
+what stops the feature from flooding the Manual tab with an account's entire
+pre-existing history the moment it ships. Only items that show up
+*afterward* — added to TorBox at any time from then on, whether through
+AcerviNode or directly — are ever adopted. A discovered download has no
+`Source` (there's no original magnet/NZB URL to know), so Re-add is never
+available for one even in the (currently impossible, since manual downloads
+never reach `error` via a local fetch attempt) hypothetical case Retry/Re-add
+were shown for it.
 
 ## TorBox (`internal/debrid/torbox`)
 
@@ -263,7 +312,7 @@ SDK or public docs; found by testing directly against a real account, then
 confirmed the returned URL actually serves a real `.zip`
 (`Content-Type: application/zip`, correct total size) via `curl -I`. Backs
 `RequestZipDownloadLink` and `GET /api/v1/downloads/{id}/zip-link` — see
-[API](api.md#manual-downloads). The torrent side is directly verified live;
+[API](api.md#direct-file-downloads). The torrent side is directly verified live;
 the usenet side (`RequestUsenetZipDownloadLink`) mirrors the same shape but
 wasn't independently confirmed — by the time it was written, every usenet
 download on the test account had expired from `mylist` (0 items), leaving

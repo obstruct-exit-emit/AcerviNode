@@ -117,6 +117,10 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		// Source is the NZB URL itself for a URL-based add, empty for a
 		// .nzb file upload — see database.Download.Source and ReAddDownload.
 		Source: source,
+		// AddedViaArr, not AddedViaManual: this shim only exists for *arr
+		// apps, which need the files to land on local disk for their own
+		// import step — see database.AddedVia.
+		AddedVia: database.AddedViaArr,
 	}
 	if err := s.db.InsertDownload(ctx, d); err != nil {
 		return "", err

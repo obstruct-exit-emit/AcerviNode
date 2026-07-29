@@ -18,17 +18,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 // provider is the subset of debrid.TorrentProvider and debrid.UsenetProvider
 // the importer needs: List to proactively refresh status (see
-// refreshStatuses), Files/RequestDownloadLink to actually fetch a completed
-// download's bytes. Both interfaces already share this exact method shape
+// refreshStatuses) and discover manually-added downloads (see
+// discoverManual), Files/RequestDownloadLink to actually fetch a completed
+// download's bytes, Name to record/key discovered downloads and the
+// discovery baseline. Both interfaces already share this exact method shape
 // (see internal/debrid), so either provider type satisfies it without any
 // adapter code.
 type provider interface {
+	Name() string
 	List(ctx context.Context) ([]debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
@@ -305,9 +310,9 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
 		return
 	}
-	if len(rows) == 0 {
-		return
-	}
+	// Unlike the old version of this check, rows being empty doesn't skip
+	// the List() call below — discoverManual still needs it to catch a
+	// first-ever manually-added download for a kind nothing's tracked yet.
 	statuses, err := p.List(ctx)
 	if err != nil {
 		// Not yet configured is routine (e.g. no TorBox key set yet) and
@@ -319,6 +324,95 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		return
 	}
 	im.db.RefreshFromProvider(ctx, rows, statuses)
+	im.discoverManual(ctx, kind, p.Name(), rows, statuses)
+}
+
+// discoverManual finds provider items AcerviNode has no local row for at all
+// (as opposed to RefreshFromProvider, which only updates rows it already
+// knows about) and adopts them as AddedViaManual downloads — this is what
+// makes an item added directly through the provider's own website/app show
+// up in the web UI's Manual tab, not just items added through AcerviNode's
+// own "+ Add" form. The very first time this runs for a given provider+kind,
+// nothing is adopted: every currently-unmatched item is instead recorded as
+// a permanent baseline to ignore (see database.SeedDiscoveryBaseline), so
+// shipping this feature doesn't flood the Manual tab with an account's
+// entire pre-existing history — only items that show up afterward ever are.
+func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, providerName string, tracked []*database.Download, statuses []debrid.DownloadStatus) {
+	trackedIDs := make(map[string]bool, len(tracked))
+	for _, d := range tracked {
+		trackedIDs[d.ProviderDownloadID] = true
+	}
+
+	var untracked []debrid.DownloadStatus
+	for _, st := range statuses {
+		if !trackedIDs[string(st.ID)] {
+			untracked = append(untracked, st)
+		}
+	}
+
+	// The seeded check happens before the "nothing unmatched" early return
+	// deliberately: seeding must record that this provider+kind has been
+	// observed at all, even if there happened to be zero unmatched items at
+	// that exact moment — an empty baseline is a perfectly valid "nothing
+	// pre-existing to ignore" result. Checking after the early return would
+	// mean a kind with nothing untracked the first few ticks never gets
+	// seeded at all, and the actual first-ever new item to show up later
+	// would be wrongly absorbed into "pre-existing" instead of adopted.
+	seeded, err := im.db.IsDiscoveryBaselineSeeded(ctx, providerName, kind)
+	if err != nil {
+		slog.Error("importer: check discovery baseline seeded failed", "kind", kind, "error", err)
+		return
+	}
+	if !seeded {
+		ids := make([]string, len(untracked))
+		for i, st := range untracked {
+			ids[i] = string(st.ID)
+		}
+		if err := im.db.SeedDiscoveryBaseline(ctx, providerName, kind, ids); err != nil {
+			slog.Error("importer: seed discovery baseline failed", "kind", kind, "error", err)
+			return
+		}
+		slog.Info("importer: seeded discovery baseline, nothing adopted this run",
+			"kind", kind, "provider", providerName, "count", len(ids))
+		return
+	}
+
+	if len(untracked) == 0 {
+		return
+	}
+
+	baseline, err := im.db.DiscoveryBaseline(ctx, providerName, kind)
+	if err != nil {
+		slog.Error("importer: get discovery baseline failed", "kind", kind, "error", err)
+		return
+	}
+
+	for _, st := range untracked {
+		if baseline[string(st.ID)] {
+			continue
+		}
+		d := &database.Download{
+			ID:                 uuid.NewString(),
+			Provider:           providerName,
+			ProviderDownloadID: string(st.ID),
+			Kind:               kind,
+			Hash:               strings.ToLower(st.Hash),
+			Name:               st.Name,
+			SizeBytes:          st.SizeBytes,
+			State:              database.LocalStateFromProvider(st.State),
+			Progress:           st.Progress,
+			AddedVia:           database.AddedViaManual,
+		}
+		if d.Name == "" {
+			d.Name = d.Hash
+		}
+		if err := im.db.InsertDownload(ctx, d); err != nil {
+			slog.Error("importer: adopt discovered download failed", "provider_id", st.ID, "kind", kind, "error", err)
+			continue
+		}
+		slog.Info("importer: discovered and adopted download from provider",
+			"kind", kind, "provider_id", st.ID, "name", d.Name)
+	}
 }
 
 // handleFailure records a failed attempt: either schedules the next retry

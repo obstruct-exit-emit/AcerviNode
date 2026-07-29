@@ -27,15 +27,18 @@ import './App.css'
 
 const POLL_INTERVAL_MS = 4000
 
-type View = 'downloads' | 'settings'
+type View = 'managed' | 'manual' | 'settings'
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey())
   const [gateError, setGateError] = useState<string | undefined>(undefined)
-  const [view, setView] = useState<View>('downloads')
+  const [view, setView] = useState<View>('managed')
   const [version, setVersion] = useState<string>('')
   const [providers, setProviders] = useState<ProviderStatus[]>([])
-  const [downloads, setDownloads] = useState<Download[]>([])
+  // Both tabs' downloads are kept loaded regardless of which is active, so
+  // switching tabs is instant and doesn't need its own loading state.
+  const [managedDownloads, setManagedDownloads] = useState<Download[]>([])
+  const [manualDownloads, setManualDownloads] = useState<Download[]>([])
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -50,10 +53,16 @@ export default function App() {
   const refresh = useCallback(
     async (key: string) => {
       try {
-        const [v, p, d] = await Promise.all([getVersion(key), getProviders(key), listDownloads(key)])
+        const [v, p, managed, manual] = await Promise.all([
+          getVersion(key),
+          getProviders(key),
+          listDownloads(key, 'arr'),
+          listDownloads(key, 'manual'),
+        ])
         setVersion(v.version)
         setProviders(p)
-        setDownloads(d)
+        setManagedDownloads(managed)
+        setManualDownloads(manual)
         setLoadError(undefined)
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -215,8 +224,11 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={view === 'downloads' ? 'tab tab-active' : 'tab'} onClick={() => setView('downloads')}>
-          Downloads
+        <button className={view === 'managed' ? 'tab tab-active' : 'tab'} onClick={() => setView('managed')}>
+          Managed
+        </button>
+        <button className={view === 'manual' ? 'tab tab-active' : 'tab'} onClick={() => setView('manual')}>
+          Manual
         </button>
         <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
           Settings
@@ -228,18 +240,31 @@ export default function App() {
 
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
-        {view === 'downloads' ? (
+        {view === 'managed' && (
           <DownloadsTable
-            downloads={downloads}
+            downloads={managedDownloads}
             onDelete={handleDelete}
             onRetry={handleRetry}
             onDownloadAll={handleDownloadAll}
             downloadingAllId={downloadingAllId}
             onSelect={(d) => setSelectedId(d.id)}
+            allowRetry
+            emptyMessage="No managed downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly."
           />
-        ) : (
-          <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />
         )}
+        {view === 'manual' && (
+          <DownloadsTable
+            downloads={manualDownloads}
+            onDelete={handleDelete}
+            onRetry={handleRetry}
+            onDownloadAll={handleDownloadAll}
+            downloadingAllId={downloadingAllId}
+            onSelect={(d) => setSelectedId(d.id)}
+            allowRetry={false}
+            emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
+          />
+        )}
+        {view === 'settings' && <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />}
       </main>
 
       {selectedId && <DownloadDetail apiKey={apiKey} id={selectedId} onClose={() => setSelectedId(null)} />}
@@ -250,7 +275,7 @@ export default function App() {
           onClose={() => setAddOpen(false)}
           onAdded={() => {
             setAddOpen(false)
-            setView('downloads')
+            setView('manual')
             refresh(apiKey)
           }}
         />

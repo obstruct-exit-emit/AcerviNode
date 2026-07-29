@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Managed vs. Manual downloads**: the web UI's single "Downloads" tab is
+  now two — **Managed** (added through the qBittorrent/SABnzbd compat shims,
+  i.e. by Sonarr/Radarr — auto-fetched to local disk exactly as before) and
+  **Manual** (added directly via the web UI's own "+ Add" form, or
+  discovered — see below — never auto-fetched; the user grabs files on
+  demand via the existing per-file/zip-link endpoints, the same way TorBox's
+  own web UI works). Which bucket a download lands in is permanent, decided
+  once at add time by *which door it came through* (`database.Download
+  .AddedVia`, `arr` or `manual`) — an *arr app has no way to reach the
+  native API's add endpoints, and nothing but a human uses the web UI's "+
+  Add" form, so the signal is unambiguous and needed no new toggle.
+  `GET /api/v1/downloads` gained `?added_via=arr|manual` to back the two
+  tabs; `ListDownloadsDueForRetry` (the query that feeds Completed Download
+  Handling's fetch step) now filters to `arr` only, so a Manual download
+  sitting in `provider_completed` just stays there instead of getting
+  silently written to disk. Retry/Re-add are hidden for a Manual download in
+  `error` state, since there's no local fetch attempt to retry — the row is
+  just reflecting the provider's own live state.
+  - **Discovery**: a download added directly through TorBox's own
+    website/app — not through AcerviNode at all — now shows up in Manual
+    too. Every tick, `Importer.discoverManual` diffs the same `List()` call
+    `refreshStatuses` already makes against what's locally tracked; anything
+    present at the provider with no local row gets adopted as `manual`. The
+    very first time this runs for a given provider+kind, nothing is
+    adopted — every currently-unmatched item is instead recorded into a new
+    `discovery_baseline` table and permanently ignored, so shipping this
+    doesn't flood the Manual tab with an account's entire pre-existing
+    history; only items that show up *afterward* ever are.
+  - New migration (`0004_added_via.sql`): `downloads.added_via` (default
+    `arr`, so every existing row is correctly classified without a backfill
+    step) plus the `discovery_baseline`/`discovery_seeded` tables.
+
 ### Fixed
 
 A full QA pass over every existing ability and setting, prompted by a direct

@@ -41,6 +41,12 @@ type downloadResponse struct {
 	// hits the configured max, at which point it moves to error instead).
 	RetryCount  int     `json:"retry_count,omitempty"`
 	NextRetryAt *string `json:"next_retry_at,omitempty"`
+	// AddedVia is "arr" (added through the qBittorrent/SABnzbd compat shim,
+	// auto-fetched to local disk) or "manual" (added directly, or adopted
+	// from the provider's own account — see internal/importer's discovery
+	// step — never auto-fetched). What the web UI's Managed/Manual tabs
+	// filter GET /api/v1/downloads?added_via=... on.
+	AddedVia string `json:"added_via"`
 }
 
 type downloadFileResponse struct {
@@ -81,20 +87,35 @@ func toDownloadResponse(d *database.Download) downloadResponse {
 		ErrorMessage: d.ErrorMessage,
 		RetryCount:   d.RetryCount,
 		NextRetryAt:  nextRetryAt,
+		AddedVia:     string(d.AddedVia),
 	}
 }
 
 // handleListDownloads implements GET /api/v1/downloads — every download,
-// either kind, most recently added first.
+// either kind, most recently added first. An optional ?added_via=arr|manual
+// filters to just the web UI's Managed or Manual tab; omitted or any other
+// value returns everything, unfiltered.
 func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.ListAllDownloads(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	out := make([]downloadResponse, len(rows))
-	for i, d := range rows {
-		out[i] = toDownloadResponse(d)
+
+	var addedVia database.AddedVia
+	switch r.URL.Query().Get("added_via") {
+	case string(database.AddedViaArr):
+		addedVia = database.AddedViaArr
+	case string(database.AddedViaManual):
+		addedVia = database.AddedViaManual
+	}
+
+	out := make([]downloadResponse, 0, len(rows))
+	for _, d := range rows {
+		if addedVia != "" && d.AddedVia != addedVia {
+			continue
+		}
+		out = append(out, toDownloadResponse(d))
 	}
 	writeJSON(w, out)
 }

@@ -24,15 +24,22 @@ interface Props {
   onDownloadAll: (d: Download) => void
   downloadingAllId: string | null
   onSelect: (d: Download) => void
+  // Retry only makes sense for a Managed (added_via=arr) download that
+  // internal/importer's own fetch pipeline can act on — a Manual download is
+  // never auto-fetched at all, so there's nothing for Retry to do; the row
+  // just reflects the provider's own live state instead. See
+  // docs/providers.md#managed-vs-manual.
+  allowRetry: boolean
+  emptyMessage: string
 }
 
 // States a download's files are actually resolvable in — matches what
 // filesForDownload (backend) can query live from the provider.
 const HAS_FILES_STATES = new Set(['provider_completed', 'ready_for_import'])
 
-export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect }: Props) {
+export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, downloadingAllId, onSelect, allowRetry, emptyMessage }: Props) {
   if (downloads.length === 0) {
-    return <p className="empty">No downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly.</p>
+    return <p className="empty">{emptyMessage}</p>
   }
 
   return (
@@ -70,7 +77,7 @@ export function DownloadsTable({ downloads, onDelete, onRetry, onDownloadAll, do
             <td>{formatBytes(d.size_bytes)}</td>
             <td title={d.added_at}>{formatRelativeTime(d.added_at)}</td>
             <td className="actions-cell">
-              {d.state === 'error' && (
+              {allowRetry && d.state === 'error' && (
                 <button
                   className="retry-btn-sm"
                   onClick={(e) => {

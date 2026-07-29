@@ -24,6 +24,12 @@ export interface Download {
   error_message?: string
   retry_count?: number
   next_retry_at?: string
+  // added_via is permanent from the moment a download is added — "arr" (via
+  // the qBittorrent/SABnzbd compat shim, auto-fetched to local disk) or
+  // "manual" (added directly, or discovered already sitting in the
+  // provider's own account — never auto-fetched). What the Managed/Manual
+  // tabs filter on.
+  added_via: 'arr' | 'manual'
 }
 
 export interface DownloadFile {
@@ -79,8 +85,11 @@ export function getProviders(apiKey: string): Promise<ProviderStatus[]> {
   return request('/api/v1/providers', apiKey)
 }
 
-export function listDownloads(apiKey: string): Promise<Download[]> {
-  return request('/api/v1/downloads', apiKey)
+// listDownloads optionally filters to just the Managed ("arr") or Manual
+// tab's downloads — omit addedVia for everything, unfiltered.
+export function listDownloads(apiKey: string, addedVia?: 'arr' | 'manual'): Promise<Download[]> {
+  const query = addedVia ? `?added_via=${addedVia}` : ''
+  return request(`/api/v1/downloads${query}`, apiKey)
 }
 
 export function getDownload(apiKey: string, id: string): Promise<DownloadDetail> {

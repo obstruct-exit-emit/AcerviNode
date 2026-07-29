@@ -31,6 +31,29 @@ const (
 	StateError             = "error"
 )
 
+// AddedVia distinguishes how a download entered AcerviNode — which door it
+// came through is a permanent, immutable fact set once at insert time, never
+// changed afterward (see docs/providers.md#managed-vs-manual). It's what the
+// web UI's Managed/Manual tabs filter on, and what internal/importer's
+// Completed Download Handling uses to decide whether a download should ever
+// be auto-fetched to local disk at all.
+type AddedVia string
+
+const (
+	// AddedViaArr is a download added through the qBittorrent or SABnzbd
+	// compat shim — i.e. by an *arr app, which requires the files to
+	// actually land on local disk for its own import step to find them.
+	// Auto-fetched by internal/importer; shown in the web UI's Managed tab.
+	AddedViaArr AddedVia = "arr"
+	// AddedViaManual is a download added directly — either through the web
+	// UI's own "+ Add" form (the native API's add endpoints), or discovered
+	// already sitting in the provider's own account and adopted (see
+	// internal/importer's discovery step) — never auto-fetched to local
+	// disk; the user grabs files on demand, the same way TorBox's own web
+	// UI works. Shown in the web UI's Manual tab.
+	AddedViaManual AddedVia = "manual"
+)
+
 // Download is a single row in the downloads table: one item added through
 // either the qBittorrent shim (Kind = KindTorrent) or the SABnzbd shim
 // (Kind = KindUsenet).
@@ -65,6 +88,9 @@ type Download struct {
 	// list, not just a transient fetch failure — see internal/api's
 	// handleReAddDownload).
 	Source string
+	// AddedVia is permanent from the moment this row is inserted — see the
+	// AddedVia type.
+	AddedVia AddedVia
 }
 
 // DownloadFile is a single file within a Download.
@@ -78,7 +104,10 @@ type DownloadFile struct {
 	DownloadURLExpiresAt *time.Time
 }
 
-// InsertDownload adds a new download row. AddedAt/UpdatedAt are set to now if zero.
+// InsertDownload adds a new download row. AddedAt/UpdatedAt are set to now if
+// zero; AddedVia defaults to AddedViaArr if unset (the zero value), matching
+// the migration's own column default — every insert site is expected to set
+// it explicitly, but this keeps behavior sane for any caller that forgets.
 func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 	now := time.Now().UTC()
 	if d.AddedAt.IsZero() {
@@ -87,16 +116,19 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 	if d.UpdatedAt.IsZero() {
 		d.UpdatedAt = now
 	}
+	if d.AddedVia == "" {
+		d.AddedVia = AddedViaArr
+	}
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO downloads (
 			id, provider, provider_download_id, kind, hash, name, category,
 			save_path, size_bytes, state, progress, added_at, updated_at,
-			completed_at, error_message, source
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			completed_at, error_message, source, added_via
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Provider, d.ProviderDownloadID, string(d.Kind), nullable(d.Hash), d.Name,
 		nullable(d.Category), nullable(d.SavePath), d.SizeBytes, d.State, d.Progress,
-		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage), nullable(d.Source),
+		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage), nullable(d.Source), string(d.AddedVia),
 	)
 	if err != nil {
 		return fmt.Errorf("insert download %s: %w", d.ID, err)
@@ -167,16 +199,19 @@ func (db *DB) ListAllDownloads(ctx context.Context) ([]*Download, error) {
 	return out, rows.Err()
 }
 
-// ListDownloadsDueForRetry returns every download (either kind) currently in
+// ListDownloadsDueForRetry returns every AddedViaArr download currently in
 // the given state whose next_retry_at has passed (or was never set) — used
-// by internal/importer so a download in backoff isn't retried before its
-// scheduled time.
+// by internal/importer's Completed Download Handling to find downloads ready
+// to fetch to local disk, so a download in backoff isn't retried before its
+// scheduled time. Filtered to AddedViaArr only: a manual/discovered download
+// is never auto-fetched at all (see docs/providers.md#managed-vs-manual), so
+// it should never be a candidate here regardless of its state.
 func (db *DB) ListDownloadsDueForRetry(ctx context.Context, state string, now time.Time) ([]*Download, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT `+downloadColumns+`
 		FROM downloads
-		WHERE state = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)
-		ORDER BY added_at`, state, now)
+		WHERE state = ? AND added_via = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)
+		ORDER BY added_at`, state, string(AddedViaArr), now)
 	if err != nil {
 		return nil, fmt.Errorf("list downloads due for retry: %w", err)
 	}
@@ -451,7 +486,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
 	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
-	retry_count, next_retry_at, source`
+	retry_count, next_retry_at, source, added_via`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, args...)
@@ -470,12 +505,12 @@ type rowScanner interface {
 func scanDownload(row rowScanner) (*Download, error) {
 	d := &Download{}
 	var hash, category, savePath, errorMessage, source sql.NullString
-	var kind string
+	var kind, addedVia string
 	if err := row.Scan(
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
-		&d.RetryCount, &d.NextRetryAt, &source,
+		&d.RetryCount, &d.NextRetryAt, &source, &addedVia,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}
@@ -485,6 +520,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 	d.SavePath = savePath.String
 	d.ErrorMessage = errorMessage.String
 	d.Source = source.String
+	d.AddedVia = AddedVia(addedVia)
 	return d, nil
 }
 
