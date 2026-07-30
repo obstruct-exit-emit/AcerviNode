@@ -403,7 +403,16 @@ export default function App() {
         {view === 'settings' && <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />}
       </main>
 
-      {selectedId && <DownloadDetail apiKey={apiKey} id={selectedId} onClose={() => setSelectedId(null)} />}
+      {selectedId && (
+        <DownloadDetail
+          apiKey={apiKey}
+          id={selectedId}
+          onClose={() => setSelectedId(null)}
+          onDownloadAll={handleDownloadAll}
+          busy={busyIds.has(selectedId)}
+          progress={downloadProgress[selectedId]}
+        />
+      )}
       {downloadDialogFor && (
         <DownloadOptionsDialog
           download={downloadDialogFor}

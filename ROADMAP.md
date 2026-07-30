@@ -575,19 +575,45 @@ special-case code, reusing `RefreshFromProvider`'s existing
 `error` for some other reason is left alone by this path entirely, so it
 never clobbers a more specific existing reason.
 
-No frontend changes were needed at all — `GET /api/v1/downloads[/{id}]`
-already surfaces `state`/`error_message` unconditionally, the existing error
-badge already renders any `error_message` string, and Retry/Re-add were
-already correctly gated to `added_via === 'arr'` only, so a vanished Manual
-download in `error` state shows the right message with no misleading action
-buttons, automatically. Full test coverage in
-`internal/database/downloads_test.go`: a Managed row is never flagged however
-long it's missing, a single miss doesn't flag a Manual row, the exact
+No frontend changes were needed at first — `GET /api/v1/downloads[/{id}]`
+already surfaced `state`/`error_message` unconditionally, and the existing
+error badge already rendered any `error_message` string. Full test coverage
+in `internal/database/downloads_test.go`: a Managed row is never flagged
+however long it's missing, a single miss doesn't flag a Manual row, the exact
 threshold-th miss does (with the persisted row checked directly, not just the
 in-memory struct), a Manual row that reappears before the threshold resets
 its counter and updates normally, a flagged row self-heals once the provider
 reports it again, and an already-`error` Manual row isn't double-flagged or
 overwritten. See [Providers](docs/providers.md#proactively-detecting-a-vanished-manual-download).
+
+Verified live in the truest sense — not staged: shortly after shipping, this
+account's own real, ordinary usage produced a genuinely vanished torrent
+(`Silo.S03E04...`), and AcerviNode's background polling flagged it `error`
+with the new message on its own, unprompted.
+
+**Immediate follow-on, the same day**: the feature above created a real gap
+of its own — a Manual download now genuinely reaches `error` state, but
+Retry/Re-add were still gated to `added_via === 'arr'` only, so there was no
+recovery action to show at all. `POST .../readd` already worked for any
+kind/added_via server-side (it only ever checked `state` and a stored
+`Source`, never `added_via` — the restriction was purely a frontend
+condition), so this was a UI fix: a new `has_source` field
+(`GET /api/v1/downloads[/{id}]`) reports whether a download actually has a
+link stored to resubmit (false for an uploaded file, or a discovered
+download with no original link ever known), and the web UI now shows Re-add
+for any download in `error` state with `has_source: true`, not just Managed
+ones — Retry itself stays Managed-only, since there's still genuinely no
+local fetch to retry for Manual. Confirmed live against real data on this
+same account: the pre-existing "Dragon Ball Z" row has a real stored source
+link (`has_source: true`), while a discovered test row correctly showed
+`has_source: false`.
+
+Same follow-on also added a streamed "Download all" button to the detail
+view's Files section, next to the existing "Download all (zip)" — reusing
+the exact same `handleDownloadAll` entry point the downloads table's per-row
+button already used (same mode preference/folder-picker/Downloads-popup
+behavior), rather than duplicating it. This one hasn't been confirmed by an
+actual browser click-through yet — see [CHANGELOG](CHANGELOG.md).
 
 💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
 restart**: requested by the user after the Downloads popup work above. Once a

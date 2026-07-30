@@ -25,6 +25,12 @@ export interface Download {
   error_message?: string
   retry_count?: number
   next_retry_at?: string
+  // has_source reports whether reAddDownload could actually resubmit this
+  // download — false for one added via an uploaded file, or discovered
+  // (adopted from the provider's own account with no original link ever
+  // known). Not scoped to a particular added_via; Re-add works for any kind
+  // as long as a source link is stored.
+  has_source: boolean
   // added_via is permanent from the moment a download is added — "arr" (via
   // the qBittorrent/SABnzbd compat shim, auto-fetched to local disk) or
   // "manual" (added directly, or discovered already sitting in the

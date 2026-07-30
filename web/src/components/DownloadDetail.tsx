@@ -6,6 +6,7 @@ import {
   getZipLink,
   reAddDownload,
   retryDownload,
+  type Download,
   type DownloadDetail as DownloadDetailData,
 } from '../api'
 import { formatBytes, formatRelativeTime } from '../format'
@@ -17,9 +18,16 @@ interface Props {
   apiKey: string
   id: string
   onClose: () => void
+  // Same streamed-to-folder "Download all" entry point the downloads
+  // table's per-row button uses (handleDownloadAll in App.tsx) — reused here
+  // rather than duplicated, so this button gets the exact same mode
+  // preference/dialog/Downloads-popup behavior.
+  onDownloadAll: (d: Download) => void
+  busy: boolean
+  progress?: { loaded: number; total: number }
 }
 
-export function DownloadDetail({ apiKey, id, onClose }: Props) {
+export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progress }: Props) {
   const [detail, setDetail] = useState<DownloadDetailData | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
   const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
@@ -192,18 +200,25 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
 
             {detail.error_message && <p className="detail-error-message">{detail.error_message}</p>}
 
-            {/* Retry/Re-add only make sense for a Managed download —
-                internal/importer never auto-fetches a Manual one at all, so
-                there's nothing for either action to do; the row just
-                reflects the provider's own live state instead. */}
-            {detail.state === 'error' && detail.added_via === 'arr' && (
+            {/* Retry only makes sense for a Managed download — internal/
+                importer never auto-fetches a Manual one at all, so there's
+                nothing for it to do; the row just reflects the provider's
+                own live state instead. Re-add works for either bucket, as
+                long as a source link was actually stored (has_source) —
+                nothing to resubmit for a file upload, or a discovered
+                download with no original link ever known. */}
+            {detail.state === 'error' && (detail.added_via === 'arr' || detail.has_source) && (
               <div className="detail-retry">
-                <button type="button" className="retry-btn" onClick={handleRetry} disabled={retryStatus.kind === 'retrying'}>
-                  {retryStatus.kind === 'retrying' ? 'Retrying…' : 'Retry'}
-                </button>
-                <button type="button" className="readd-btn" onClick={handleReAdd} disabled={readdStatus.kind === 'readding'}>
-                  {readdStatus.kind === 'readding' ? 'Re-adding…' : 'Re-add'}
-                </button>
+                {detail.added_via === 'arr' && (
+                  <button type="button" className="retry-btn" onClick={handleRetry} disabled={retryStatus.kind === 'retrying'}>
+                    {retryStatus.kind === 'retrying' ? 'Retrying…' : 'Retry'}
+                  </button>
+                )}
+                {detail.has_source && (
+                  <button type="button" className="readd-btn" onClick={handleReAdd} disabled={readdStatus.kind === 'readding'}>
+                    {readdStatus.kind === 'readding' ? 'Re-adding…' : 'Re-add'}
+                  </button>
+                )}
                 {retryStatus.kind === 'error' && <p className="settings-error">Failed to retry: {retryStatus.message}</p>}
                 {readdStatus.kind === 'error' && <p className="settings-error">Failed to re-add: {readdStatus.message}</p>}
               </div>
@@ -214,11 +229,29 @@ export function DownloadDetail({ apiKey, id, onClose }: Props) {
               {/* Manual-download actions only make sense for a Manual
                   download — a Managed one is already being auto-fetched to
                   local disk by internal/importer, so there's nothing to
-                  manually grab. */}
+                  manually grab. "Download all" is the same streamed-to-
+                  folder entry point as the downloads table's per-row
+                  button (see onDownloadAll) — zip stays a separate, explicit
+                  opt-in alongside it. */}
               {detail.added_via === 'manual' && detail.files.length > 0 && (
-                <button type="button" className="zip-btn" onClick={handleDownloadZip} disabled={zipStatus.kind === 'resolving'}>
-                  {zipStatus.kind === 'resolving' ? 'Resolving…' : 'Download all (zip)'}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="zip-btn"
+                    onClick={() => onDownloadAll(detail)}
+                    disabled={busy}
+                    title="Download all files, straight from the provider"
+                  >
+                    {busy
+                      ? progress && progress.total > 0
+                        ? `Downloading… ${Math.round((progress.loaded / progress.total) * 100)}%`
+                        : 'Downloading…'
+                      : 'Download all'}
+                  </button>
+                  <button type="button" className="zip-btn" onClick={handleDownloadZip} disabled={zipStatus.kind === 'resolving'}>
+                    {zipStatus.kind === 'resolving' ? 'Resolving…' : 'Download all (zip)'}
+                  </button>
+                </>
               )}
             </div>
             {zipStatus.kind === 'error' && <p className="settings-error">Failed to resolve zip: {zipStatus.message}</p>}

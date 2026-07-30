@@ -856,6 +856,44 @@ func TestHandleGetDownload(t *testing.T) {
 	}
 }
 
+// TestHandleGetDownload_ExposesHasSource proves has_source reflects whether
+// the row's (never directly exposed) Source is non-empty — what the web UI
+// gates its Re-add button on, since resubmitting requires a stored original
+// link (see handleReAddDownload's own Source=="" check).
+func TestHandleGetDownload_ExposesHasSource(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	noSource := seedDownload(t, db, database.KindTorrent, "p1")
+
+	withSource := &database.Download{
+		ID: "dl-p2-with-source", Provider: "fake", ProviderDownloadID: "p2",
+		Kind: database.KindTorrent, Hash: "hash-p2", Name: "Test Download",
+		State: database.StateDownloading, Source: "magnet:?xt=urn:btih:abc123",
+	}
+	if err := db.InsertDownload(context.Background(), withSource); err != nil {
+		t.Fatalf("seed InsertDownload() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+noSource.ID))
+	var gotNoSource downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &gotNoSource); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if gotNoSource.HasSource {
+		t.Error("has_source = true for a row with no stored Source, want false")
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+withSource.ID))
+	var gotWithSource downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &gotWithSource); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !gotWithSource.HasSource {
+		t.Error("has_source = false for a row with a stored Source, want true")
+	}
+}
+
 func TestHandleGetDownload_ExposesRetryInfo(t *testing.T) {
 	srv, db := newTestServer(t, nil, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1")

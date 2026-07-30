@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Extended Re-add to Manual downloads, and a streamed "Download all" button
+  in the detail view** — immediate follow-on to the vanish-detection feature
+  below, prompted directly by the user after seeing a healthy download's
+  detail view and asking for both. The vanish-detection feature can now put
+  a Manual download into `error` state, but there was no recovery action
+  shown for Manual at all (Retry/Re-add were still gated to
+  `added_via === 'arr'` only) — a real gap the feature itself just created.
+  `POST /api/v1/downloads/{id}/readd` already worked for any kind/added_via
+  server-side (it only ever checked `state === error` and a stored `Source`,
+  never `added_via`); the restriction was purely a frontend condition. Split
+  the web UI's Retry/Re-add block so Retry stays Managed-only (there's
+  genuinely no local fetch to retry for a Manual download) while Re-add now
+  shows for *any* download in error state that has a stored source link,
+  gated on a new `has_source` field (`GET /api/v1/downloads[/{id}]`) rather
+  than blindly showing a button that would 400 for a discovered download
+  with no original link ever known. Also closes a smaller pre-existing gap
+  the same way: a Managed download added via an uploaded file (no source
+  either) previously showed a Re-add button that would have failed the same
+  way — now correctly hidden for that case too.
+
+  Separately, the detail view's Files section gained a "Download all" button
+  (streamed straight to a local folder, or a tab-per-file fallback) next to
+  the existing "Download all (zip)" — the exact same entry point
+  (`handleDownloadAll`) the downloads table's per-row button already used,
+  reused rather than duplicated, so it gets the same mode preference/folder-
+  picker-dialog/Downloads-popup-window behavior for free. Previously this
+  streamed option only existed as a row-level action in the table, not in
+  the detail view itself.
+
+  **Not verified by a real browser click** — the button renders and the
+  plumbing type-checks/builds clean, and `has_source` was confirmed live
+  against real account data (a genuinely stored Mega link vs. a genuinely
+  empty source on different real rows), but actually clicking through the
+  new "Download all" button's folder picker/streaming behavior in the
+  detail view specifically hasn't been.
+
 - **Proactively detect a vanished Manual download** — closes a
   previously-documented, long-standing gap (ROADMAP.md's Phase 7): a Manual
   download whose provider item disappears (deleted directly through the
