@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings reorganized into grouped tabs, *arr-style** — requested
+  directly ("make the settings more organized like librinode"). Read
+  LibriNode's actual `SettingsView.tsx` rather than guessing at the pattern:
+  a `settingsGroups` array (name/icon/one-line blurb) driving a `subnav` of
+  tab buttons, only the active group's content rendered below, and a
+  `Section` helper (title + optional help + children) breaking a crowded
+  card into labelled blocks. AcerviNode's version is deliberately smaller —
+  five groups (General, Provider, Categories, Downloads, Security) instead
+  of LibriNode's six, since there's one provider here, not a full media
+  manager's worth of libraries/quality profiles/indexers. The General
+  group's previously-undifferentiated wall of inputs (API key + all eight
+  general-settings fields in one flat form) now reads as three sections:
+  API key, Import & cleanup, Instance.
+
 ### Added
 
 - **Optional login accounts with two roles (admin/member), on top of the API
@@ -99,6 +115,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Two real layout bugs found visually verifying the Settings reorg with a
+  scripted Playwright pass** (chromium-cli wasn't available in this
+  environment, so a throwaway local Playwright + a scratch instance stood
+  in for it — same never-touch-the-real-instance discipline as every other
+  live-tested feature here). Screenshots caught what `tsc`/build alone
+  never would have:
+  - The General group's form lost its `general-form` wrapper class in the
+    reorg, so `.settings-card form`'s row layout (meant for the small
+    inline TorBox-key form) applied instead — the Import & cleanup and
+    Instance sections rendered as two overlapping columns with the Save
+    button floating over them. Fixed with a dedicated
+    `.settings-form-stack` class forcing column layout back.
+  - Pre-existing, unrelated to the reorg but on the same page: Security's
+    user rows used `flex: 1` (a 0% flex-basis) on the name/badge span,
+    which let it shrink below its own content width inside the narrow
+    `.settings-card` — the "default" badge visibly overlapped the role
+    `<select>` instead of the row wrapping. Fixed with `flex: 1 1 auto` so
+    the row wraps onto a second line instead of compressing content into
+    an overlap.
 - **Account-creation forms (Setup wizard, Settings → Security's "Add account")
   had no `autoComplete` hints, so the browser's own saved-credential autofill
   silently repopulated the username/password fields** — found live-testing

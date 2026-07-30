@@ -87,6 +87,23 @@
   gap: 20px;
 }
 
+.settings-header h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.subnav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.subnav .tab-icon {
+  margin-right: 2px;
+}
+
 .settings-card {
   max-width: 420px;
   background: var(--bg-elevated);
@@ -98,6 +115,23 @@
 .settings-card h2 {
   font-size: 16px;
   margin: 0 0 10px;
+}
+
+.settings-section {
+  margin-bottom: 18px;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 0 0 8px;
 }
 
 .settings-status {
@@ -211,6 +245,15 @@
   flex-direction: column;
   gap: 10px;
   margin-top: 10px;
+}
+
+/* Overrides .settings-card form's row layout (meant for small inline
+   forms like the TorBox key field) — the General group's form wraps
+   several <Section>s and needs to stack them, not lay them out side by
+   side. */
+.settings-form-stack {
+  display: flex;
+  flex-direction: column;
 }
 
 .general-form label {
@@ -1207,7 +1250,11 @@ table.detail-files tbody tr:last-child td {
 }
 
 .user-row-name {
-  flex: 1;
+  /* flex-basis: auto (not the "flex: 1" shorthand's 0%) — with a 0%
+     basis this shrinks below its own content width inside the narrow
+     .settings-card and the badge visibly overlaps the sibling <select>
+     instead of the row wrapping onto a second line. */
+  flex: 1 1 auto;
   min-width: 120px;
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   getCategories,
   getGeneralSettings,
@@ -19,6 +19,34 @@ import {
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
 import { formatBytes } from '../format'
 import { SecuritySettings } from './SecuritySettings'
+
+// Settings groups, *arr-style (matching LibriNode's own SettingsView): pages
+// organized by concern instead of one long scroll, each with an icon and a
+// one-line blurb so the group a user lands on always explains itself.
+// Smaller than LibriNode's own six groups — AcerviNode's whole settings
+// surface is one provider, categories, and login accounts, not a full
+// media-manager's worth of libraries/quality profiles/indexers.
+const settingsGroups = [
+  { name: 'General', icon: '⚙️', blurb: "This instance's API key and import/cleanup behavior." },
+  { name: 'Provider', icon: '🔌', blurb: 'The TorBox account AcerviNode resolves every download through.' },
+  { name: 'Categories', icon: '🏷️', blurb: "Redirect a Sonarr/Radarr category's downloads to a specific directory." },
+  { name: 'Downloads', icon: '⬇️', blurb: "This browser's remembered folder for the Manual tab's downloads." },
+  { name: 'Security', icon: '🔒', blurb: 'Login accounts on top of the API key, and their roles.' },
+] as const
+type SettingsGroup = (typeof settingsGroups)[number]['name']
+
+// Section groups related fields inside a card under a small heading, with
+// optional help text — so a long form (General's, especially) reads as a
+// few labelled blocks instead of one undifferentiated stack of inputs.
+function Section({ title, help, children }: { title: string; help?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="settings-section">
+      <h3>{title}</h3>
+      {help != null && <p className="settings-help">{help}</p>}
+      {children}
+    </div>
+  )
+}
 
 // One row of the "Save path overrides" list — kept as its own component,
 // keyed by category name, so an in-progress edit in one row survives a
@@ -70,6 +98,7 @@ interface Props {
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error']
 
 export function Settings({ apiKey }: Props) {
+  const [group, setGroup] = useState<SettingsGroup>('General')
   const [settings, setSettings] = useState<ProviderSettings | null>(null)
   const [torboxKey, setTorboxKey] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
@@ -243,266 +272,294 @@ export function Settings({ apiKey }: Props) {
   }
 
   const configured = settings?.torbox?.configured ?? false
+  const current = settingsGroups.find((g) => g.name === group) ?? settingsGroups[0]
 
   return (
     <div className="settings">
-      <section className="settings-card">
-        <h2>General</h2>
-        {general && (
-          <div className="api-key-row">
-            <code className="api-key-value">{keyRevealed ? general.api_key : '•'.repeat(24)}</code>
-            <button type="button" onClick={() => setKeyRevealed((v) => !v)} title={keyRevealed ? 'Hide' : 'Reveal'}>
-              {keyRevealed ? 'Hide' : 'Reveal'}
-            </button>
-            <button type="button" onClick={handleCopyKey} title="Copy to clipboard">
-              {copyStatus === 'copied' ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
-        )}
-        <p className="settings-help">
-          This is the key both compat shims and the native API check — the same one Sonarr/Radarr need when
-          adding AcerviNode as a download client.
-        </p>
-        <button
-          type="button"
-          className="regenerate-btn"
-          onClick={handleRegenerate}
-          disabled={regenStatus.kind === 'saving'}
-        >
-          {regenStatus.kind === 'saving' ? 'Regenerating…' : 'Regenerate API key'}
-        </button>
-        {regenStatus.kind === 'error' && <p className="settings-error">Failed to regenerate: {regenStatus.message}</p>}
+      <header className="settings-header">
+        <h1>Settings</h1>
+        <p className="muted">{current.blurb}</p>
+      </header>
 
-        {form && (
-          <form className="general-form" onSubmit={handleGeneralSubmit}>
-            <label>
-              Download dir
-              <input
-                type="text"
-                value={form.download_dir}
-                onChange={(e) => setForm({ ...form, download_dir: e.target.value })}
-              />
-            </label>
-            <label>
-              Log level
-              <select value={form.log_level} onChange={(e) => setForm({ ...form, log_level: e.target.value })}>
-                {LOG_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Import interval (seconds)
-              <input
-                type="number"
-                min={1}
-                value={form.import_interval_seconds}
-                onChange={(e) => setForm({ ...form, import_interval_seconds: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Import max retries
-              <input
-                type="number"
-                min={1}
-                value={form.import_max_retries}
-                onChange={(e) => setForm({ ...form, import_max_retries: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Max concurrent downloads
-              <input
-                type="number"
-                min={1}
-                value={form.max_concurrent_downloads}
-                onChange={(e) => setForm({ ...form, max_concurrent_downloads: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Import fetch timeout (seconds)
-              <input
-                type="number"
-                min={1}
-                value={form.import_fetch_timeout_seconds}
-                onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Clean up Managed downloads after (days, 0 = off)
-              <input
-                type="number"
-                min={0}
-                value={form.cleanup_after_days}
-                onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
-              />
-            </label>
-
-            <p className="settings-help">
-              The seven above apply immediately, no restart needed. Max concurrent downloads bounds how many
-              provider_completed downloads are fetched to disk at once (previously always strictly one at a time).
-              The fetch timeout covers a single file's whole transfer, not just connecting — raise it if large files
-              on a slow connection are failing partway through. Cleanup only ever touches a Managed download once
-              it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
-              a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). Port needs a
-              restart to take effect — edit it here to save the new value for next time. Data dir isn't shown
-              here at all — changing it doesn't move your existing database, so editing it in this form would
-              look like everything vanished after a restart. Set it via <code>config.yaml</code> or{' '}
-              <code>ACERVINODE_DATA_DIR</code> instead, and move the database file yourself first.
-            </p>
-            <label>
-              Port
-              <input type="number" min={1} max={65535} value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} />
-            </label>
-
-            <button type="submit" disabled={generalStatus.kind === 'saving'}>
-              {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
-            </button>
-            {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
-            {generalStatus.kind === 'restart' && (
-              <p className="settings-warning">Saved — port changed, restart AcerviNode to apply.</p>
-            )}
-            {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
-          </form>
-        )}
-      </section>
-
-      <section className="settings-card">
-        <h2>TorBox</h2>
-        <p className="settings-status">
-          {configured ? (
-            <span className="badge badge-ready_for_import">Configured</span>
-          ) : (
-            <span className="badge badge-queued">Not configured</span>
-          )}
-        </p>
-        <p className="settings-help">
-          {configured
-            ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
-            : 'Add your TorBox API key to enable the qBittorrent and SABnzbd compat shims.'}
-        </p>
-        <form onSubmit={handleSubmit}>
-          <input
-            type="password"
-            placeholder="TorBox API key"
-            value={torboxKey}
-            onChange={(e) => setTorboxKey(e.target.value)}
-          />
-          <button type="submit" disabled={status.kind === 'saving' || !torboxKey.trim()}>
-            {status.kind === 'saving' ? 'Saving…' : 'Save'}
+      <nav className="subnav" aria-label="Settings sections">
+        {settingsGroups.map((g) => (
+          <button
+            key={g.name}
+            type="button"
+            className={g.name === group ? 'tab tab-active' : 'tab'}
+            aria-current={g.name === group ? 'page' : undefined}
+            onClick={() => setGroup(g.name)}
+          >
+            <span className="tab-icon" aria-hidden="true">
+              {g.icon}
+            </span>{' '}
+            {g.name}
           </button>
-        </form>
-        {status.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
-        {status.kind === 'error' && <p className="settings-error">Failed to save: {status.message}</p>}
+        ))}
+      </nav>
 
-        {configured && (
-          <>
-            <button type="button" className="test-connection-btn" onClick={handleTestConnection} disabled={testStatus.kind === 'testing'}>
-              {testStatus.kind === 'testing' ? 'Testing…' : 'Test connection'}
-            </button>
-            {testStatus.kind === 'ok' && (
-              <p className="settings-success">Connected — {testStatus.latencyMs}ms</p>
-            )}
-            {testStatus.kind === 'error' && <p className="settings-error">Connection failed: {testStatus.message}</p>}
-          </>
-        )}
-
-        {account?.available && (
-          <dl className="detail-meta account-status">
-            <dt>Plan</dt>
-            <dd>
-              {account.plan_name}
-              {account.is_subscribed ? ' (subscribed)' : ''}
-            </dd>
-            {account.premium_expires_at && (
-              <>
-                <dt>Premium expires</dt>
-                <dd>{new Date(account.premium_expires_at).toLocaleDateString()}</dd>
-              </>
-            )}
-            <dt>Total downloaded</dt>
-            <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
-          </dl>
-        )}
-      </section>
-
-      <section className="settings-card">
-        <h2>Save path overrides</h2>
-        <p className="settings-help">
-          Redirect a category's completed downloads to a specific directory instead of the default{' '}
-          <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only affects
-          Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing override's
-          path and save to remove it.
-        </p>
-
-        {categories &&
-          Object.entries(categories.paths)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([name, path]) => <CategoryPathRow key={name} name={name} currentPath={path} apiKey={apiKey} onSaved={load} />)}
-
-        <form className="add-category-form" onSubmit={handleAddOverride}>
-          <input
-            type="text"
-            placeholder="Category (e.g. tv-sonarr)"
-            value={newOverrideCategory}
-            onChange={(e) => setNewOverrideCategory(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="Path (e.g. /mnt/tv)"
-            value={newOverridePath}
-            onChange={(e) => setNewOverridePath(e.target.value)}
-          />
-          <button type="submit" disabled={newOverrideStatus.kind === 'saving' || !newOverrideCategory.trim() || !newOverridePath.trim()}>
-            {newOverrideStatus.kind === 'saving' ? 'Adding…' : 'Add override'}
-          </button>
-        </form>
-        {newOverrideStatus.kind === 'error' && <p className="settings-error">Failed to add: {newOverrideStatus.message}</p>}
-
-        {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
-          <p className="settings-help">
-            Declared by Sonarr/Radarr — torrent: {categories.torrent.join(', ') || 'none'}; usenet:{' '}
-            {categories.usenet.join(', ') || 'none'}.
-          </p>
-        )}
-      </section>
-
-      <section className="settings-card">
-        <h2>Downloads</h2>
-        <p className="settings-help">
-          Applies to the Manual tab only — a Managed download is already being fetched to local disk
-          automatically, so there's nothing to manually download. Which mode to use (a folder,
-          a zip, or individual files) is chosen each time in the download dialog itself, which
-          remembers your last choice as next time's default. This section just manages the
-          remembered destination folder for "a folder you pick" mode (Chromium-based browsers only).
-        </p>
-
-        {supportsDirectoryPicker() && (
-          <>
-            <div className="api-key-row">
-              <code className="api-key-value">{defaultFolderName ?? 'Not set — you\'ll be asked to pick one on the next download'}</code>
-              <button type="button" onClick={handleChangeFolder}>
-                {defaultFolderName ? 'Change folder' : 'Choose folder'}
-              </button>
-              {defaultFolderName && (
-                <button type="button" onClick={handleForgetFolder}>
-                  Forget
+      {group === 'General' && (
+        <section className="settings-card">
+          <Section
+            title="API key"
+            help="This is the key both compat shims and the native API check — the same one Sonarr/Radarr need when adding AcerviNode as a download client."
+          >
+            {general && (
+              <div className="api-key-row">
+                <code className="api-key-value">{keyRevealed ? general.api_key : '•'.repeat(24)}</code>
+                <button type="button" onClick={() => setKeyRevealed((v) => !v)} title={keyRevealed ? 'Hide' : 'Reveal'}>
+                  {keyRevealed ? 'Hide' : 'Reveal'}
                 </button>
-              )}
-            </div>
-            <p className="settings-help">
-              Picked once, then reused silently (no prompt) for every download after, as long as this
-              browser still has permission for it. Only the folder's name is shown here; browsers
-              don't expose its full path. Note: the browser won't let you pick Desktop/Documents/
-              Downloads itself (a deliberate Chrome restriction) — choose a subfolder inside it instead.
-            </p>
-            {folderStatus.kind === 'error' && <p className="settings-error">Failed to change folder: {folderStatus.message}</p>}
-          </>
-        )}
-      </section>
+                <button type="button" onClick={handleCopyKey} title="Copy to clipboard">
+                  {copyStatus === 'copied' ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+            )}
+            <button type="button" className="regenerate-btn" onClick={handleRegenerate} disabled={regenStatus.kind === 'saving'}>
+              {regenStatus.kind === 'saving' ? 'Regenerating…' : 'Regenerate API key'}
+            </button>
+            {regenStatus.kind === 'error' && <p className="settings-error">Failed to regenerate: {regenStatus.message}</p>}
+          </Section>
 
-      <SecuritySettings apiKey={apiKey} />
+          {form && (
+            <form className="settings-form-stack" onSubmit={handleGeneralSubmit}>
+              <Section title="Import & cleanup" help="Applies immediately, no restart needed.">
+                <div className="general-form">
+                  <label>
+                    Import interval (seconds)
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.import_interval_seconds}
+                      onChange={(e) => setForm({ ...form, import_interval_seconds: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Import max retries
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.import_max_retries}
+                      onChange={(e) => setForm({ ...form, import_max_retries: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Max concurrent downloads
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.max_concurrent_downloads}
+                      onChange={(e) => setForm({ ...form, max_concurrent_downloads: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Import fetch timeout (seconds)
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.import_fetch_timeout_seconds}
+                      onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Clean up Managed downloads after (days, 0 = off)
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.cleanup_after_days}
+                      onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                <p className="settings-help">
+                  Max concurrent downloads bounds how many provider_completed downloads are fetched to disk at once
+                  (previously always strictly one at a time). The fetch timeout covers a single file's whole
+                  transfer, not just connecting — raise it if large files on a slow connection are failing partway
+                  through. Cleanup only ever touches a Managed download once it's reached "ready for import"
+                  (already handed off to Sonarr/Radarr) and stayed there this long — a Manual download is never
+                  auto-deleted. 0 disables cleanup entirely (the default).
+                </p>
+              </Section>
+
+              <Section title="Instance">
+                <div className="general-form">
+                  <label>
+                    Download dir
+                    <input type="text" value={form.download_dir} onChange={(e) => setForm({ ...form, download_dir: e.target.value })} />
+                  </label>
+                  <label>
+                    Log level
+                    <select value={form.log_level} onChange={(e) => setForm({ ...form, log_level: e.target.value })}>
+                      {LOG_LEVELS.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Port
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={form.port}
+                      onChange={(e) => setForm({ ...form, port: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                <p className="settings-help">
+                  Download dir applies immediately (no restart) and is the fallback destination when a Managed
+                  download's *arr app didn't supply its own path. Port needs a restart to take effect — edit it here
+                  to save the new value for next time. Data dir isn't shown here at all — changing it doesn't move
+                  your existing database, so editing it in this form would look like everything vanished after a
+                  restart. Set it via <code>config.yaml</code> or <code>ACERVINODE_DATA_DIR</code> instead, and move
+                  the database file yourself first.
+                </p>
+              </Section>
+
+              <div className="general-form">
+                <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                  {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+                </button>
+                {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+                {generalStatus.kind === 'restart' && <p className="settings-warning">Saved — port changed, restart AcerviNode to apply.</p>}
+                {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
+      {group === 'Provider' && (
+        <section className="settings-card">
+          <h2>TorBox</h2>
+          <p className="settings-status">
+            {configured ? (
+              <span className="badge badge-ready_for_import">Configured</span>
+            ) : (
+              <span className="badge badge-queued">Not configured</span>
+            )}
+          </p>
+          <p className="settings-help">
+            {configured
+              ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
+              : 'Add your TorBox API key to enable the qBittorrent and SABnzbd compat shims.'}
+          </p>
+          <form onSubmit={handleSubmit}>
+            <input type="password" placeholder="TorBox API key" value={torboxKey} onChange={(e) => setTorboxKey(e.target.value)} />
+            <button type="submit" disabled={status.kind === 'saving' || !torboxKey.trim()}>
+              {status.kind === 'saving' ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+          {status.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+          {status.kind === 'error' && <p className="settings-error">Failed to save: {status.message}</p>}
+
+          {configured && (
+            <>
+              <button type="button" className="test-connection-btn" onClick={handleTestConnection} disabled={testStatus.kind === 'testing'}>
+                {testStatus.kind === 'testing' ? 'Testing…' : 'Test connection'}
+              </button>
+              {testStatus.kind === 'ok' && <p className="settings-success">Connected — {testStatus.latencyMs}ms</p>}
+              {testStatus.kind === 'error' && <p className="settings-error">Connection failed: {testStatus.message}</p>}
+            </>
+          )}
+
+          {account?.available && (
+            <dl className="detail-meta account-status">
+              <dt>Plan</dt>
+              <dd>
+                {account.plan_name}
+                {account.is_subscribed ? ' (subscribed)' : ''}
+              </dd>
+              {account.premium_expires_at && (
+                <>
+                  <dt>Premium expires</dt>
+                  <dd>{new Date(account.premium_expires_at).toLocaleDateString()}</dd>
+                </>
+              )}
+              <dt>Total downloaded</dt>
+              <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
+            </dl>
+          )}
+        </section>
+      )}
+
+      {group === 'Categories' && (
+        <section className="settings-card">
+          <h2>Save path overrides</h2>
+          <p className="settings-help">
+            Redirect a category's completed downloads to a specific directory instead of the default{' '}
+            <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only affects
+            Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing override's
+            path and save to remove it.
+          </p>
+
+          {categories &&
+            Object.entries(categories.paths)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([name, path]) => <CategoryPathRow key={name} name={name} currentPath={path} apiKey={apiKey} onSaved={load} />)}
+
+          <form className="add-category-form" onSubmit={handleAddOverride}>
+            <input
+              type="text"
+              placeholder="Category (e.g. tv-sonarr)"
+              value={newOverrideCategory}
+              onChange={(e) => setNewOverrideCategory(e.target.value)}
+            />
+            <input type="text" placeholder="Path (e.g. /mnt/tv)" value={newOverridePath} onChange={(e) => setNewOverridePath(e.target.value)} />
+            <button type="submit" disabled={newOverrideStatus.kind === 'saving' || !newOverrideCategory.trim() || !newOverridePath.trim()}>
+              {newOverrideStatus.kind === 'saving' ? 'Adding…' : 'Add override'}
+            </button>
+          </form>
+          {newOverrideStatus.kind === 'error' && <p className="settings-error">Failed to add: {newOverrideStatus.message}</p>}
+
+          {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
+            <p className="settings-help">
+              Declared by Sonarr/Radarr — torrent: {categories.torrent.join(', ') || 'none'}; usenet:{' '}
+              {categories.usenet.join(', ') || 'none'}.
+            </p>
+          )}
+        </section>
+      )}
+
+      {group === 'Downloads' && (
+        <section className="settings-card">
+          <h2>Downloads</h2>
+          <p className="settings-help">
+            Applies to the Manual tab only — a Managed download is already being fetched to local disk automatically,
+            so there's nothing to manually download. Which mode to use (a folder, a zip, or individual files) is
+            chosen each time in the download dialog itself, which remembers your last choice as next time's default.
+            This section just manages the remembered destination folder for "a folder you pick" mode (Chromium-based
+            browsers only).
+          </p>
+
+          {supportsDirectoryPicker() && (
+            <>
+              <div className="api-key-row">
+                <code className="api-key-value">{defaultFolderName ?? "Not set — you'll be asked to pick one on the next download"}</code>
+                <button type="button" onClick={handleChangeFolder}>
+                  {defaultFolderName ? 'Change folder' : 'Choose folder'}
+                </button>
+                {defaultFolderName && (
+                  <button type="button" onClick={handleForgetFolder}>
+                    Forget
+                  </button>
+                )}
+              </div>
+              <p className="settings-help">
+                Picked once, then reused silently (no prompt) for every download after, as long as this browser still
+                has permission for it. Only the folder's name is shown here; browsers don't expose its full path.
+                Note: the browser won't let you pick Desktop/Documents/Downloads itself (a deliberate Chrome
+                restriction) — choose a subfolder inside it instead.
+              </p>
+              {folderStatus.kind === 'error' && <p className="settings-error">Failed to change folder: {folderStatus.message}</p>}
+            </>
+          )}
+        </section>
+      )}
+
+      {group === 'Security' && <SecuritySettings apiKey={apiKey} />}
     </div>
   )
 }
