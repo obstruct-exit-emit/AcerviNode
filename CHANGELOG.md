@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Consolidated the download UX into one dialog, and fixed a real
+  cross-browser download bug along the way.** Three separate "download
+  everything" paths existed (the table row's default-mode button, the
+  detail view's always-both-visible "Download all"/"Download all (zip)"
+  buttons, and a Settings → Downloads preference controlling only the row's
+  default) — replaced with a single `DownloadOptionsDialog`, opened
+  identically from the table row and the detail view, showing every mode
+  this browser can actually do (folder streaming is simply absent, not
+  shown-then-disabled, on a browser without `showDirectoryPicker`) as
+  explicit radio choices, and remembering the last one picked as next
+  time's default instead of that living in a separate Settings dropdown.
+
+  While investigating this, found that the per-file "Download" button and
+  the Firefox/Safari "individual files" fallback both used a plain
+  `window.open` — and since the provider's per-file link (unlike the zip
+  link) carries no `Content-Disposition: attachment` header, this rendered
+  the file inline (played the video, showed the image) instead of
+  downloading it, in *every* browser, not just Firefox/Safari. New
+  `fsAccess.forceDownload` (fetch → blob → synthetic `<a download>` click)
+  fixes this everywhere: blob URLs are always same-origin, so the
+  `download` attribute reliably applies regardless of the provider link's
+  own cross-origin status — a plain `<a download>` pointed directly at a
+  cross-origin URL is unreliable (several browsers ignore the attribute
+  cross-origin and just navigate instead). Deliberately *not* used for the
+  zip link — it already downloads reliably as a plain link since the
+  provider's own response sets `Content-Disposition`, and blob-buffering a
+  potentially multi-GB zip in memory first would be a real regression.
+
+  Also directly investigated (at the user's prompting) whether Firefox or
+  Safari could get genuine folder-write parity with Chromium at all, even
+  via browser-specific detection — they can't: neither engine implements
+  the underlying capability, there's no flag or experimental opt-in, and
+  the only real way to add it would be a companion browser extension (a
+  fundamentally different, much bigger undertaking — separate codebases,
+  store review/signing, ongoing maintenance across two more platforms —
+  than a UI consolidation pass). Explained to the user and ruled out rather
+  than pursued.
+
+  Settings → Downloads now only manages the remembered default folder;
+  the mode-choice dropdown that used to live there is gone, replaced by the
+  dialog's own memory. Same caveat as every other frontend feature this
+  session: type-checks and builds clean, confirmed live-serving the
+  updated bundle (the deployed JS bundle was checked directly for the new
+  dialog's copy), but not confirmed by an actual browser click-through —
+  that needs a real user gesture (the folder picker, the download prompts)
+  this environment can't provide. See
+  [ROADMAP](ROADMAP.md#path-to-daily-driver-parity-replacing-rdt-client--decypharr).
+
 - **First three items off the daily-driver parity punch list**: requested
   directly ("complete the first 3 tasks in Path to daily-driver"), all
   scoped, implemented, and tested independently.

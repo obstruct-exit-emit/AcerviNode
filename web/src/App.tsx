@@ -23,14 +23,23 @@ import { DownloadsTable } from './components/DownloadsTable'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
 import {
+  forceDownload,
   listenForDownloadWindowMessages,
   openDownloadWindow,
   sendBatchToDownloadWindow,
-  supportsDirectoryPicker,
   writeFileToDirectory,
 } from './fsAccess'
-import { getDownloadMode } from './preferences'
 import './App.css'
+
+// basename extracts the last path segment for a saved file's name — a
+// browser's own download mechanism (forceDownload, or the tab-per-file
+// path this replaced) always saves flat into its downloads location, not
+// into a nested directory structure the way the folder-streaming path
+// (writeFileToDirectory) does.
+function basename(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
 
 const POLL_INTERVAL_MS = 4000
 
@@ -49,10 +58,9 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  // Set while the DownloadOptionsDialog is open for a given row (streamed-
-  // to-folder path only) — lets the user see/change the destination folder
-  // and choose whether to hand off to the Downloads popup window before
-  // anything actually starts. See handleDownloadAll/startStreamedDownload.
+  // Set while DownloadOptionsDialog is open for a given row — every
+  // "download everything" action goes through it now, regardless of which
+  // mode ends up chosen. See handleDownloadAll/startDownloadAll.
   const [downloadDialogFor, setDownloadDialogFor] = useState<Download | null>(null)
   // Every row with a "Download all" currently in flight, keyed by download
   // id rather than a single shared id — more than one row can genuinely be
@@ -62,8 +70,9 @@ export default function App() {
   // recently, a real bug found live once two downloads actually overlapped.
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   // Cumulative bytes written so far, per row id (the File System Access
-  // path only — see startStreamedDownload/handleDownloadAllIndividual). A
-  // row in busyIds but absent here shows the plain "…" indicator instead.
+  // path only — see startStreamedDownload). A row in busyIds but absent
+  // here shows the plain "…" indicator instead (every other mode has
+  // nothing granular to report).
   const [downloadProgress, setDownloadProgress] = useState<Record<string, { loaded: number; total: number }>>({})
 
   function markBusy(id: string) {
@@ -180,25 +189,27 @@ export default function App() {
     }
   }
 
-  // The per-row "Download all" button's entry point — dispatches on the
-  // user's Settings > Downloads preference (see preferences.getDownloadMode).
-  // 'zip' resolves the whole download as one provider-zipped archive. The
-  // default 'individual' either opens DownloadOptionsDialog (browsers that
-  // support streaming to a folder — see startStreamedDownload, which the
-  // dialog's confirm triggers) or, if this browser can't do that at all,
-  // falls straight to handleDownloadAllIndividual's plain tab-per-file
-  // behavior, since there's no folder/Downloads-window choice to make there
-  // anyway. Either way, the detail view's own explicit "Download all
-  // (zip)"/per-file buttons remain available regardless of this preference —
-  // it only controls the row button's default action.
-  async function handleDownloadAll(d: Download) {
+  // The single entry point for every "download everything" action — both
+  // the downloads table's per-row button and the detail view's "Download
+  // all" button call this now, and it always opens DownloadOptionsDialog
+  // rather than silently picking a mode/fallback on the caller's behalf.
+  // The dialog itself shows every mode this browser can actually do and
+  // remembers the last one chosen — see startDownloadAll, its confirm
+  // handler, for the actual per-mode dispatch.
+  function handleDownloadAll(d: Download) {
     if (!apiKey) return
-    if (getDownloadMode() === 'zip') {
+    setDownloadDialogFor(d)
+  }
+
+  // DownloadOptionsDialog's confirm handler — dispatches on whichever mode
+  // was chosen there.
+  async function startDownloadAll(d: Download, opts: DownloadOptions) {
+    if (opts.mode === 'zip') {
       await handleDownloadAllZip(d)
-    } else if (supportsDirectoryPicker()) {
-      setDownloadDialogFor(d)
-    } else {
+    } else if (opts.mode === 'individual') {
       await handleDownloadAllIndividual(d)
+    } else if (opts.folder) {
+      await startStreamedDownload(d, opts.folder, opts.useDownloadManager ?? true)
     }
   }
 
@@ -215,10 +226,12 @@ export default function App() {
     }
   }
 
-  // No-File-System-Access fallback (Firefox/Safari, or any browser without
-  // showDirectoryPicker): opens every file's link in its own tab. Nothing
-  // to choose here — no folder, no Downloads window — so this never goes
-  // through DownloadOptionsDialog.
+  // The 'individual' mode chosen in DownloadOptionsDialog: every file
+  // downloads on its own via forceDownload — a real browser download (blob
+  // + <a download>), not a tab that might just render the file inline (see
+  // fsAccess.forceDownload's own doc comment for why that distinction
+  // matters). The only mode available at all on a browser without folder
+  // access, but can be chosen deliberately on any browser now too.
   async function handleDownloadAllIndividual(d: Download) {
     if (!apiKey) return
     markBusy(d.id)
@@ -233,7 +246,7 @@ export default function App() {
       for (const f of files) {
         try {
           const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
-          window.open(url, '_blank', 'noopener,noreferrer')
+          await forceDownload(url, basename(f.path))
         } catch (err) {
           console.error(`Failed to download ${f.path}`, err)
           failed.push(f.path)
@@ -249,11 +262,9 @@ export default function App() {
     }
   }
 
-  // Triggered by DownloadOptionsDialog's confirm — folder and the
-  // Downloads-window choice are already decided by then, so this only ever
-  // streams (never a tab-per-file fallback; that path never opens the
-  // dialog in the first place — see handleDownloadAll).
-  async function startStreamedDownload(d: Download, opts: DownloadOptions) {
+  // The 'folder' mode chosen in DownloadOptionsDialog — folder and the
+  // Downloads-window choice are already decided by then.
+  async function startStreamedDownload(d: Download, folder: FileSystemDirectoryHandle, useDownloadManager: boolean) {
     if (!apiKey) return
 
     // Deliberately the first statement, before any await — window.open()
@@ -261,7 +272,7 @@ export default function App() {
     // gesture, same requirement as showDirectoryPicker(). Only actually
     // opens/focuses the popup when the user left "Send to the Downloads
     // window" checked.
-    const opened = opts.useDownloadManager ? openDownloadWindow() : null
+    const opened = useDownloadManager ? openDownloadWindow() : null
 
     // Popup path: hand the whole batch off and return immediately — the
     // popup owns fetching/writing every file from here on, independent of
@@ -280,7 +291,7 @@ export default function App() {
         await sendBatchToDownloadWindow({
           downloadId: d.id,
           downloadName: d.name,
-          directoryHandle: opts.folder,
+          directoryHandle: folder,
           files: files.map((f) => ({ path: f.path, providerFileId: f.provider_file_id as string, sizeBytes: f.size_bytes })),
         })
       } catch (err) {
@@ -312,7 +323,7 @@ export default function App() {
           const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
           const resp = await fetch(url)
           if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-          await writeFileToDirectory(opts.folder, f.path, resp, (chunkBytes) => {
+          await writeFileToDirectory(folder, f.path, resp, (chunkBytes) => {
             loadedBytes += chunkBytes
             setProgressFor(d.id, { loaded: loadedBytes, total: totalBytes })
           })
@@ -417,7 +428,7 @@ export default function App() {
         <DownloadOptionsDialog
           download={downloadDialogFor}
           onClose={() => setDownloadDialogFor(null)}
-          onConfirm={(opts) => startStreamedDownload(downloadDialogFor, opts)}
+          onConfirm={(opts) => startDownloadAll(downloadDialogFor, opts)}
         />
       )}
       {addOpen && (

@@ -12,6 +12,40 @@ export function supportsDirectoryPicker(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window
 }
 
+// forceDownload fetches url and triggers a real browser download via a
+// blob: URL + a synthetic <a download> click, instead of window.open/a
+// plain navigation. Necessary because a resolved per-file link (unlike the
+// zip link) carries no Content-Disposition: attachment header from the
+// provider — a plain link click just navigates there, which the browser
+// renders inline instead of downloading whenever it's a type it knows how
+// to display (video, audio, images…), in every browser, not just
+// Firefox/Safari. blob: URLs are always same-origin, so the download
+// attribute reliably applies regardless of the resolved link's own
+// (cross-origin, provider-hosted) origin — a plain <a download> pointed
+// directly at a cross-origin URL is unreliable (several browsers ignore
+// the attribute cross-origin and just navigate instead). Tradeoff: pulls
+// the whole file through memory before the save begins — no progressive
+// disk streaming the way a real browser download (or the Chromium
+// folder-streaming path elsewhere in this file) gets, so this is
+// meaningfully heavier for a very large file. Never used for the zip
+// link, which already downloads reliably as a plain link — the provider's
+// own response sets Content-Disposition there.
+export async function forceDownload(url: string, filename: string): Promise<void> {
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+  const blob = await resp.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = blobUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Give the download a moment to actually start before revoking — some
+  // browsers race the handoff if it's revoked immediately.
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 30000)
+}
+
 // pickDirectory must be called directly inside a click handler, before any
 // other await — Chromium requires "transient user activation" for the
 // picker, which an earlier await (e.g. an API call) can consume before this

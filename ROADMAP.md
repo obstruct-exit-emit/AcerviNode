@@ -66,14 +66,10 @@ this unattended. Recommendations first.
 
 - 💡 Real pause/resume for streamed Manual downloads, surviving a restart —
   see the entry below.
-- 💡 Streamline the download UX (four separate download paths) — see the
-  entry below.
+- ✅ Streamline the download UX — done, see the entry below.
 - 💡 **Reconsider Docker packaging.** Deliberately deferred so far (Phase 5)
-  in favor of a Linux binary + systemd, but worth revisiting specifically
-  for "replace decypharr" — most decypharr users today are already running
-  it inside a docker-compose stack alongside Sonarr/Radarr, and a binary
-  that doesn't fit that pattern is a real adoption friction point even
-  though it isn't a functional gap.
+  in favor of a Linux binary + systemd. Explicitly told this is the lowest
+  priority item here — not pursuing unless that changes.
 
 **Someday / maybe** — deprioritized on purpose, not dismissed:
 
@@ -333,18 +329,33 @@ CDN link instead of BitTorrent/NNTP.
   picker, so — unlike the rest of this session's features — it can't be
   verified headlessly via `curl`; confirmed only that the app serves the
   updated bundle and builds/tests pass clean.
-- 💡 **Streamline the download UX**: four download paths now exist (per-file
-  link, per-row "download all" individually/to-folder, per-download zip),
-  added incrementally as separate follow-ons rather than designed together.
-  Needs a pass to consolidate them into one coherent, discoverable flow (e.g.
-  a single "Download" control with a small set of clear choices instead of
-  several separate buttons scattered across the table row and detail view),
-  and to make the folder-write path (currently Chromium-only) feel first-class
-  rather than a fallback-having bolt-on. Partial progress: a client-side
-  "default 'Download all' behavior" preference (Settings → Downloads) now
-  lets the per-row button default to either individual files or zip, so at
-  least the row's *default* action matches what a given user actually wants
-  — the full consolidation into one control is still outstanding.
+- ✅ **Streamline the download UX**: done — three separate "download
+  everything" paths (per-row default mode, detail view's always-both-visible
+  "Download all"/"Download all (zip)" buttons, and the Settings default-mode
+  preference controlling only the row's behavior) consolidated into one
+  `DownloadOptionsDialog`, opened identically from the table row and the
+  detail view, showing every mode this browser can actually do (folder
+  streaming is simply absent, not disabled, on a browser without
+  `showDirectoryPicker`) as explicit radio choices, remembering the last one
+  picked as next time's default instead of that living in a separate
+  Settings dropdown. Also fixed a real correctness bug found while
+  investigating this: the per-file link and the Firefox/Safari "individual
+  files" fallback both used a plain `window.open`, which — since the
+  provider's per-file link carries no `Content-Disposition: attachment`,
+  unlike the zip link — renders inline (plays the video, shows the image)
+  in *every* browser instead of downloading, not just Firefox/Safari.
+  `fsAccess.forceDownload` (fetch → blob → synthetic `<a download>` click)
+  fixes this everywhere; blob URLs are always same-origin, so the `download`
+  attribute reliably applies regardless of the provider link's own
+  cross-origin status. Investigated (and ruled out, explained to the user)
+  whether Firefox/Safari could get genuine folder-write access at all —
+  they can't, short of a companion browser extension, which is a
+  fundamentally different, much bigger undertaking than a UI consolidation
+  pass. See [CHANGELOG](CHANGELOG.md). Same caveat as always: this is
+  client-side browser behavior requiring a real user click, so — like the
+  rest of this project's frontend work — it's type-checked/built clean and
+  confirmed live-serving the updated bundle, but not confirmed by an actual
+  browser click-through.
 - **Settings surfaced/reorganized** (follow-on, from user feedback that
   Settings should expose everything that makes sense to expose): audited
   every `config.yaml` field against the Settings UI and found all of them

@@ -1,21 +1,6 @@
 import type { Download } from '../api'
-import { supportsDirectoryPicker } from '../fsAccess'
 import { formatBytes, formatRelativeTime } from '../format'
-import { getDownloadMode } from '../preferences'
 import { StateBadge } from './StateBadge'
-
-// Computed fresh (not module-scope) so it reflects a preference change made
-// in Settings' Downloads section without needing a page reload — Downloads
-// and Settings are separate views, but DownloadsTable remounts every time
-// its view becomes active again.
-function downloadAllTitle(): string {
-  if (getDownloadMode() === 'zip') {
-    return 'Download all files as one provider-zipped archive'
-  }
-  return supportsDirectoryPicker()
-    ? 'Download all files into a folder you pick, straight from the provider'
-    : 'Download all files individually, straight from the provider (opens one tab per file)'
-}
 
 interface Props {
   downloads: Download[]
@@ -141,7 +126,7 @@ export function DownloadsTable({
                       onDownloadAll(d)
                     }}
                     disabled={busy}
-                    title={downloadAllTitle()}
+                    title="Download all files"
                   >
                     {busy ? '…' : '⬇'}
                   </button>

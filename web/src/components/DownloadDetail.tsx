@@ -3,12 +3,12 @@ import {
   ApiError,
   getDownload,
   getFileLink,
-  getZipLink,
   reAddDownload,
   retryDownload,
   type Download,
   type DownloadDetail as DownloadDetailData,
 } from '../api'
+import { forceDownload } from '../fsAccess'
 import { formatBytes, formatRelativeTime } from '../format'
 import { StateBadge } from './StateBadge'
 
@@ -18,10 +18,11 @@ interface Props {
   apiKey: string
   id: string
   onClose: () => void
-  // Same streamed-to-folder "Download all" entry point the downloads
-  // table's per-row button uses (handleDownloadAll in App.tsx) — reused here
-  // rather than duplicated, so this button gets the exact same mode
-  // preference/dialog/Downloads-popup behavior.
+  // Same "Download all" entry point the downloads table's per-row button
+  // uses (handleDownloadAll in App.tsx) — reused here rather than
+  // duplicated, so this button opens the exact same DownloadOptionsDialog,
+  // covering every mode (folder/zip/individual) in one place instead of
+  // this view having its own separate always-both-visible buttons.
   onDownloadAll: (d: Download) => void
   busy: boolean
   progress?: { loaded: number; total: number }
@@ -33,7 +34,6 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
   const [retryStatus, setRetryStatus] = useState<{ kind: 'idle' | 'retrying' | 'error'; message?: string }>({ kind: 'idle' })
   const [readdStatus, setReaddStatus] = useState<{ kind: 'idle' | 'readding' | 'error'; message?: string }>({ kind: 'idle' })
   const [resolvingPath, setResolvingPath] = useState<string | null>(null)
-  const [zipStatus, setZipStatus] = useState<{ kind: 'idle' | 'resolving' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
     let cancelled = false
@@ -96,27 +96,17 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
     setResolvingPath(f.path)
     try {
       const { url } = await getFileLink(apiKey, id, f.provider_file_id)
-      // A resolved link is the provider's own CDN URL, not one of ours — no
-      // Authorization header needed (or sendable) for this second
-      // navigation, unlike every other call in this app.
-      window.open(url, '_blank', 'noopener,noreferrer')
+      // forceDownload (blob + a synthetic <a download> click), not a plain
+      // link open — the resolved link is the provider's own CDN URL with
+      // no Content-Disposition: attachment, so a plain navigation renders
+      // it inline (plays the video, shows the image) in every browser
+      // instead of downloading it. See fsAccess.forceDownload.
+      const name = f.path.split('/').filter(Boolean).pop() ?? f.path
+      await forceDownload(url, name)
     } catch (err) {
       alert(err instanceof ApiError ? err.message : String(err))
     } finally {
       setResolvingPath(null)
-    }
-  }
-
-  // Opt-in alternative to downloading files individually — one archive
-  // instead of one browser download per file.
-  async function handleDownloadZip() {
-    setZipStatus({ kind: 'resolving' })
-    try {
-      const { url } = await getZipLink(apiKey, id)
-      window.open(url, '_blank', 'noopener,noreferrer')
-      setZipStatus({ kind: 'idle' })
-    } catch (err) {
-      setZipStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -229,32 +219,27 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
               {/* Manual-download actions only make sense for a Manual
                   download — a Managed one is already being auto-fetched to
                   local disk by internal/importer, so there's nothing to
-                  manually grab. "Download all" is the same streamed-to-
-                  folder entry point as the downloads table's per-row
-                  button (see onDownloadAll) — zip stays a separate, explicit
-                  opt-in alongside it. */}
+                  manually grab. One "Download all" button opens
+                  DownloadOptionsDialog (see onDownloadAll) — folder/zip/
+                  individual are all choices inside it now, rather than
+                  this view having its own separate always-both-visible
+                  zip button. */}
               {detail.added_via === 'manual' && detail.files.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    className="zip-btn"
-                    onClick={() => onDownloadAll(detail)}
-                    disabled={busy}
-                    title="Download all files, straight from the provider"
-                  >
-                    {busy
-                      ? progress && progress.total > 0
-                        ? `Downloading… ${Math.round((progress.loaded / progress.total) * 100)}%`
-                        : 'Downloading…'
-                      : 'Download all'}
-                  </button>
-                  <button type="button" className="zip-btn" onClick={handleDownloadZip} disabled={zipStatus.kind === 'resolving'}>
-                    {zipStatus.kind === 'resolving' ? 'Resolving…' : 'Download all (zip)'}
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="zip-btn"
+                  onClick={() => onDownloadAll(detail)}
+                  disabled={busy}
+                  title="Download all files"
+                >
+                  {busy
+                    ? progress && progress.total > 0
+                      ? `Downloading… ${Math.round((progress.loaded / progress.total) * 100)}%`
+                      : 'Downloading…'
+                    : 'Download all'}
+                </button>
               )}
             </div>
-            {zipStatus.kind === 'error' && <p className="settings-error">Failed to resolve zip: {zipStatus.message}</p>}
             {detail.files.length === 0 ? (
               <p className="empty">
                 {detail.files_error ? `Couldn't get files: ${detail.files_error}` : 'No files yet.'}

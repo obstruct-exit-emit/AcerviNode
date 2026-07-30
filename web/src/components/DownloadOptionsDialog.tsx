@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { Download } from '../api'
-import { getDefaultDirectory, pickAndRememberDirectory } from '../fsAccess'
+import { getDefaultDirectory, pickAndRememberDirectory, supportsDirectoryPicker } from '../fsAccess'
+import { getDownloadMode, setDownloadMode, type DownloadMode } from '../preferences'
 
 export interface DownloadOptions {
-  folder: FileSystemDirectoryHandle
-  useDownloadManager: boolean
+  mode: DownloadMode
+  // Only ever set (and only ever read by a caller) when mode === 'folder'.
+  folder?: FileSystemDirectoryHandle
+  useDownloadManager?: boolean
 }
 
 interface Props {
@@ -13,25 +16,38 @@ interface Props {
   onConfirm: (opts: DownloadOptions) => void
 }
 
-// Shown before a streamed-to-folder "Download all" actually starts — lets
-// the user see (and change) which folder it's about to use instead of it
-// silently reusing the remembered default, and choose whether this download
-// should hand off to the shared Downloads popup window (survives closing
-// this tab) or just stream in this tab like before. Only relevant to the
-// File System Access path (see fsAccess.supportsDirectoryPicker) — App.tsx
-// only ever renders this when that's true.
+// The single entry point for every "download everything" action — the
+// downloads table's per-row button and the detail view's "Download all"
+// button both open this now, rather than each encoding its own default/
+// fallback logic and the app ending up with three inconsistent-looking
+// download paths scattered across two components (see ROADMAP.md's
+// "Streamline the download UX" for the history). Shows every mode this
+// browser can actually do — folder-streaming is simply absent from the
+// choices, not present-but-disabled, on a browser without File System
+// Access (see fsAccess.supportsDirectoryPicker) — remembers the last mode
+// chosen as next time's default (preferences.ts), and for folder mode
+// specifically lets the user see/change the destination folder and choose
+// whether to hand off to the shared Downloads popup window before
+// anything actually starts.
 export function DownloadOptionsDialog({ download, onClose, onConfirm }: Props) {
+  const canUseFolder = supportsDirectoryPicker()
+  const [mode, setMode] = useState<DownloadMode>(() => {
+    const stored = getDownloadMode()
+    return stored === 'folder' && !canUseFolder ? 'individual' : stored
+  })
   const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null)
-  const [loadingFolder, setLoadingFolder] = useState(true)
+  const [loadingFolder, setLoadingFolder] = useState(canUseFolder)
   const [useDownloadManager, setUseDownloadManager] = useState(true)
   const [status, setStatus] = useState<{ kind: 'idle' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
+    if (!canUseFolder) return
     // queryPermission alone needs no user gesture, so this is safe on mount.
     getDefaultDirectory().then((handle) => {
       setFolder(handle)
       setLoadingFolder(false)
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -52,13 +68,23 @@ export function DownloadOptionsDialog({ download, onClose, onConfirm }: Props) {
     }
   }
 
-  // Deliberately synchronous up to here — onConfirm (App.tsx's
-  // startStreamedDownload) opens the Downloads popup window as its own very
-  // first statement, before any await, so it still runs inside this click's
-  // user-activation. Nothing async happens in this function itself.
+  function selectMode(next: DownloadMode) {
+    setMode(next)
+    setDownloadMode(next)
+  }
+
+  // Deliberately synchronous up to here for folder mode — onConfirm
+  // (App.tsx's startDownloadAll/startStreamedDownload) opens the Downloads
+  // popup window as its own very first statement, before any await, so it
+  // still runs inside this click's user activation — the same requirement
+  // showDirectoryPicker itself has. Nothing async happens in this function.
   function handleConfirm() {
-    if (!folder) return
-    onConfirm({ folder, useDownloadManager })
+    if (mode === 'folder') {
+      if (!folder) return
+      onConfirm({ mode, folder, useDownloadManager })
+    } else {
+      onConfirm({ mode })
+    }
     onClose()
   }
 
@@ -72,24 +98,54 @@ export function DownloadOptionsDialog({ download, onClose, onConfirm }: Props) {
           </button>
         </div>
 
-        <div className="api-key-row">
-          <code className="api-key-value">
-            {loadingFolder ? 'Checking…' : (folder?.name ?? "No folder chosen yet")}
-          </code>
-          <button type="button" onClick={handleChangeFolder}>
-            {folder ? 'Change folder' : 'Choose folder'}
-          </button>
+        <div className="download-mode-options">
+          {canUseFolder && (
+            <label className="download-mode-option">
+              <input type="radio" name="download-mode" checked={mode === 'folder'} onChange={() => selectMode('folder')} />
+              <span>
+                <strong>All files → a folder you pick</strong>
+                <br />
+                Streamed straight to disk, no browser download prompts.
+              </span>
+            </label>
+          )}
+          <label className="download-mode-option">
+            <input type="radio" name="download-mode" checked={mode === 'zip'} onChange={() => selectMode('zip')} />
+            <span>
+              <strong>One zip archive</strong>
+              <br />
+              Everything bundled provider-side into a single file.
+            </span>
+          </label>
+          <label className="download-mode-option">
+            <input type="radio" name="download-mode" checked={mode === 'individual'} onChange={() => selectMode('individual')} />
+            <span>
+              <strong>Individual files</strong>
+              <br />
+              Each file downloads on its own, the normal browser way{!canUseFolder ? ' — no folder picker on this browser' : ''}.
+            </span>
+          </label>
         </div>
-        <p className="settings-help">
-          Files stream straight into this folder. Remembered for next time — change it here, or later
-          in Settings → Downloads. Note: the browser won't let you pick Desktop/Documents/Downloads
-          itself (a deliberate Chrome restriction) — choose a subfolder inside it instead.
-        </p>
 
-        <label className="download-manager-check">
-          <input type="checkbox" checked={useDownloadManager} onChange={(e) => setUseDownloadManager(e.target.checked)} />
-          Send to the Downloads window — keeps going even if you close this tab
-        </label>
+        {mode === 'folder' && (
+          <>
+            <div className="api-key-row">
+              <code className="api-key-value">{loadingFolder ? 'Checking…' : (folder?.name ?? "No folder chosen yet")}</code>
+              <button type="button" onClick={handleChangeFolder}>
+                {folder ? 'Change folder' : 'Choose folder'}
+              </button>
+            </div>
+            <p className="settings-help">
+              Remembered for next time — change it here, or later in Settings → Downloads. Note: the
+              browser won't let you pick Desktop/Documents/Downloads itself (a deliberate Chrome
+              restriction) — choose a subfolder inside it instead.
+            </p>
+            <label className="download-manager-check">
+              <input type="checkbox" checked={useDownloadManager} onChange={(e) => setUseDownloadManager(e.target.checked)} />
+              Send to the Downloads window — keeps going even if you close this tab
+            </label>
+          </>
+        )}
 
         {status.kind === 'error' && <p className="settings-error">Failed to change folder: {status.message}</p>}
 
@@ -97,7 +153,7 @@ export function DownloadOptionsDialog({ download, onClose, onConfirm }: Props) {
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="download-options-confirm" onClick={handleConfirm} disabled={!folder}>
+          <button type="button" className="download-options-confirm" onClick={handleConfirm} disabled={mode === 'folder' && !folder}>
             Download
           </button>
         </div>

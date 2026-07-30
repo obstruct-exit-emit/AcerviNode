@@ -17,7 +17,6 @@ import {
   type TorBoxAccount,
 } from '../api'
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
-import { getDownloadMode, setDownloadMode, type DownloadMode } from '../preferences'
 import { formatBytes } from '../format'
 
 // One row of the "Save path overrides" list — kept as its own component,
@@ -93,7 +92,6 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
   const [newOverrideCategory, setNewOverrideCategory] = useState('')
   const [newOverridePath, setNewOverridePath] = useState('')
   const [newOverrideStatus, setNewOverrideStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
-  const [downloadMode, setDownloadModeState] = useState<DownloadMode>(() => getDownloadMode())
   const [defaultFolderName, setDefaultFolderName] = useState<string | null>(null)
   const [folderStatus, setFolderStatus] = useState<{ kind: 'idle' | 'error'; message?: string }>({ kind: 'idle' })
 
@@ -480,29 +478,12 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
 
       <section className="settings-card">
         <h2>Downloads</h2>
-        <div className="general-form">
-          <label>
-            Default "Download all" behavior
-            <select
-              value={downloadMode}
-              onChange={(e) => {
-                const mode = e.target.value as DownloadMode
-                setDownloadMode(mode)
-                setDownloadModeState(mode)
-              }}
-            >
-              <option value="individual">Individual files</option>
-              <option value="zip">Single zip archive</option>
-            </select>
-          </label>
-        </div>
         <p className="settings-help">
           Applies to the Manual tab only — a Managed download is already being fetched to local disk
-          automatically, so there's nothing to manually download. Individual files are streamed
-          straight into a folder you pick (Chromium-based browsers only — Firefox/Safari open one tab
-          per file instead). Zip resolves the whole download as one provider-zipped archive. Either
-          way, both options stay available per-download in the detail view — this only sets the
-          per-row button's default. Stored in this browser only, not on the server.
+          automatically, so there's nothing to manually download. Which mode to use (a folder,
+          a zip, or individual files) is chosen each time in the download dialog itself, which
+          remembers your last choice as next time's default. This section just manages the
+          remembered destination folder for "a folder you pick" mode (Chromium-based browsers only).
         </p>
 
         {supportsDirectoryPicker() && (
@@ -519,11 +500,10 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
               )}
             </div>
             <p className="settings-help">
-              Default folder for "Individual files" downloads — picked once, then reused silently
-              (no prompt) for every download after, as long as this browser still has permission for
-              it. Only the folder's name is shown here; browsers don't expose its full path. Note: the
-              browser won't let you pick Desktop/Documents/Downloads itself (a deliberate Chrome
-              restriction) — choose a subfolder inside it instead.
+              Picked once, then reused silently (no prompt) for every download after, as long as this
+              browser still has permission for it. Only the folder's name is shown here; browsers
+              don't expose its full path. Note: the browser won't let you pick Desktop/Documents/
+              Downloads itself (a deliberate Chrome restriction) — choose a subfolder inside it instead.
             </p>
             {folderStatus.kind === 'error' && <p className="settings-error">Failed to change folder: {folderStatus.message}</p>}
           </>
