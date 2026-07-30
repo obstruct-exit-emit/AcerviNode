@@ -655,6 +655,19 @@ directly with the user before continuing rather than assumed, and it turned
 out to be them cleaning up their own downloads through the web UI in
 parallel with this testing, not a bug.
 
+**Fourth immediate follow-on**: the Source-backfill work above still left one
+real gap — a usenet download added through AcerviNode's own "+ Add" form as
+an uploaded `.nzb` file (not a URL) had no `Source` and no way to get one
+backfilled either, since the raw bytes only ever existed in that one
+request. The user asked specifically for this to be storable so no orphaned
+file could ever be left behind — landed on storing the bytes directly on the
+`downloads` row as a `BLOB` rather than a file on disk, so deleting the row
+removes the stored file atomically with it, no separate cleanup step and no
+possibility of an orphan. Deliberately excluded from the normal list/detail
+read path (only the cheap filename is included there) so every poll doesn't
+pay for the file bytes; the actual blob is fetched once, only when Re-add
+actually needs it. See [CHANGELOG](CHANGELOG.md) for full detail.
+
 💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
 restart**: requested by the user after the Downloads popup work above. Once a
 download link is resolved, AcerviNode's server is already out of the data

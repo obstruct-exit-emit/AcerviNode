@@ -102,6 +102,29 @@ type Download struct {
 	// list, not just a transient fetch failure — see internal/api's
 	// handleReAddDownload).
 	Source string
+	// SourceFile is the raw bytes of an uploaded .nzb, for a usenet download
+	// added via file upload rather than a URL (Source stays empty in that
+	// case — see above). Unlike Source, this doesn't apply to torrents (a
+	// magnet is always reconstructable from just the hash — see
+	// torbox.magnetFromHash — so there's nothing to gain from storing the
+	// file) or webdl (link-only, no file-upload path exists at all). Stored
+	// directly on the row rather than as a separate file on disk,
+	// deliberately: deleting the row removes the stored file atomically
+	// with it, no separate cleanup step and no possibility of an orphaned
+	// file surviving a deleted download. What ReAddDownload falls back to
+	// resubmitting via AddNZBFile when Source is empty — see
+	// handleReAddDownload.
+	//
+	// Deliberately NOT included in downloadColumns/scanDownload — it would
+	// mean every list/detail fetch pulls the full file bytes along with
+	// everything else, for a field that's read exactly once, only during a
+	// Re-add. Only ever populated here when explicitly constructing a row
+	// to pass to InsertDownload; a row returned by GetDownloadByID etc.
+	// always has this nil regardless of whether one is actually stored —
+	// use SourceFileName (cheap, always scanned) to check for one, and
+	// GetSourceFile to fetch the bytes on demand.
+	SourceFile     []byte
+	SourceFileName string
 	// AddedVia is permanent from the moment this row is inserted — see the
 	// AddedVia type.
 	AddedVia AddedVia
@@ -138,11 +161,12 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 		INSERT INTO downloads (
 			id, provider, provider_download_id, kind, hash, name, category,
 			save_path, size_bytes, state, progress, added_at, updated_at,
-			completed_at, error_message, source, added_via
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			completed_at, error_message, source, added_via, source_file, source_file_name
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Provider, d.ProviderDownloadID, string(d.Kind), nullable(d.Hash), d.Name,
 		nullable(d.Category), nullable(d.SavePath), d.SizeBytes, d.State, d.Progress,
 		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage), nullable(d.Source), string(d.AddedVia),
+		nullableBytes(d.SourceFile), nullable(d.SourceFileName),
 	)
 	if err != nil {
 		return fmt.Errorf("insert download %s: %w", d.ID, err)
@@ -171,6 +195,21 @@ func (db *DB) GetDownloadByProviderID(ctx context.Context, provider, providerDow
 	return db.scanOneDownload(ctx,
 		`SELECT `+downloadColumns+` FROM downloads WHERE provider = ? AND provider_download_id = ?`,
 		provider, providerDownloadID)
+}
+
+// GetSourceFile fetches a row's stored .nzb bytes on demand — deliberately
+// separate from the normal Download read path (see Download.SourceFile's
+// doc comment), since this is only ever needed once, during
+// handleReAddDownload's fallback for a usenet download with no Source URL.
+// Returns ("", nil, nil) if the row exists but has nothing stored (a
+// URL-based add, a torrent, a webdl, or a discovered download).
+func (db *DB) GetSourceFile(ctx context.Context, id string) (filename string, data []byte, err error) {
+	var name sql.NullString
+	err = db.QueryRowContext(ctx, `SELECT source_file_name, source_file FROM downloads WHERE id = ?`, id).Scan(&name, &data)
+	if err != nil {
+		return "", nil, fmt.Errorf("get source file %s: %w", id, err)
+	}
+	return name.String, data, nil
 }
 
 // ListDownloads returns every download of the given kind, most recently added first.
@@ -675,7 +714,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
 	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
-	retry_count, next_retry_at, source, added_via, missing_count`
+	retry_count, next_retry_at, source, added_via, missing_count, source_file_name`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, args...)
@@ -693,13 +732,13 @@ type rowScanner interface {
 
 func scanDownload(row rowScanner) (*Download, error) {
 	d := &Download{}
-	var hash, category, savePath, errorMessage, source sql.NullString
+	var hash, category, savePath, errorMessage, source, sourceFileName sql.NullString
 	var kind, addedVia string
 	if err := row.Scan(
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
-		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount,
+		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount, &sourceFileName,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}
@@ -709,6 +748,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 	d.SavePath = savePath.String
 	d.ErrorMessage = errorMessage.String
 	d.Source = source.String
+	d.SourceFileName = sourceFileName.String
 	d.AddedVia = AddedVia(addedVia)
 	return d, nil
 }
@@ -718,6 +758,13 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nullableBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }
 
 func checkRowsAffected(res sql.Result, id string) error {

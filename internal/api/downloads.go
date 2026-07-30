@@ -41,14 +41,15 @@ type downloadResponse struct {
 	// hits the configured max, at which point it moves to error instead).
 	RetryCount  int     `json:"retry_count,omitempty"`
 	NextRetryAt *string `json:"next_retry_at,omitempty"`
-	// HasSource reports whether Source (never exposed directly — it's the
-	// original magnet/NZB URL/hoster link, not otherwise needed by the UI)
-	// is non-empty, i.e. whether POST .../readd could actually resubmit this
-	// download if it's in error state. False for a download added via an
-	// uploaded file, or discovered (adopted from the provider's own account
-	// with no original link ever known) — see handleReAddDownload, which
-	// 400s on an empty Source. Not scoped to added_via=arr: Re-add works for
-	// any kind/added_via as long as a Source is stored (see the web UI's
+	// HasSource reports whether there's something stored to resubmit this
+	// download with if it's in error state — Source (never exposed
+	// directly: the original magnet/NZB URL/hoster link) for a link-based
+	// add, or a stored file for a usenet download added via an uploaded
+	// .nzb (see database.Download.SourceFile). False for a discovered
+	// download (adopted from the provider's own account with no original
+	// link or file ever known) — see handleReAddDownload, which 400s when
+	// neither is present. Not scoped to added_via=arr: Re-add works for any
+	// kind/added_via as long as one of the two is stored (see the web UI's
 	// error-state action buttons).
 	HasSource bool `json:"has_source"`
 	// AddedVia is "arr" (added through the qBittorrent/SABnzbd compat shim,
@@ -98,7 +99,7 @@ func toDownloadResponse(d *database.Download) downloadResponse {
 		RetryCount:   d.RetryCount,
 		NextRetryAt:  nextRetryAt,
 		AddedVia:     string(d.AddedVia),
-		HasSource:    d.Source != "",
+		HasSource:    d.Source != "" || d.SourceFileName != "",
 	}
 }
 

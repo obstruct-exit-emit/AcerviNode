@@ -892,6 +892,28 @@ func TestHandleGetDownload_ExposesHasSource(t *testing.T) {
 	if !gotWithSource.HasSource {
 		t.Error("has_source = false for a row with a stored Source, want true")
 	}
+
+	// A usenet download added via an uploaded .nzb file has no Source URL,
+	// but does have a stored SourceFile — has_source should reflect that too.
+	withSourceFile := &database.Download{
+		ID: "dl-p3-with-source-file", Provider: "fake", ProviderDownloadID: "p3",
+		Kind: database.KindUsenet, Hash: "hash-p3", Name: "Test Download",
+		State:          database.StateDownloading,
+		SourceFile:     []byte("fake nzb bytes"),
+		SourceFileName: "release.nzb",
+	}
+	if err := db.InsertDownload(context.Background(), withSourceFile); err != nil {
+		t.Fatalf("seed InsertDownload() error = %v", err)
+	}
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+withSourceFile.ID))
+	var gotWithSourceFile downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &gotWithSourceFile); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !gotWithSourceFile.HasSource {
+		t.Error("has_source = false for a row with a stored SourceFile, want true")
+	}
 }
 
 func TestHandleGetDownload_ExposesRetryInfo(t *testing.T) {
@@ -1267,6 +1289,37 @@ func TestHandleReAddDownload_Usenet(t *testing.T) {
 	}
 	if provider.addedURL != nzbURL {
 		t.Errorf("AddNZBURL called with %q, want %q", provider.addedURL, nzbURL)
+	}
+}
+
+// TestHandleReAddDownload_UsenetFileFallback proves a usenet download with
+// no Source (added via an uploaded .nzb file, not a URL) falls back to
+// resubmitting the stored file bytes via AddNZBFile instead of AddNZBURL —
+// see database.Download.SourceFile.
+func TestHandleReAddDownload_UsenetFileFallback(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "new-nzb-id"}
+	srv, db := newTestServer(t, nil, provider, nil)
+
+	d := &database.Download{
+		ID: "dl-file-based", Provider: "torbox", ProviderDownloadID: "old-nzb-id",
+		Kind: database.KindUsenet, Hash: "hash-old-nzb-id", Name: "Test Download",
+		State: database.StateError, Progress: 1.0,
+		SourceFile: []byte("fake nzb bytes"), SourceFileName: "release.nzb",
+	}
+	if err := db.InsertDownload(context.Background(), d); err != nil {
+		t.Fatalf("seed InsertDownload() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedURL != "" {
+		t.Errorf("AddNZBURL should not have been called, got url=%q", provider.addedURL)
+	}
+	if provider.addedFilename != "release.nzb" || string(provider.addedFile) != "fake nzb bytes" {
+		t.Errorf("AddNZBFile called with filename=%q data=%q, want release.nzb/fake nzb bytes", provider.addedFilename, provider.addedFile)
 	}
 }
 
@@ -1742,6 +1795,38 @@ func TestHandleAddUsenet_File(t *testing.T) {
 	}
 	if provider.addedFilename != "release.nzb" || string(provider.addedFile) != "fake nzb bytes" {
 		t.Errorf("AddNZBFile called with filename=%q data=%q", provider.addedFilename, provider.addedFile)
+	}
+}
+
+// TestHandleAddUsenet_File_StoresSourceFile proves the uploaded bytes are
+// persisted on the row (not just forwarded to the provider) — what makes
+// Re-add possible later for a download that has no Source URL at all. See
+// database.Download.SourceFile.
+func TestHandleAddUsenet_File_StoresSourceFile(t *testing.T) {
+	provider := &fakeProvider{addID: "nzb-3", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, nil, provider, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"category": "tv"}, "file", "release.nzb", []byte("fake nzb bytes"))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.HasSource {
+		t.Error("has_source = false right after a file-based add, want true")
+	}
+
+	filename, data, err := db.GetSourceFile(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetSourceFile() error = %v", err)
+	}
+	if filename != "release.nzb" || string(data) != "fake nzb bytes" {
+		t.Errorf("GetSourceFile() = %q/%q, want release.nzb/fake nzb bytes", filename, data)
 	}
 }
 

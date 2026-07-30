@@ -35,6 +35,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Stored NZB files enable Re-add for file-uploaded usenet downloads** —
+  direct follow-on to the Source-backfill entry below, prompted by the user
+  asking to store NZB info specifically so no orphaned file could ever be
+  left on disk. A usenet download added through AcerviNode's own "+ Add"
+  form as an uploaded `.nzb` (not a URL) had no `Source` and, unlike a
+  torrent (covered by the hash-reconstructed magnet) or a discovered NZB
+  (nothing was ever uploaded to AcerviNode for one), no way to backfill one
+  either — the raw bytes only ever existed in that one request. Chose to
+  store them directly on the `downloads` row as a `BLOB`
+  (`source_file`/`source_file_name`, migration `0008_source_file.sql`)
+  rather than a separate file on disk specifically so the file's lifecycle
+  is tied to the row's: deleting the download (`DeleteDownload`) removes
+  the stored file atomically with it, with no separate cleanup step and no
+  way for a stray file to survive a deleted row. The blob itself is
+  deliberately excluded from the normal list/detail read path
+  (`downloadColumns`/`scanDownload`) — only the cheap `source_file_name` is
+  included there, enough to compute `has_source` without paying for the
+  file bytes on every poll; the actual bytes are fetched via a dedicated
+  `GetSourceFile`, called exactly once, only when `handleReAddDownload`
+  actually needs to resubmit them. `handleAddUsenet`'s file-upload path now
+  stores the bytes right after a successful add; `handleReAddDownload`
+  falls back to `AddNZBFile` with the stored bytes when `Source` is empty.
+  `has_source` (and so the web UI's Re-add button) now reflects either
+  `Source` or a stored file being present. New tests covering the full
+  round trip: storing via a real file-upload add, fetching back via
+  `GetSourceFile`, confirming the blob is absent from a normal row read
+  while the filename isn't, and `handleReAddDownload` actually calling
+  `AddNZBFile` (not `AddNZBURL`) with the right bytes for a file-based row.
+  See [Providers](docs/providers.md#re-add-for-a-file-uploaded-nzb-not-discovered).
+
 - **Extended Re-add to Manual downloads, and a streamed "Download all" button
   in the detail view** — immediate follow-on to the vanish-detection feature
   below, prompted directly by the user after seeing a healthy download's

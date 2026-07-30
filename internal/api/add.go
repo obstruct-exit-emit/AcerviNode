@@ -123,9 +123,11 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		id           debrid.ProviderDownloadID
-		err          error
-		fallbackName string
+		id             debrid.ProviderDownloadID
+		err            error
+		fallbackName   string
+		uploadedFile   []byte
+		uploadedFileNm string
 	)
 	if header != nil {
 		data, readErr := readFormFile(header)
@@ -134,6 +136,8 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fallbackName = header.Filename
+		uploadedFile = data
+		uploadedFileNm = header.Filename
 		id, err = s.usenetProvider.AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: header.Filename})
 	} else {
 		fallbackName = nzbURL
@@ -164,8 +168,13 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		State:              database.LocalStateFromProvider(status.State),
 		Progress:           status.Progress,
 		// Source is the NZB URL itself for a URL-based add, empty for a
-		// .nzb file upload — see database.Download.Source.
-		Source: nzbURL,
+		// .nzb file upload — see database.Download.Source. SourceFile is
+		// the reverse: the raw uploaded bytes for a file-based add, empty
+		// for a URL-based one — see database.Download.SourceFile. Together
+		// these are what let Re-add work either way.
+		Source:         nzbURL,
+		SourceFile:     uploadedFile,
+		SourceFileName: uploadedFileNm,
 		// AddedViaManual: this endpoint is only ever hit directly (the web
 		// UI's own "+ Add" form) — an *arr app has no way to reach it, it
 		// only knows the qBittorrent/SABnzbd shims — see database.AddedVia.
@@ -251,11 +260,16 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 // original provider-side download itself is gone (e.g. expired from the
 // provider's own list, as opposed to a transient fetch failure RetryDownload
 // alone can recover from). Resubmits the download's stored Source (the
-// original magnet/NZB URL/hoster link) to the provider as a brand new add, then points
-// the local row at the new provider_download_id. Only valid for a download
-// that's actually given up (StateError) and was added via a link rather
-// than an uploaded file (Source is empty for file uploads — nothing to
-// resubmit without the raw bytes).
+// original magnet/NZB URL/hoster link) to the provider as a brand new add,
+// then points the local row at the new provider_download_id. For a usenet
+// download with no Source (added via an uploaded .nzb file, not a URL),
+// falls back to resubmitting the stored file bytes instead — see
+// database.Download.SourceFile. Only valid for a download that's actually
+// given up (StateError) and has *something* stored to resubmit — neither a
+// torrent nor webdl file upload has a SourceFile fallback (a torrent
+// already gets a resubmittable magnet reconstructed from just its hash —
+// see torbox.magnetFromHash — and webdl has no file-upload path at all), so
+// for those Source empty really does mean nothing can be done automatically.
 func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	d, ok := s.downloadByID(w, r)
@@ -266,8 +280,8 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "download is not in error state", http.StatusConflict)
 		return
 	}
-	if d.Source == "" {
-		http.Error(w, "no original source stored for this download (it was added via file upload) — cannot re-add automatically", http.StatusBadRequest)
+	if d.Source == "" && d.SourceFileName == "" {
+		http.Error(w, "no original source stored for this download — cannot re-add automatically", http.StatusBadRequest)
 		return
 	}
 
@@ -290,7 +304,16 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		provName = s.usenetProvider.Name()
-		newID, err = s.usenetProvider.AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+		if d.Source != "" {
+			newID, err = s.usenetProvider.AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+		} else {
+			var filename string
+			var data []byte
+			filename, data, err = s.db.GetSourceFile(ctx, d.ID)
+			if err == nil {
+				newID, err = s.usenetProvider.AddNZBFile(ctx, filename, data, debrid.AddOptions{Name: d.Name})
+			}
+		}
 	case database.KindWebDL:
 		if s.webDownloadProvider == nil {
 			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)

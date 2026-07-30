@@ -391,14 +391,15 @@ before the provider happened to report one — gated the same way as the
 existing hash/name backfill (only when `Source` is currently empty, so this
 never overwrites a value that was already there).
 
-**The one real limit**: once a download has *already* vanished from the
-provider entirely (the scenario the vanish-detection feature above catches),
-there's nothing left to backfill from — the provider has no record of it at
-all anymore, `original_url` included. Source can only ever be backfilled
-while the download is still visible in a listing; a discovered usenet
-download that was originally added via a file upload (so `original_url` was
-always `null`, even before it vanished) has no recoverable Source either way,
-and genuinely can't support Re-add.
+**The remaining limit, narrowed further below**: once a download has
+*already* vanished from the provider entirely (the scenario the
+vanish-detection feature above catches), there's nothing left to backfill
+from — the provider has no record of it at all anymore, `original_url`
+included. Source can only ever be backfilled while the download is still
+visible in a listing; a **discovered** usenet download that was originally
+added via a file upload (so `original_url` was always `null`, even before it
+vanished) has no recoverable `Source` either way. This part is unavoidable —
+AcerviNode never had the bytes, and neither does the provider once it's gone.
 
 Verified live end to end, not just in tests: a real torrent (Big Buck Bunny,
 a Creative Commons short film) was added directly through TorBox — bypassing
@@ -410,6 +411,30 @@ reconstructed magnet and landing a fresh, real `queued` torrent on the
 account. A real NZB file (provided directly for this test) confirmed usenet's
 `original_url` is `null` for a file-upload-based add, matching the documented
 limit above.
+
+#### Re-add for a file-uploaded NZB (not discovered)
+
+The one case that *is* recoverable: a usenet download added **through
+AcerviNode's own "+ Add" form** as an uploaded `.nzb` file (not a URL, and not
+discovered). `Source` stays empty for it — same as any file upload — but
+unlike a torrent (already covered by the hash-reconstructed magnet) or a
+discovered NZB (nothing was ever uploaded to AcerviNode), the raw bytes
+*were* available at add time, right there in the request. `handleAddUsenet`
+now stores them directly on the row (`downloads.source_file`/
+`source_file_name`, migration `0008_source_file.sql`), and
+`handleReAddDownload` falls back to resubmitting them via `AddNZBFile` when
+`Source` is empty but a file is stored.
+
+Stored as a `BLOB` column on the row itself, deliberately, rather than a
+separate file on disk: deleting the row (`DeleteDownload`) removes the stored
+file atomically with it — no separate cleanup step, and no way for a stray
+orphaned file to survive a deleted download the way a disk-based approach
+would risk. The blob is deliberately excluded from `downloadColumns`/
+`scanDownload` (the normal read path every list/detail fetch uses) — only
+`source_file_name` (cheap) is included there, enough to compute `has_source`
+without paying for the file bytes on every poll. The actual bytes are only
+ever fetched via a dedicated `GetSourceFile`, called exactly once, the moment
+`handleReAddDownload` actually needs to resubmit them.
 
 ## TorBox (`internal/debrid/torbox`)
 

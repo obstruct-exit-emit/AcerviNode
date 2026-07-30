@@ -92,6 +92,83 @@ func TestInsertDownload_WebDLKind(t *testing.T) {
 	}
 }
 
+// TestInsertDownload_SourceFileRoundTripsViaGetSourceFile proves a usenet
+// download's stored .nzb bytes/filename survive InsertDownload and can be
+// fetched back via GetSourceFile — what handleReAddDownload uses to
+// resubmit a file-uploaded NZB.
+func TestInsertDownload_SourceFileRoundTripsViaGetSourceFile(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindUsenet)
+	d.Source = "" // file-based add, not URL-based
+	d.SourceFile = []byte("fake nzb file contents")
+	d.SourceFileName = "release.nzb"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	filename, data, err := db.GetSourceFile(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetSourceFile() error = %v", err)
+	}
+	if filename != "release.nzb" || string(data) != "fake nzb file contents" {
+		t.Errorf("GetSourceFile() = %q/%q, want release.nzb/fake nzb file contents", filename, data)
+	}
+}
+
+// TestInsertDownload_SourceFileNotIncludedInNormalScan proves the raw file
+// bytes are deliberately excluded from the normal Download read path
+// (GetDownloadByID etc.) — see Download.SourceFile's doc comment — while
+// SourceFileName (cheap) still comes through normally, which is what lets
+// has_source be computed without paying for the blob on every list/detail
+// fetch.
+func TestInsertDownload_SourceFileNotIncludedInNormalScan(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindUsenet)
+	d.Source = ""
+	d.SourceFile = []byte("fake nzb file contents")
+	d.SourceFileName = "release.nzb"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.SourceFileName != "release.nzb" {
+		t.Errorf("SourceFileName = %q, want release.nzb", got.SourceFileName)
+	}
+	if got.SourceFile != nil {
+		t.Errorf("SourceFile = %q, want nil (not included in the normal scan)", got.SourceFile)
+	}
+}
+
+// TestGetSourceFile_EmptyForRowWithNothingStored proves GetSourceFile
+// returns a clean empty result (not an error) for a row that never had a
+// file stored — a URL-based add, a torrent, a webdl, or a discovered
+// download.
+func TestGetSourceFile_EmptyForRowWithNothingStored(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	filename, data, err := db.GetSourceFile(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetSourceFile() error = %v", err)
+	}
+	if filename != "" || data != nil {
+		t.Errorf("GetSourceFile() = %q/%v, want empty/nil", filename, data)
+	}
+}
+
 func TestGetDownloadByID_NotFound(t *testing.T) {
 	db := openTestDB(t)
 	got, err := db.GetDownloadByID(context.Background(), "does-not-exist")
