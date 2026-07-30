@@ -22,6 +22,76 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
+## Path to daily-driver parity (replacing rdt-client / decypharr)
+
+Requested directly: a prioritized, trackable punch list of what stands between
+"works great for me" and genuinely replacing rdt-client/decypharr as a daily
+driver — not just a feature diff, but ranked by what actually blocks trusting
+this unattended. Recommendations first.
+
+**Do next** — scoped, self-contained, verifiable without a second provider:
+
+- 💡 **Mass-vanish circuit breaker.** The vanish-detection feature (Phase 7
+  follow-on, see below) debounces a *single* item disappearing across a few
+  ticks, but has no defense against a provider listing coming back
+  successful-but-empty (or heavily truncated) during some backend hiccup —
+  every currently-tracked Manual download would get incorrectly flagged
+  "gone" within the same few ticks, all at once. Needs a sanity check (e.g.
+  refuse to flag anything in a pass where a large fraction of tracked items
+  would vanish at once) before this is safe to trust unattended for months.
+- 💡 **Rate-limit-specific backoff for 429s.** `max_concurrent_downloads`
+  (Phase 3 follow-on) already exists for a related earlier incident, but
+  there's no backoff specific to a provider rate-limit response itself — it
+  just waits for the next tick. Found not-hypothetical today: a burst of
+  manual live testing sustained a real TorBox 429 for several minutes
+  straight.
+- 💡 **Retention/cleanup policy.** Nothing today prunes old completed
+  downloads — not from local disk, not from the `downloads` table. Fine for
+  a week of testing; needs a story (age-based cleanup, a
+  clean-up-after-import toggle, or similar) before a year of continuous use.
+- 💡 **Database backup story.** No documented or automated backup for
+  `acervinode.db` — losing it loses all local history/state (though
+  re-discovery would eventually re-adopt anything still on the provider).
+- 💡 **Alerting/observability.** The only way to know the importer's stuck
+  today is manually tailing the log, which is what verification has relied
+  on all along. A "notify if the importer hasn't ticked successfully in N
+  minutes" story matters a lot for genuinely unattended use.
+
+**Verify before trusting this daily** — process, not code:
+
+- 💡 **Extended burn-in against real, continuous Sonarr/Radarr traffic.**
+  Everything shipped so far has been live-verified in short, deliberate
+  bursts. The delete-race fixed in the Source-backfill follow-on (below)
+  only surfaced under rapid, repeated real testing — exactly the class of
+  bug a quick smoke test won't catch but weeks of real unattended use will.
+
+**Already tracked, real but lower urgency:**
+
+- 💡 Real pause/resume for streamed Manual downloads, surviving a restart —
+  see the entry below.
+- 💡 Streamline the download UX (four separate download paths) — see the
+  entry below.
+- 💡 **Reconsider Docker packaging.** Deliberately deferred so far (Phase 5)
+  in favor of a Linux binary + systemd, but worth revisiting specifically
+  for "replace decypharr" — most decypharr users today are already running
+  it inside a docker-compose stack alongside Sonarr/Radarr, and a binary
+  that doesn't fit that pattern is a real adoption friction point even
+  though it isn't a functional gap.
+
+**Structural, blocking, and honestly big:**
+
+- ⏳ **No mount — everything fully downloads to local disk.** decypharr's
+  actual headline trick is a FUSE mount instead of a copy (Phase 2's own
+  notes call this out explicitly: "direct download over HTTP... not a FUSE
+  mount"). Fine at a few hundred GB; at a multi-TB library, disk space
+  becomes the hard limit instead of debrid quota. The single biggest
+  architectural difference from decypharr specifically.
+- ⏳ **Provider breadth.** TorBox-only. Real-Debrid is written into Phase 4
+  but genuinely blocked — no account available to verify against, and this
+  project's whole discipline has been "verify live, don't guess."
+
+---
+
 ## Phase 0 — Foundation ✅
 
 - Go backend, single self-contained binary, no runtime dependencies
