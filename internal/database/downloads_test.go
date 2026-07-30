@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -565,6 +566,68 @@ func TestListDownloadsDueForRetry(t *testing.T) {
 	}
 }
 
+// TestListDownloadsEligibleForCleanup proves the cleanup query's scoping:
+// only a Managed (arr) download in ready_for_import older than the cutoff
+// qualifies — not one that's too recent, not a Manual download in the
+// analogous provider_completed "available" state, and not a Managed
+// download still in provider_completed/error (never reached
+// ready_for_import at all).
+func TestListDownloadsEligibleForCleanup(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Now().UTC()
+	cutoff := now.Add(-7 * 24 * time.Hour)
+
+	old := newTestDownload(KindTorrent)
+	old.ProviderDownloadID = "old"
+	old.AddedVia = AddedViaArr
+	old.State = StateReadyForImport
+	oldCompletedAt := now.Add(-10 * 24 * time.Hour)
+	old.CompletedAt = &oldCompletedAt
+	if err := db.InsertDownload(ctx, old); err != nil {
+		t.Fatalf("InsertDownload(old) error = %v", err)
+	}
+	if err := db.UpdateDownloadStatus(ctx, old.ID, StateReadyForImport, 1, old.SizeBytes, &oldCompletedAt, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus(old) error = %v", err)
+	}
+
+	recent := newTestDownload(KindTorrent)
+	recent.ProviderDownloadID = "recent"
+	recent.AddedVia = AddedViaArr
+	recent.State = StateReadyForImport
+	if err := db.InsertDownload(ctx, recent); err != nil {
+		t.Fatalf("InsertDownload(recent) error = %v", err)
+	}
+	recentCompletedAt := now.Add(-1 * time.Hour)
+	if err := db.UpdateDownloadStatus(ctx, recent.ID, StateReadyForImport, 1, recent.SizeBytes, &recentCompletedAt, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus(recent) error = %v", err)
+	}
+
+	oldManual := newTestDownload(KindTorrent)
+	oldManual.ProviderDownloadID = "old-manual"
+	oldManual.AddedVia = AddedViaManual
+	oldManual.State = StateProviderCompleted
+	if err := db.InsertDownload(ctx, oldManual); err != nil {
+		t.Fatalf("InsertDownload(oldManual) error = %v", err)
+	}
+
+	oldNotYetImported := newTestDownload(KindTorrent)
+	oldNotYetImported.ProviderDownloadID = "old-not-yet-imported"
+	oldNotYetImported.AddedVia = AddedViaArr
+	oldNotYetImported.State = StateProviderCompleted
+	if err := db.InsertDownload(ctx, oldNotYetImported); err != nil {
+		t.Fatalf("InsertDownload(oldNotYetImported) error = %v", err)
+	}
+
+	eligible, err := db.ListDownloadsEligibleForCleanup(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("ListDownloadsEligibleForCleanup() error = %v", err)
+	}
+	if len(eligible) != 1 || eligible[0].ID != old.ID {
+		t.Errorf("eligible = %+v, want exactly [old]", eligible)
+	}
+}
+
 func TestLocalStateFromProvider(t *testing.T) {
 	tests := []struct {
 		in   debrid.DownloadState
@@ -935,6 +998,137 @@ func TestRefreshFromProvider_AlreadyErroredManualDownload_NotDoubleFlagged(t *te
 	}
 	if d.ErrorMessage != "stalled (no seeds)" {
 		t.Errorf("ErrorMessage = %q, want the original reason untouched", d.ErrorMessage)
+	}
+}
+
+// seedManualDownloads inserts n AddedViaManual, StateProviderCompleted rows
+// with distinct provider_download_ids ("mass-vanish-0", "mass-vanish-1", …)
+// — a helper for the mass-vanish circuit-breaker tests below, which need
+// several rows at once rather than newTestDownload's single hardcoded id.
+func seedManualDownloads(t *testing.T, db *DB, n int) []*Download {
+	t.Helper()
+	ctx := context.Background()
+	out := make([]*Download, n)
+	for i := 0; i < n; i++ {
+		d := newTestDownload(KindTorrent)
+		d.ProviderDownloadID = fmt.Sprintf("mass-vanish-%d", i)
+		d.State = StateProviderCompleted
+		d.AddedVia = AddedViaManual
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+		out[i] = d
+	}
+	return out
+}
+
+// TestRefreshFromProvider_MassVanish_CircuitBreakerSkipsDetection proves a
+// provider listing that comes back empty while several Manual downloads are
+// tracked (more than half of massVanishMinTracked+ rows missing at once) is
+// treated as suspicious rather than as proof every one of them vanished —
+// missing_count never advances and nothing gets flagged error, no matter how
+// many passes see the same empty listing. See isSuspectedMassVanish.
+func TestRefreshFromProvider_MassVanish_CircuitBreakerSkipsDetection(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	downloads := seedManualDownloads(t, db, 4)
+
+	// Run well past missingDetectionThreshold — if the circuit breaker
+	// weren't working, every row would be StateError by now.
+	for i := 0; i < missingDetectionThreshold+2; i++ {
+		db.RefreshFromProvider(ctx, downloads, nil)
+	}
+
+	for _, d := range downloads {
+		if d.MissingCount != 0 {
+			t.Errorf("download %s MissingCount = %d, want 0 (circuit breaker should have suppressed detection)", d.ID, d.MissingCount)
+		}
+		if d.State != StateProviderCompleted {
+			t.Errorf("download %s state = %q, want provider_completed (never flagged)", d.ID, d.State)
+		}
+	}
+}
+
+// TestRefreshFromProvider_BelowMinTracked_CircuitBreakerDoesNotApply proves
+// the circuit breaker doesn't suppress detection for an account with only a
+// couple of Manual downloads — massVanishMinTracked exists so a small
+// account isn't permanently exempt from vanish-detection just because a
+// small absolute count looks like a large fraction.
+func TestRefreshFromProvider_BelowMinTracked_CircuitBreakerDoesNotApply(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	downloads := seedManualDownloads(t, db, massVanishMinTracked-1)
+
+	for i := 0; i < missingDetectionThreshold; i++ {
+		db.RefreshFromProvider(ctx, downloads, nil)
+	}
+
+	for _, d := range downloads {
+		if d.State != StateError {
+			t.Errorf("download %s state = %q, want error (below massVanishMinTracked, circuit breaker should not apply)", d.ID, d.State)
+		}
+	}
+}
+
+// TestRefreshFromProvider_PartialVanish_BelowFraction_CircuitBreakerDoesNotApply
+// proves a normal, low-fraction case (most tracked downloads still present,
+// one genuinely gone) is detected as usual — the circuit breaker only
+// engages when the missing fraction crosses massVanishFraction, not for any
+// single item disappearing among many that are still fine.
+func TestRefreshFromProvider_PartialVanish_BelowFraction_CircuitBreakerDoesNotApply(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	downloads := seedManualDownloads(t, db, 4)
+	vanished := downloads[0]
+	statuses := make([]debrid.DownloadStatus, 0, 3)
+	for _, d := range downloads[1:] {
+		statuses = append(statuses, debrid.DownloadStatus{
+			ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1,
+		})
+	}
+
+	for i := 0; i < missingDetectionThreshold; i++ {
+		db.RefreshFromProvider(ctx, downloads, statuses)
+	}
+
+	if vanished.State != StateError {
+		t.Errorf("vanished download state = %q, want error (1 of 4 missing is well below massVanishFraction)", vanished.State)
+	}
+	for _, d := range downloads[1:] {
+		if d.State == StateError {
+			t.Errorf("found download %s incorrectly flagged error", d.ID)
+		}
+	}
+}
+
+// TestRefreshFromProvider_MassVanish_FoundRowsStillUpdateNormally proves the
+// circuit breaker only suppresses handleMissingFromProvider — a row that IS
+// present in the same suspicious-looking listing still gets its state
+// refreshed normally, not frozen along with the missing ones.
+func TestRefreshFromProvider_MassVanish_FoundRowsStillUpdateNormally(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	// 1 found out of 4 total: the other 3 missing is 75%, above
+	// massVanishFraction, so this pass is still "suspicious" overall.
+	downloads := seedManualDownloads(t, db, 4)
+	found := downloads[0]
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(found.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.75},
+	}
+
+	db.RefreshFromProvider(ctx, downloads, statuses)
+
+	if found.State != StateDownloading || found.Progress != 0.75 {
+		t.Errorf("found download = state:%q progress:%v, want it updated normally despite the suspicious pass", found.State, found.Progress)
+	}
+	for _, d := range downloads[1:] {
+		if d.MissingCount != 0 || d.State == StateError {
+			t.Errorf("missing download %s = MissingCount:%d state:%q, want untouched by the circuit breaker", d.ID, d.MissingCount, d.State)
+		}
 	}
 }
 

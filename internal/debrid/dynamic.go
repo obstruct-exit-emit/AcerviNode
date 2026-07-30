@@ -12,6 +12,16 @@ import (
 // has ever been set via the settings API.
 var ErrNoProvider = errors.New("debrid: no provider configured")
 
+// ErrRateLimited is a sentinel a concrete provider's error chain should
+// include (via errors.Is/%w, not necessarily be) whenever a call failed
+// specifically because the provider rate-limited the request — as opposed
+// to any other failure. Provider-agnostic on purpose: internal/importer
+// checks for this via errors.Is to back off its own polling specifically
+// for a rate limit, without needing to know which concrete provider (or
+// concrete error type, e.g. torbox.APIError) produced it — see
+// docs/providers.md for the concrete torbox.APIError.Unwrap wiring.
+var ErrRateLimited = errors.New("debrid: provider rate limit exceeded")
+
 // DynamicTorrentProvider implements TorrentProvider by delegating to
 // whichever provider is currently set, so it can be swapped at runtime (see
 // the settings API in internal/api) without restarting the process or

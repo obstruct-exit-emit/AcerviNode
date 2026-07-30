@@ -121,6 +121,7 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
         import_max_retries: generalSettings.import_max_retries,
         max_concurrent_downloads: generalSettings.max_concurrent_downloads,
         import_fetch_timeout_seconds: generalSettings.import_fetch_timeout_seconds,
+        cleanup_after_days: generalSettings.cleanup_after_days,
       })
       setCategories(cats)
     } catch {
@@ -337,13 +338,24 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
                 onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
               />
             </label>
+            <label>
+              Clean up Managed downloads after (days, 0 = off)
+              <input
+                type="number"
+                min={0}
+                value={form.cleanup_after_days}
+                onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
+              />
+            </label>
 
             <p className="settings-help">
-              The six above apply immediately, no restart needed. Max concurrent downloads bounds how many
+              The seven above apply immediately, no restart needed. Max concurrent downloads bounds how many
               provider_completed downloads are fetched to disk at once (previously always strictly one at a time).
               The fetch timeout covers a single file's whole transfer, not just connecting — raise it if large files
-              on a slow connection are failing partway through. Port and data dir need a restart to take effect —
-              edit them here to save the new value for next time.
+              on a slow connection are failing partway through. Cleanup only ever touches a Managed download once
+              it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
+              a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). Port and data dir
+              need a restart to take effect — edit them here to save the new value for next time.
             </p>
             <label>
               Port

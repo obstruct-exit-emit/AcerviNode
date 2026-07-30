@@ -53,20 +53,22 @@ func (s *liveSettings) SetLevelVar(levelVar *slog.LevelVar) {
 // SetImporter wires in the Importer built in run(), once it exists — see
 // UpdateGeneral, which calls its SetConfig to apply download_dir/
 // import_interval_seconds/import_max_retries changes live. Also pushes
-// whatever category path overrides, max_concurrent_downloads, and
-// import_fetch_timeout_seconds config.yaml already had at startup, so a
-// value set through the UI on a previous run is live again immediately,
-// without waiting for another settings call.
+// whatever category path overrides, max_concurrent_downloads,
+// import_fetch_timeout_seconds, and cleanup_after_days config.yaml already
+// had at startup, so a value set through the UI on a previous run is live
+// again immediately, without waiting for another settings call.
 func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	s.mu.Lock()
 	s.imp = imp
 	categoryPaths := copyCategoryPaths(s.cfg.CategoryPaths)
 	maxConcurrent := s.cfg.MaxConcurrentDownloads
 	fetchTimeout := time.Duration(s.cfg.ImportFetchTimeoutSeconds) * time.Second
+	cleanupAfterDays := s.cfg.CleanupAfterDays
 	s.mu.Unlock()
 	imp.SetCategoryPaths(categoryPaths)
 	imp.SetMaxConcurrent(maxConcurrent)
 	imp.SetFetchTimeout(fetchTimeout)
+	imp.SetCleanupAfterDays(cleanupAfterDays)
 }
 
 // SetShimServers wires in the compat shim servers built in buildHandler,
@@ -161,6 +163,7 @@ func (s *liveSettings) General() api.GeneralInfo {
 		ImportMaxRetries:          s.cfg.ImportMaxRetries,
 		MaxConcurrentDownloads:    s.cfg.MaxConcurrentDownloads,
 		ImportFetchTimeoutSeconds: s.cfg.ImportFetchTimeoutSeconds,
+		CleanupAfterDays:          s.cfg.CleanupAfterDays,
 	}
 }
 
@@ -168,11 +171,11 @@ func (s *liveSettings) General() api.GeneralInfo {
 // bad request never corrupts the live one), persists the result, and applies
 // whatever can be applied without a restart: log_level (via levelVar),
 // download_dir/import_interval_seconds/import_max_retries/
-// max_concurrent_downloads/import_fetch_timeout_seconds (via the Importer's
-// own SetConfig/SetMaxConcurrent/SetFetchTimeout — see internal/importer).
-// port/data_dir are persisted too, but binding a new port or reopening the
-// database live is out of scope, so a change to either is reported back as
-// restart-required.
+// max_concurrent_downloads/import_fetch_timeout_seconds/cleanup_after_days
+// (via the Importer's own SetConfig/SetMaxConcurrent/SetFetchTimeout/
+// SetCleanupAfterDays — see internal/importer). port/data_dir are persisted
+// too, but binding a new port or reopening the database live is out of
+// scope, so a change to either is reported back as restart-required.
 func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,6 +189,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.ImportMaxRetries = update.ImportMaxRetries
 	candidate.MaxConcurrentDownloads = update.MaxConcurrentDownloads
 	candidate.ImportFetchTimeoutSeconds = update.ImportFetchTimeoutSeconds
+	candidate.CleanupAfterDays = update.CleanupAfterDays
 	if err := candidate.Validate(); err != nil {
 		return false, err
 	}
@@ -204,6 +208,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 		s.imp.SetConfig(candidate.DownloadDir, time.Duration(candidate.ImportIntervalSeconds)*time.Second, candidate.ImportMaxRetries)
 		s.imp.SetMaxConcurrent(candidate.MaxConcurrentDownloads)
 		s.imp.SetFetchTimeout(time.Duration(candidate.ImportFetchTimeoutSeconds) * time.Second)
+		s.imp.SetCleanupAfterDays(candidate.CleanupAfterDays)
 	}
 
 	return restartRequired, nil

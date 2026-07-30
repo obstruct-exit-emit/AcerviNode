@@ -216,6 +216,41 @@ for a fully completed download. Fixed by having it query the provider live
 too, the same way `internal/qbittorrent`'s own file listing already did —
 see CHANGELOG.
 
+### Provider rate-limit backoff
+
+`refreshKind`'s own `List` call, before this, retried on every single tick
+regardless of *why* the previous attempt failed — including a provider rate
+limit, where retrying immediately is actively counterproductive (each retry
+itself can count against the same rate-limit window, extending how long it
+takes to clear). Found not hypothetical: a burst of manual live testing
+sustained a real TorBox `rate limit exceeded (status 429)` for several
+minutes straight, with the then-current behavior doing nothing to help it
+recover.
+
+`debrid.ErrRateLimited` is a provider-agnostic sentinel error a concrete
+provider's error chain can include (via `errors.Is`/`%w`) whenever a call
+failed specifically because of a rate limit — `torbox.APIError.Unwrap`
+resolves to it for a `429` status specifically, nothing else, so this stays
+recognizable through however many `fmt.Errorf("...: %w", err)` layers wrap
+it on the way up (every provider adapter method does exactly that).
+`internal/importer` doesn't need to import `internal/debrid/torbox` or know
+about `*APIError` at all to check for it.
+
+When `refreshKind` sees `debrid.ErrRateLimited` from `List`, it records a hit
+for that kind (torrent/usenet/webdl each have independent backoff state — a
+rate limit on one shouldn't pause polling for the others) and skips calling
+`List` again for that kind entirely until a cooldown passes, rather than
+retrying every tick regardless. The cooldown grows exponentially per
+consecutive hit (30s, 60s, 120s, …), capped at 5 minutes — deliberately a
+much shorter cap than the per-download fetch-retry backoff's 1-hour ceiling,
+since a rate limit is a short-lived, provider-side condition (typically a
+per-minute window), not something that plausibly needs an hour before it's
+worth trying again. A successful `List` call clears the backoff state
+entirely, so the next rate limit (if any) starts counting from scratch.
+Purely in-memory, not persisted — this is operational backoff state, not
+something that needs to survive a restart the way a download's own
+`retry_count` does.
+
 ### Managed vs. Manual
 
 Not every download should be auto-fetched to local disk. An *arr app strictly
@@ -305,6 +340,44 @@ overrides key on (see [Configuration](configuration.md#categories-and-save-paths
 categorization concept at all. Brainstormed with the user and left as a 💡
 item in ROADMAP.md to revisit if the Manual tab ever gets hard to navigate.
 
+### Retention/cleanup policy
+
+Nothing removed a completed download automatically before this — every
+`ready_for_import` Managed download (and its local files) sat around
+forever unless a user manually deleted it, which is fine for a short-lived
+test instance but not for a daily driver: local disk usage and the
+`downloads` table both grow without bound. `cleanup_after_days`
+(`config.Config`, 0 by default — the only setting in this config where 0 is
+a meaningful, valid "off" rather than something `Validate` rejects) enables
+`Importer.cleanupOldDownloads`, which `Tick` runs last, after status refresh
+and fetching are both done for that tick.
+
+**Deliberately scoped to Managed + `ready_for_import` only**
+(`database.ListDownloadsEligibleForCleanup`, `WHERE state = 'ready_for_import'
+AND added_via = 'arr' AND completed_at < cutoff`) — that combination means an
+\*arr app has already imported the download elsewhere, so AcerviNode's own
+local copy (and the debrid quota its provider-side copy is still occupying)
+is redundant storage at that point. A Manual download in the analogous
+`provider_completed` "available" state is never a candidate, on purpose —
+that's the ongoing state for something the user hasn't grabbed yet, and
+auto-deleting it would mean deleting something before it was ever used.
+`completed_at` (not `added_at`) is the age reference, since that's when the
+download actually finished importing, not when it was first added.
+
+For each eligible row, `cleanupDownload`: removes the local files
+(`os.RemoveAll` on the same directory `resolveDestDir` computed when
+fetching them — an *arr app's own explicit `save_path` always wins,
+otherwise a category override or `download_dir`/category, always namespaced
+by the download's own name), skipped with a warning rather than attempted
+if the row has no `Name` at all — `resolveDestDir` would otherwise collapse
+to the bare category directory shared with every other download in it, and
+`os.RemoveAll` on that would be far more destructive than intended; then
+best-effort deletes the provider-side download; then records a delete
+tombstone and removes the row — the exact same
+`database.RecordDeletedDownload` race-avoidance a user-initiated delete gets
+(`internal/api`'s `handleDeleteDownload`), since this runs on `Tick`'s own
+independent schedule, the same as discovery.
+
 ### Proactively detecting a vanished Manual download
 
 For a Managed download, a provider item vanishing self-corrects within a few
@@ -349,6 +422,27 @@ a later poll, `RefreshFromProvider`'s own
 and it self-heals with no special-case code. A row already `error` for some
 other reason (e.g. a genuine provider-reported failure) is left alone by this
 path entirely, so it never overwrites a more specific existing reason.
+
+**Mass-vanish circuit breaker.** The debounce above only protects against
+one item briefly disappearing from an otherwise-normal listing — it does
+nothing to distinguish a genuine mass-delete from a provider listing that
+came back successful but anomalously empty or truncated (a partial
+provider-side outage, a transient backend bug). Nothing about a successful
+HTTP response tells `RefreshFromProvider` the difference; without a
+safeguard, every currently-tracked Manual download would independently
+cross `missingDetectionThreshold` within the same few ticks and all get
+flagged at once. `isSuspectedMassVanish` runs once per `RefreshFromProvider`
+call (not per row, since a real mass-vanish would affect the whole batch
+identically): if at least `massVanishMinTracked` (3) `AddedViaManual` rows
+are tracked for the kind, and more than `massVanishFraction` (50%) of them
+are missing from this listing, the entire pass is treated as suspicious —
+`handleMissingFromProvider` is skipped for every row in it, not just the
+ones that look questionable, and a warning is logged instead. Rows that
+*are* found in the same pass still update normally; only the missing-side
+detection is suppressed. `massVanishMinTracked` exists so a small account
+(one or two Manual downloads) isn't permanently exempt from real
+vanish-detection just because a small absolute count happens to look like a
+large fraction.
 
 ### Re-add for a discovered download
 

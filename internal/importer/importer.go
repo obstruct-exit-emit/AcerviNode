@@ -28,15 +28,17 @@ import (
 // the importer needs: List to proactively refresh status (see
 // refreshStatuses) and discover manually-added downloads (see
 // discoverManual), Files/RequestDownloadLink to actually fetch a completed
-// download's bytes, Name to record/key discovered downloads and the
-// discovery baseline. Both interfaces already share this exact method shape
-// (see internal/debrid), so either provider type satisfies it without any
-// adapter code.
+// download's bytes, Delete for the retention/cleanup policy's best-effort
+// provider-side removal (see cleanupDownload), Name to record/key discovered
+// downloads and the discovery baseline. Both interfaces already share this
+// exact method shape (see internal/debrid), so either provider type
+// satisfies it without any adapter code.
 type provider interface {
 	Name() string
 	List(ctx context.Context) ([]debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
+	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
 }
 
 // maxBackoff caps how long a failing download waits between retries,
@@ -54,10 +56,11 @@ type Importer struct {
 	httpClient      *http.Client
 
 	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
-	// fetchTimeout/webDownloadProvider, which SetConfig/SetCategoryPaths/
-	// SetMaxConcurrent/SetFetchTimeout/SetWebDownloadProvider can change live
-	// (see cmd/acervinode's liveSettings) — everything else on Importer is
-	// set once at construction and never mutated afterward.
+	// fetchTimeout/webDownloadProvider/cleanupAfterDays, which SetConfig/
+	// SetCategoryPaths/SetMaxConcurrent/SetFetchTimeout/
+	// SetWebDownloadProvider/SetCleanupAfterDays can change live (see
+	// cmd/acervinode's liveSettings) — everything else on Importer is set
+	// once at construction and never mutated afterward.
 	mu                  sync.Mutex
 	downloadDir         string
 	interval            time.Duration // also the backoff base: attempt N waits ~interval*2^N
@@ -65,6 +68,7 @@ type Importer struct {
 	categoryPaths       map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
 	maxConcurrent       int               // how many downloads Tick fetches to disk at once
 	fetchTimeout        time.Duration     // per-file fetch deadline — see fetchFile
+	cleanupAfterDays    int               // 0 disables the retention/cleanup policy — see cleanupOldDownloads
 	webDownloadProvider provider          // nil if no web-download-capable provider is configured — see SetWebDownloadProvider
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
@@ -73,7 +77,42 @@ type Importer struct {
 	// consumed the previous change just overwrites it — only the latest
 	// interval matters.
 	intervalChanged chan time.Duration
+
+	// rateLimitMu guards rateLimitState — see refreshKind's cooldown check
+	// and recordRateLimitHit/clearRateLimitHit. Purely in-memory,
+	// deliberately: this is operational backoff state, not something that
+	// needs to survive a restart the way a download's own retry_count does
+	// (a restart just means starting the cooldown clock over, which is
+	// fine — the provider's rate limit itself is what actually governs
+	// this, not AcerviNode's memory of it).
+	rateLimitMu    sync.Mutex
+	rateLimitState map[database.Kind]*kindBackoff
 }
+
+// kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
+// see refreshKind.
+type kindBackoff struct {
+	nextAttempt     time.Time
+	consecutiveHits int
+}
+
+// rateLimitBackoffBase/rateLimitBackoffMax bound the cooldown refreshKind
+// applies after a provider rate-limits a List() call — doubling per
+// consecutive hit, capped at rateLimitBackoffMax. Deliberately a much
+// shorter cap than the per-download fetch-retry backoff's maxBackoff (1
+// hour): a rate limit is a short-lived, provider-side condition (typically
+// a per-minute window), not a download-specific failure that might
+// genuinely need an hour before it's worth trying again, and pausing a
+// whole kind's status refresh for that long would leave real progress
+// invisible to the UI/compat shims far longer than the rate limit itself
+// actually lasts. Motivated directly by a real incident, not a
+// hypothetical: a burst of manual testing sustained a real TorBox 429 for
+// several minutes straight, with the previous behavior (retry every single
+// tick regardless) doing nothing to help it recover.
+const (
+	rateLimitBackoffBase = 30 * time.Second
+	rateLimitBackoffMax  = 5 * time.Minute
+)
 
 // New builds an Importer. Either provider may be nil if that capability
 // isn't configured (see cmd/acervinode's buildProviders) — downloads of that
@@ -103,6 +142,7 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		fetchTimeout:    10 * time.Minute,
 		httpClient:      &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
 		intervalChanged: make(chan time.Duration, 1),
+		rateLimitState:  map[database.Kind]*kindBackoff{},
 	}
 }
 
@@ -242,6 +282,29 @@ func (im *Importer) FetchTimeout() time.Duration {
 	return im.getFetchTimeout()
 }
 
+// SetCleanupAfterDays updates the retention/cleanup policy live — the next
+// Tick uses the new value immediately. 0 (or negative) disables cleanup
+// entirely; config.Config.Validate already rejects a negative value before
+// it would reach here, but this stays defensive rather than assuming that.
+func (im *Importer) SetCleanupAfterDays(days int) {
+	im.mu.Lock()
+	im.cleanupAfterDays = days
+	im.mu.Unlock()
+}
+
+func (im *Importer) getCleanupAfterDays() int {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.cleanupAfterDays
+}
+
+// CleanupAfterDays is the exported counterpart of getCleanupAfterDays, for
+// callers outside this package confirming a SetCleanupAfterDays call took
+// (see cmd/acervinode's settings tests).
+func (im *Importer) CleanupAfterDays() int {
+	return im.getCleanupAfterDays()
+}
+
 // Config reports the current live downloadDir/interval/maxRetries — the
 // exported counterpart of getConfig, for callers outside this package that
 // need to confirm a SetConfig call actually took (see
@@ -282,7 +345,11 @@ func (im *Importer) Run(ctx context.Context) {
 // forever. Each download's own db writes are independent (keyed by its own
 // ID), and database.DB's connection pool is capped to one connection, so
 // concurrent goroutines here can't corrupt anything — they just serialize on
-// that one connection for the brief moment any of them touches it.
+// that one connection for the brief moment any of them touches it. Finally,
+// cleanupOldDownloads runs the retention policy (a no-op unless
+// cleanup_after_days is configured) — last, so a download that just reached
+// ready_for_import this same tick isn't somehow considered for cleanup
+// before its completed_at has even had a chance to age past the cutoff.
 func (im *Importer) Tick(ctx context.Context) error {
 	im.refreshStatuses(ctx)
 
@@ -305,6 +372,8 @@ func (im *Importer) Tick(ctx context.Context) error {
 		}(d)
 	}
 	wg.Wait()
+
+	im.cleanupOldDownloads(ctx)
 	return nil
 }
 
@@ -334,6 +403,10 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	if p == nil {
 		return
 	}
+	if until, cooling := im.rateLimitCooldown(kind); cooling {
+		slog.Warn("importer: skipping provider list, still in rate-limit cooldown", "kind", kind, "until", until)
+		return
+	}
 	rows, err := im.db.ListDownloads(ctx, kind)
 	if err != nil {
 		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
@@ -344,6 +417,11 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	// first-ever manually-added download for a kind nothing's tracked yet.
 	statuses, err := p.List(ctx)
 	if err != nil {
+		if errors.Is(err, debrid.ErrRateLimited) {
+			until := im.recordRateLimitHit(kind)
+			slog.Error("importer: provider rate limited, backing off", "kind", kind, "until", until, "error", err)
+			return
+		}
 		// Not yet configured is routine (e.g. no TorBox key set yet) and
 		// would otherwise log an error every single tick — everything else
 		// is worth surfacing.
@@ -352,8 +430,75 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		}
 		return
 	}
+	im.clearRateLimitHit(kind)
 	im.db.RefreshFromProvider(ctx, rows, statuses)
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses)
+}
+
+// rateLimitCooldown reports whether kind is still within a backoff window
+// set by a previous recordRateLimitHit — see refreshKind, the only caller.
+func (im *Importer) rateLimitCooldown(kind database.Kind) (time.Time, bool) {
+	im.rateLimitMu.Lock()
+	defer im.rateLimitMu.Unlock()
+	state, ok := im.rateLimitState[kind]
+	if !ok || !time.Now().Before(state.nextAttempt) {
+		return time.Time{}, false
+	}
+	return state.nextAttempt, true
+}
+
+// recordRateLimitHit advances kind's consecutive-hit count and schedules its
+// next allowed attempt with exponential backoff (rateLimitBackoffBase *
+// 2^hits, capped at rateLimitBackoffMax) — see refreshKind, the only caller.
+func (im *Importer) recordRateLimitHit(kind database.Kind) time.Time {
+	im.rateLimitMu.Lock()
+	defer im.rateLimitMu.Unlock()
+	state, ok := im.rateLimitState[kind]
+	if !ok {
+		state = &kindBackoff{}
+		im.rateLimitState[kind] = state
+	}
+	state.consecutiveHits++
+	state.nextAttempt = time.Now().Add(rateLimitBackoffDuration(state.consecutiveHits))
+	return state.nextAttempt
+}
+
+// clearRateLimitHit drops kind's backoff state entirely once a List() call
+// succeeds — the next rate limit (if any) starts counting from scratch
+// rather than continuing to grow from wherever it last left off.
+func (im *Importer) clearRateLimitHit(kind database.Kind) {
+	im.rateLimitMu.Lock()
+	defer im.rateLimitMu.Unlock()
+	delete(im.rateLimitState, kind)
+}
+
+// RateLimitCooldownUntil is the exported counterpart of rateLimitCooldown,
+// for tests confirming a rate-limit hit actually set a cooldown.
+func (im *Importer) RateLimitCooldownUntil(kind database.Kind) (time.Time, bool) {
+	return im.rateLimitCooldown(kind)
+}
+
+// rateLimitBackoffDuration returns rateLimitBackoffBase*2^consecutiveHits,
+// capped at rateLimitBackoffMax — the shift itself is also capped so a long
+// sustained rate limit can't overflow the calculation before the
+// rateLimitBackoffMax clamp would apply anyway (mirrors Importer.backoff's
+// identical shift-overflow guard for the per-download fetch backoff).
+// consecutiveHits is 1-indexed (the first-ever hit is 1) so that first hit
+// gets exactly rateLimitBackoffBase, not double it.
+func rateLimitBackoffDuration(consecutiveHits int) time.Duration {
+	const maxShift = 10
+	shift := consecutiveHits - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > maxShift {
+		shift = maxShift
+	}
+	d := rateLimitBackoffBase * time.Duration(int64(1)<<uint(shift))
+	if d <= 0 || d > rateLimitBackoffMax {
+		return rateLimitBackoffMax
+	}
+	return d
 }
 
 // discoverManual finds provider items AcerviNode has no local row for at all
@@ -525,16 +670,41 @@ func (im *Importer) backoff(attempt int) time.Duration {
 	return d
 }
 
-func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
-	var p provider
-	switch d.Kind {
+// providerForKind returns the configured provider for d's kind, or nil if
+// none is — shared by processDownload and cleanupDownload, both of which
+// need to reach the same provider a given download belongs to.
+func (im *Importer) providerForKind(kind database.Kind) provider {
+	switch kind {
 	case database.KindTorrent:
-		p = im.torrentProvider
+		return im.torrentProvider
 	case database.KindUsenet:
-		p = im.usenetProvider
+		return im.usenetProvider
+	case database.KindWebDL:
+		return im.getWebDownloadProvider()
 	default:
-		return fmt.Errorf("unknown kind %q", d.Kind)
+		return nil
 	}
+}
+
+// resolveDestDir computes where d's files land (or landed) on local disk —
+// shared by processDownload (to fetch them there) and cleanupDownload (to
+// know what to remove later). An *arr app's own explicit save_path always
+// wins; otherwise a category override, then downloadDir/category, always
+// namespaced by the download's own name so sibling downloads in the same
+// category never collide.
+func (im *Importer) resolveDestDir(d *database.Download) string {
+	if d.SavePath != "" {
+		return d.SavePath
+	}
+	if override, ok := im.categoryPath(d.Category); ok {
+		return filepath.Join(override, d.Name)
+	}
+	downloadDir, _, _ := im.getConfig()
+	return filepath.Join(downloadDir, d.Category, d.Name)
+}
+
+func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
+	p := im.providerForKind(d.Kind)
 	if p == nil {
 		return fmt.Errorf("no provider configured for kind %q", d.Kind)
 	}
@@ -545,16 +715,7 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 		return fmt.Errorf("list files: %w", err)
 	}
 
-	destDir := d.SavePath
-	if destDir == "" {
-		if override, ok := im.categoryPath(d.Category); ok {
-			destDir = filepath.Join(override, d.Name)
-		} else {
-			downloadDir, _, _ := im.getConfig()
-			destDir = filepath.Join(downloadDir, d.Category, d.Name)
-		}
-	}
-
+	destDir := im.resolveDestDir(d)
 	for _, f := range files {
 		if err := im.fetchFile(ctx, p, id, f, destDir); err != nil {
 			return fmt.Errorf("fetch file %q: %w", f.Path, err)
@@ -567,6 +728,67 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 	slog.Info("importer: download ready", "id", d.ID, "name", d.Name, "dest", destDir, "files", len(files))
 	return nil
+}
+
+// cleanupOldDownloads implements the retention/cleanup policy: once a
+// Managed download has sat in ready_for_import for at least
+// getCleanupAfterDays days, its local files, its provider-side copy, and
+// its own row are all removed — an *arr app has already imported it
+// elsewhere by then, so AcerviNode's own copy (and the debrid quota it's
+// still occupying provider-side) is redundant. Disabled entirely when
+// getCleanupAfterDays is 0 (the default) — see
+// database.ListDownloadsEligibleForCleanup for the exact eligibility rule
+// (Managed + ready_for_import only; never a Manual download, which would
+// mean deleting something before the user ever grabbed it).
+func (im *Importer) cleanupOldDownloads(ctx context.Context) {
+	days := im.getCleanupAfterDays()
+	if days <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	rows, err := im.db.ListDownloadsEligibleForCleanup(ctx, cutoff)
+	if err != nil {
+		slog.Error("importer: list downloads eligible for cleanup failed", "error", err)
+		return
+	}
+	for _, d := range rows {
+		im.cleanupDownload(ctx, d)
+	}
+}
+
+// cleanupDownload removes one download's local files, best-effort deletes
+// it provider-side, and removes its row — see cleanupOldDownloads. Local
+// file removal is skipped (with a warning, not silently) for a row with no
+// Name, since resolveDestDir would otherwise collapse to the bare category
+// directory shared with every other download in it — deliberately
+// conservative rather than risking os.RemoveAll on something broader than
+// intended. A tombstone is recorded before the row is deleted, the same
+// race-avoidance database.RecordDeletedDownload already covers for a
+// user-initiated delete (internal/api's handleDeleteDownload) — the
+// provider's own delete isn't always instantly reflected in its listing
+// endpoints, and this runs on the same independent tick as discovery.
+func (im *Importer) cleanupDownload(ctx context.Context, d *database.Download) {
+	destDir := im.resolveDestDir(d)
+	if strings.TrimSpace(d.Name) == "" {
+		slog.Warn("importer: cleanup skipping local file removal, download has no name", "id", d.ID, "dest", destDir)
+	} else if err := os.RemoveAll(destDir); err != nil {
+		slog.Warn("importer: cleanup failed to remove local files, continuing anyway", "id", d.ID, "dest", destDir, "error", err)
+	}
+
+	if p := im.providerForKind(d.Kind); p != nil {
+		if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), true); err != nil {
+			slog.Warn("importer: cleanup best-effort provider delete failed", "id", d.ID, "error", err)
+		}
+	}
+
+	if err := im.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+		slog.Error("importer: cleanup record deleted-download tombstone failed", "id", d.ID, "error", err)
+	}
+	if err := im.db.DeleteDownload(ctx, d.ID); err != nil {
+		slog.Error("importer: cleanup delete row failed", "id", d.ID, "error", err)
+		return
+	}
+	slog.Info("importer: cleaned up old download", "id", d.ID, "name", d.Name, "dest", destDir)
 }
 
 // fetchFile resolves a real download link and streams it to destDir/f.Path,

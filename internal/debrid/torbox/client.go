@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 const (
@@ -33,6 +35,23 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("torbox: %s (status %d)", e.Detail, e.StatusCode)
+}
+
+// Unwrap lets errors.Is(err, debrid.ErrRateLimited) recognize a 429
+// specifically, through however many fmt.Errorf("...: %w", err) layers a
+// caller wraps this in (every provider adapter method here does exactly
+// that) — internal/importer uses this to back off its own polling for a
+// rate limit specifically, without needing to import this package or know
+// about *APIError at all (see docs/providers.md). Every other status code
+// unwraps to nil, ending the chain there — this is deliberately the only
+// distinction *APIError itself exposes; anything more specific than "was
+// this a rate limit" is still available via a type assertion to *APIError
+// for a caller that actually needs it (see client_test.go).
+func (e *APIError) Unwrap() error {
+	if e.StatusCode == http.StatusTooManyRequests {
+		return debrid.ErrRateLimited
+	}
+	return nil
 }
 
 // Client is a low-level TorBox API client: one HTTP call in, one decoded

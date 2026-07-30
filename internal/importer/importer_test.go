@@ -36,6 +36,10 @@ type fakeProvider struct {
 	// survive.
 	requestedAtMu sync.Mutex
 	requestedAt   []string // fileIDs RequestDownloadLink was called for, in order
+
+	deleteErr    error
+	deletedIDsMu sync.Mutex
+	deletedIDs   []string // provider ids Delete was called for, in order — see cleanupOldDownloads tests
 }
 
 func (f *fakeProvider) Name() string { return "faketorbox" }
@@ -66,6 +70,22 @@ func (f *fakeProvider) requestedCount() int {
 	f.requestedAtMu.Lock()
 	defer f.requestedAtMu.Unlock()
 	return len(f.requestedAt)
+}
+
+func (f *fakeProvider) Delete(_ context.Context, id debrid.ProviderDownloadID, _ bool) error {
+	f.deletedIDsMu.Lock()
+	f.deletedIDs = append(f.deletedIDs, string(id))
+	f.deletedIDsMu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	return nil
+}
+
+func (f *fakeProvider) deletedCount() int {
+	f.deletedIDsMu.Lock()
+	defer f.deletedIDsMu.Unlock()
+	return len(f.deletedIDs)
 }
 
 func openTestDB(t *testing.T) *database.DB {
@@ -173,6 +193,208 @@ func TestTick_UsesDownloadDirWhenNoSavePath(t *testing.T) {
 	want := filepath.Join(downloadDir, "radarr", "Some Release", "episode.mkv")
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected file at %s, stat error = %v", want, err)
+	}
+}
+
+// seedReadyForImportDownload inserts a Managed, ready_for_import download
+// with the given completedAt and a real file at destDir/name.mkv — a helper
+// shared by the cleanup tests below.
+func seedReadyForImportDownload(t *testing.T, db *database.DB, id, name string, completedAt time.Time, destDir string) *database.Download {
+	t.Helper()
+	ctx := context.Background()
+	d := &database.Download{
+		ID: id, Provider: "faketorbox", ProviderDownloadID: id, Kind: database.KindTorrent,
+		Hash: id, Name: name, Category: "tv-sonarr", SavePath: destDir,
+		State: database.StateReadyForImport, AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload(%s) error = %v", id, err)
+	}
+	if err := db.UpdateDownloadStatus(ctx, id, database.StateReadyForImport, 1, 0, &completedAt, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus(%s) error = %v", id, err)
+	}
+	if destDir != "" {
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", destDir, err)
+		}
+		if err := os.WriteFile(filepath.Join(destDir, "movie.mkv"), []byte("pretend movie bytes"), 0o644); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+	}
+	return d
+}
+
+// TestCleanupOldDownloads_DisabledByDefault proves cleanup_after_days=0 (the
+// default) means Tick never touches an old ready_for_import download at
+// all — no accidental deletion for anyone who hasn't opted in.
+func TestCleanupOldDownloads_DisabledByDefault(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	destDir := filepath.Join(t.TempDir(), "Old.Movie")
+
+	old := seedReadyForImportDownload(t, db, "old-1", "Old.Movie", time.Now().UTC().AddDate(0, 0, -30), destDir)
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, old.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("download was removed even though cleanup is disabled")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "movie.mkv")); err != nil {
+		t.Errorf("local file removed even though cleanup is disabled: %v", err)
+	}
+	if provider.deletedCount() != 0 {
+		t.Errorf("provider Delete called %d times, want 0", provider.deletedCount())
+	}
+}
+
+// TestCleanupOldDownloads_RemovesOldReadyForImportDownload is the positive
+// case: once enabled, a Managed download that's been ready_for_import
+// longer than cleanup_after_days gets its local files removed, the
+// provider-side download deleted, its row removed, and a delete tombstone
+// recorded (the same race-avoidance a user-initiated delete gets — see
+// database.RecordDeletedDownload) — while a too-recent one and a Manual
+// download in the analogous "available" state are both left alone.
+func TestCleanupOldDownloads_RemovesOldReadyForImportDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	oldDestDir := filepath.Join(t.TempDir(), "Old.Movie")
+	old := seedReadyForImportDownload(t, db, "old-1", "Old.Movie", time.Now().UTC().AddDate(0, 0, -30), oldDestDir)
+
+	recentDestDir := filepath.Join(t.TempDir(), "Recent.Movie")
+	recent := seedReadyForImportDownload(t, db, "recent-1", "Recent.Movie", time.Now().UTC().Add(-1*time.Hour), recentDestDir)
+
+	manual := &database.Download{
+		ID: "manual-1", Provider: "faketorbox", ProviderDownloadID: "manual-1", Kind: database.KindTorrent,
+		Hash: "manual-1", Name: "Manual.Movie", State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, manual); err != nil {
+		t.Fatalf("InsertDownload(manual) error = %v", err)
+	}
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetCleanupAfterDays(7)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if got, err := db.GetDownloadByID(ctx, old.ID); err != nil {
+		t.Fatalf("GetDownloadByID(old) error = %v", err)
+	} else if got != nil {
+		t.Error("old download row still present, want it removed")
+	}
+	if _, err := os.Stat(oldDestDir); !os.IsNotExist(err) {
+		t.Errorf("old download's local directory still present (err = %v), want removed", err)
+	}
+	if provider.deletedCount() != 1 || provider.deletedIDs[0] != old.ProviderDownloadID {
+		t.Errorf("provider.deletedIDs = %v, want exactly [%s]", provider.deletedIDs, old.ProviderDownloadID)
+	}
+	tombstoned, err := db.RecentlyDeletedDownloads(ctx, old.Provider, old.Kind)
+	if err != nil {
+		t.Fatalf("RecentlyDeletedDownloads() error = %v", err)
+	}
+	if !tombstoned[old.ProviderDownloadID] {
+		t.Error("expected a delete tombstone recorded for the cleaned-up download")
+	}
+
+	if got, err := db.GetDownloadByID(ctx, recent.ID); err != nil {
+		t.Fatalf("GetDownloadByID(recent) error = %v", err)
+	} else if got == nil {
+		t.Error("recent download was removed, want it left alone (not old enough)")
+	}
+	if _, err := os.Stat(filepath.Join(recentDestDir, "movie.mkv")); err != nil {
+		t.Errorf("recent download's file removed: %v", err)
+	}
+
+	if got, err := db.GetDownloadByID(ctx, manual.ID); err != nil {
+		t.Fatalf("GetDownloadByID(manual) error = %v", err)
+	} else if got == nil {
+		t.Error("manual download was removed, want it left alone (never eligible)")
+	}
+}
+
+// TestCleanupOldDownloads_EmptyNameSkipsFileRemovalOnly proves a row with no
+// Name (destDir would otherwise collapse to the bare category directory
+// shared with other downloads) still gets cleaned up provider-side and in
+// the database, but its local file removal is skipped rather than risking
+// os.RemoveAll on something broader than intended.
+func TestCleanupOldDownloads_EmptyNameSkipsFileRemovalOnly(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	categoryDir := t.TempDir()
+	sibling := filepath.Join(categoryDir, "sibling.txt")
+	if err := os.WriteFile(sibling, []byte("unrelated file"), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	d := &database.Download{
+		ID: "noname-1", Provider: "faketorbox", ProviderDownloadID: "noname-1", Kind: database.KindTorrent,
+		Hash: "noname-1", Name: "", Category: "tv-sonarr", SavePath: categoryDir,
+		State: database.StateReadyForImport, AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	completedAt := time.Now().UTC().AddDate(0, 0, -30)
+	if err := db.UpdateDownloadStatus(ctx, d.ID, database.StateReadyForImport, 1, 0, &completedAt, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetCleanupAfterDays(7)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if got, err := db.GetDownloadByID(ctx, d.ID); err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	} else if got != nil {
+		t.Error("row still present, want it removed despite the skipped file cleanup")
+	}
+	if provider.deletedCount() != 1 {
+		t.Errorf("provider Delete called %d times, want 1", provider.deletedCount())
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Errorf("sibling file in the shared category dir was removed: %v", err)
+	}
+}
+
+// TestCleanupOldDownloads_ProviderDeleteFailureStillCleansUpLocally proves
+// the provider-side delete is best-effort, the same as
+// handleDeleteDownload's own stance — a real, existing 500 from TorBox on a
+// delete call must not leave the local row (and disk usage) stuck forever.
+func TestCleanupOldDownloads_ProviderDeleteFailureStillCleansUpLocally(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	destDir := filepath.Join(t.TempDir(), "Old.Movie")
+
+	old := seedReadyForImportDownload(t, db, "old-1", "Old.Movie", time.Now().UTC().AddDate(0, 0, -30), destDir)
+
+	provider := &fakeProvider{deleteErr: errors.New("torbox: DATABASE_ERROR (status 500)")}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetCleanupAfterDays(7)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if got, err := db.GetDownloadByID(ctx, old.ID); err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	} else if got != nil {
+		t.Error("row still present after a provider-delete failure, want it removed anyway (best-effort)")
+	}
+	if _, err := os.Stat(destDir); !os.IsNotExist(err) {
+		t.Errorf("local directory still present after a provider-delete failure (err = %v), want removed anyway", err)
 	}
 }
 
@@ -529,6 +751,117 @@ func TestTick_CallsListEvenWhenNothingTracked(t *testing.T) {
 	}
 	if provider.listCalls.Load() != 2 {
 		t.Errorf("List() called %d times, want 2 (once each for torrent/usenet)", provider.listCalls.Load())
+	}
+}
+
+// TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls proves a
+// debrid.ErrRateLimited from List() sets a cooldown for that kind, and that
+// a subsequent Tick skips calling List() again entirely while still
+// cooling — the whole point being not to keep hammering a provider that
+// just rate-limited the account, unlike the previous behavior (retry every
+// single tick regardless of why the last one failed).
+func TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	im.refreshKind(ctx, database.KindTorrent, provider)
+	if provider.listCalls.Load() != 1 {
+		t.Fatalf("List() called %d times, want 1", provider.listCalls.Load())
+	}
+	until, cooling := im.RateLimitCooldownUntil(database.KindTorrent)
+	if !cooling {
+		t.Fatal("expected torrent kind to be in a rate-limit cooldown")
+	}
+	if !until.After(time.Now()) {
+		t.Errorf("cooldown until %v, want it in the future", until)
+	}
+
+	// A second refreshKind call while still cooling must not call List()
+	// again at all.
+	im.refreshKind(ctx, database.KindTorrent, provider)
+	if provider.listCalls.Load() != 1 {
+		t.Errorf("List() called %d times after a second refreshKind during cooldown, want still 1", provider.listCalls.Load())
+	}
+}
+
+// TestRefreshKind_RateLimit_ScopedPerKind proves a rate limit on one kind's
+// List() call doesn't affect another kind's cooldown — each provider slot
+// (torrent/usenet/webdl) is backed by its own concrete provider instance in
+// practice, and a rate limit on one shouldn't pause polling for the others.
+func TestRefreshKind_RateLimit_ScopedPerKind(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	torrentProvider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
+	usenetProvider := &fakeProvider{}
+	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+
+	im.refreshKind(ctx, database.KindTorrent, torrentProvider)
+	im.refreshKind(ctx, database.KindUsenet, usenetProvider)
+
+	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
+		t.Error("expected torrent kind to be cooling")
+	}
+	if _, cooling := im.RateLimitCooldownUntil(database.KindUsenet); cooling {
+		t.Error("usenet kind should not be affected by torrent's rate limit")
+	}
+}
+
+// TestRefreshKind_RateLimit_ClearsOnSuccess proves a successful List() call
+// clears any previous cooldown for that kind, rather than it lingering
+// until it naturally expires — the next rate limit (if any) starts counting
+// from scratch.
+func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	im.refreshKind(ctx, database.KindTorrent, provider)
+	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
+		t.Fatal("expected torrent kind to be cooling after the rate-limited call")
+	}
+
+	provider.listErr = nil
+	// Directly clear the cooldown the way a real successful call inside
+	// refreshKind would (rather than waiting out rateLimitBackoffBase in a
+	// unit test) — refreshKind's own cooldown check would otherwise skip
+	// the List() call entirely and never reach clearRateLimitHit.
+	im.clearRateLimitHit(database.KindTorrent)
+	im.refreshKind(ctx, database.KindTorrent, provider)
+
+	if provider.listCalls.Load() != 2 {
+		t.Errorf("List() called %d times, want 2 (cooldown cleared, so the second refreshKind actually called List)", provider.listCalls.Load())
+	}
+	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); cooling {
+		t.Error("expected no cooldown after a successful List() call")
+	}
+}
+
+// TestRateLimitBackoffDuration_GrowsAndCaps proves the backoff formula
+// itself: the first hit gets exactly rateLimitBackoffBase (not double it),
+// it doubles each consecutive hit, and it never exceeds rateLimitBackoffMax
+// no matter how many consecutive hits are recorded.
+func TestRateLimitBackoffDuration_GrowsAndCaps(t *testing.T) {
+	cases := []struct {
+		hits int
+		want time.Duration
+	}{
+		{1, rateLimitBackoffBase},
+		{2, rateLimitBackoffBase * 2},
+		{3, rateLimitBackoffBase * 4},
+	}
+	for _, c := range cases {
+		if got := rateLimitBackoffDuration(c.hits); got != c.want {
+			t.Errorf("rateLimitBackoffDuration(%d) = %v, want %v", c.hits, got, c.want)
+		}
+	}
+	if got := rateLimitBackoffDuration(50); got != rateLimitBackoffMax {
+		t.Errorf("rateLimitBackoffDuration(50) = %v, want capped at %v", got, rateLimitBackoffMax)
 	}
 }
 

@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **First three items off the daily-driver parity punch list**: requested
+  directly ("complete the first 3 tasks in Path to daily-driver"), all
+  scoped, implemented, and tested independently.
+  - **Mass-vanish circuit breaker** — the vanish-detection debounce only
+    ever protected against one item briefly disappearing from an otherwise
+    normal listing, not against a provider listing coming back
+    successful-but-empty or truncated (a partial outage, a transient
+    backend bug), which would otherwise have flagged every tracked Manual
+    download `error` at once within the same few ticks. `isSuspectedMassVanish`
+    (`internal/database`) now refuses to run missing-detection for a whole
+    pass when more than half of at least 3 tracked Manual downloads for a
+    kind are missing at once — found rows in the same pass still update
+    normally, only the missing-side detection is suppressed.
+  - **Rate-limit-specific backoff** — a provider rate limit (`429`) used to
+    retry on every single tick regardless, which can itself extend how long
+    the rate limit lasts. `debrid.ErrRateLimited` is a new provider-agnostic
+    sentinel (`torbox.APIError.Unwrap` resolves to it for a `429`
+    specifically, recognizable via `errors.Is` through however many wrapping
+    layers); `internal/importer` now backs off that kind's own polling
+    specifically (30s base, doubling per consecutive hit, capped at 5
+    minutes — deliberately much shorter than the 1-hour per-download fetch
+    backoff, since a rate limit is a short provider-side condition, not a
+    download-specific failure), scoped independently per kind
+    (torrent/usenet/webdl) so one kind's rate limit doesn't pause the
+    others. Motivated directly by a real incident, not a hypothetical: a
+    burst of manual live testing sustained a real TorBox 429 for several
+    minutes straight earlier this session.
+  - **Retention/cleanup policy** — nothing previously removed a completed
+    download automatically; local disk usage and the `downloads` table both
+    grew without bound. New `cleanup_after_days` config (0/disabled by
+    default — the only setting in this config where 0 is a meaningful valid
+    value) has `Importer.cleanupOldDownloads` (runs last in `Tick`) remove a
+    **Managed** download's local files, provider-side copy (best-effort),
+    and row once it's sat in `ready_for_import` (already handed off to
+    Sonarr/Radarr) for at least that many days. Deliberately never touches a
+    Manual download — that's the ongoing "available, not yet grabbed" state
+    for something the user hasn't downloaded, not something safe to
+    auto-delete. Reuses the same delete-tombstone race-avoidance a
+    user-initiated delete gets (`database.RecordDeletedDownload`), since
+    this runs on `Tick`'s own independent schedule. Surfaced in the web
+    UI's Settings → General as "Clean up Managed downloads after (days, 0 =
+    off)".
+
+  All three verified live against the real WSL instance in addition to new
+  unit tests at every layer (mass-vanish: 4 tests; rate-limit: sentinel
+  unwrap + 4 importer-level backoff tests; cleanup: config validation/env
+  tests, a DB eligibility-query test, and 4 importer-level tests including
+  the empty-`Name`-skips-file-removal safety guard and the
+  provider-delete-failure-still-cleans-up-locally best-effort case).
+  `cleanup_after_days` was set live to a real value via the settings API,
+  confirmed round-tripping through `GET`/`PUT /api/v1/settings/general`,
+  then restored to disabled (the account had no eligible Managed downloads
+  at the time, so nothing was ever actually cleaned up live — the positive
+  path is unit-test-verified only). See
+  [Providers](docs/providers.md#retentioncleanup-policy).
+
 ### Fixed
 
 - **A just-deleted download could reappear as a "ghost" Manual download** —

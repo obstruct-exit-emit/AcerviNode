@@ -161,6 +161,41 @@ func TestLoad_InvalidImportMaxRetries(t *testing.T) {
 	}
 }
 
+// TestLoad_CleanupAfterDaysDefaultsToDisabled proves cleanup_after_days
+// defaults to 0 (disabled) rather than some always-on positive default —
+// unlike every other numeric setting in this config, 0 is a meaningful,
+// safe "off" value here, not something Validate rejects.
+func TestLoad_CleanupAfterDaysDefaultsToDisabled(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CleanupAfterDays != 0 {
+		t.Errorf("CleanupAfterDays default = %d, want 0 (disabled)", cfg.CleanupAfterDays)
+	}
+}
+
+func TestLoad_CleanupAfterDaysEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_CLEANUP_AFTER_DAYS", "14")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CleanupAfterDays != 14 {
+		t.Errorf("CleanupAfterDays = %d, want 14", cfg.CleanupAfterDays)
+	}
+}
+
+func TestLoad_InvalidNegativeCleanupAfterDays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "cleanup_after_days: -1\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for negative cleanup_after_days, got nil")
+	}
+}
+
 func TestSave_RoundTripsThroughLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 

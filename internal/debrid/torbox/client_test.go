@@ -3,10 +3,14 @@ package torbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
@@ -516,6 +520,43 @@ func TestGetUserData(t *testing.T) {
 	}
 	if data.TotalBytesDownloaded != 1099511627776.0 {
 		t.Errorf("TotalBytesDownloaded = %v", data.TotalBytesDownloaded)
+	}
+}
+
+// TestDo_RateLimitUnwrapsToDebridErrRateLimited proves a real 429 response
+// is recognizable via errors.Is(err, debrid.ErrRateLimited) even through the
+// fmt.Errorf("...: %w", err) wrapping every provider adapter method applies
+// on top of what Client.do returns — see APIError.Unwrap, and
+// internal/importer's use of this to back off polling specifically for a
+// rate limit.
+func TestDo_RateLimitUnwrapsToDebridErrRateLimited(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{"detail": "rate limit exceeded"})
+	})
+
+	_, _, err := client.CreateTorrent(context.Background(), CreateTorrentRequest{Magnet: "magnet:?xt=x"})
+	if err == nil {
+		t.Fatal("expected error for 429 response")
+	}
+	wrapped := fmt.Errorf("torbox: create: %w", err)
+	if !errors.Is(wrapped, debrid.ErrRateLimited) {
+		t.Errorf("errors.Is(err, debrid.ErrRateLimited) = false, want true for a 429 (even wrapped)")
+	}
+}
+
+// TestDo_NonRateLimitStatusDoesNotUnwrapToRateLimited proves an ordinary
+// failure (e.g. a 401) is NOT mistaken for a rate limit — Unwrap only ever
+// resolves to debrid.ErrRateLimited for a genuine 429.
+func TestDo_NonRateLimitStatusDoesNotUnwrapToRateLimited(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"detail": "invalid api key"})
+	})
+
+	_, _, err := client.CreateTorrent(context.Background(), CreateTorrentRequest{Magnet: "magnet:?xt=x"})
+	if errors.Is(err, debrid.ErrRateLimited) {
+		t.Error("errors.Is(err, debrid.ErrRateLimited) = true for a 401, want false")
 	}
 }
 

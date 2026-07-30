@@ -31,24 +31,28 @@ this unattended. Recommendations first.
 
 **Do next** — scoped, self-contained, verifiable without a second provider:
 
-- 💡 **Mass-vanish circuit breaker.** The vanish-detection feature (Phase 7
-  follow-on, see below) debounces a *single* item disappearing across a few
-  ticks, but has no defense against a provider listing coming back
-  successful-but-empty (or heavily truncated) during some backend hiccup —
-  every currently-tracked Manual download would get incorrectly flagged
-  "gone" within the same few ticks, all at once. Needs a sanity check (e.g.
-  refuse to flag anything in a pass where a large fraction of tracked items
-  would vanish at once) before this is safe to trust unattended for months.
-- 💡 **Rate-limit-specific backoff for 429s.** `max_concurrent_downloads`
-  (Phase 3 follow-on) already exists for a related earlier incident, but
-  there's no backoff specific to a provider rate-limit response itself — it
-  just waits for the next tick. Found not-hypothetical today: a burst of
-  manual live testing sustained a real TorBox 429 for several minutes
-  straight.
-- 💡 **Retention/cleanup policy.** Nothing today prunes old completed
-  downloads — not from local disk, not from the `downloads` table. Fine for
-  a week of testing; needs a story (age-based cleanup, a
-  clean-up-after-import toggle, or similar) before a year of continuous use.
+- ✅ **Mass-vanish circuit breaker.** Done — requested directly ("complete
+  the first 3 tasks in Path to daily-driver"). `isSuspectedMassVanish`
+  (`internal/database`) now refuses to run missing-detection for a whole
+  `RefreshFromProvider` pass when more than half of at least 3 tracked
+  Manual downloads for a kind are missing from the same listing at once —
+  found rows in the same pass still update normally. See
+  [CHANGELOG](CHANGELOG.md) and
+  [Providers](docs/providers.md#proactively-detecting-a-vanished-manual-download).
+- ✅ **Rate-limit-specific backoff for 429s.** Done, same request.
+  `debrid.ErrRateLimited` is a new provider-agnostic sentinel
+  (`torbox.APIError.Unwrap` resolves to it for a 429, recognizable via
+  `errors.Is` through however many wrapping layers); `internal/importer`
+  backs off that kind's own `List` polling specifically (30s base, doubling
+  per hit, capped at 5 minutes, scoped independently per kind) instead of
+  retrying every tick regardless. See
+  [Providers](docs/providers.md#provider-rate-limit-backoff).
+- ✅ **Retention/cleanup policy.** Done, same request. New
+  `cleanup_after_days` config (0/disabled by default) has
+  `Importer.cleanupOldDownloads` remove a Managed download's local files,
+  provider-side copy, and row once it's sat `ready_for_import` for at least
+  that many days — never a Manual download. Surfaced in Settings → General.
+  See [Providers](docs/providers.md#retentioncleanup-policy).
 - 💡 **Database backup story.** No documented or automated backup for
   `acervinode.db` — losing it loses all local history/state (though
   re-discovery would eventually re-adopt anything still on the provider).

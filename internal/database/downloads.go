@@ -281,6 +281,37 @@ func (db *DB) ListDownloadsDueForRetry(ctx context.Context, state string, now ti
 	return out, rows.Err()
 }
 
+// ListDownloadsEligibleForCleanup returns every AddedViaArr download in
+// StateReadyForImport whose completed_at is older than olderThan — see
+// internal/importer's retention/cleanup policy. Scoped to arr+
+// ready_for_import specifically: that's a Managed download an *arr app has
+// already imported elsewhere, so AcerviNode's own local copy (and the
+// provider-side one) are redundant storage at that point. A Manual download
+// in provider_completed is never a candidate — that's the ongoing
+// "available, not yet grabbed" state for something the user hasn't
+// downloaded yet, not something safe to auto-delete.
+func (db *DB) ListDownloadsEligibleForCleanup(ctx context.Context, olderThan time.Time) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+downloadColumns+`
+		FROM downloads
+		WHERE state = ? AND added_via = ? AND completed_at IS NOT NULL AND completed_at < ?
+		ORDER BY completed_at`, StateReadyForImport, string(AddedViaArr), olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("list downloads eligible for cleanup: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // UpdateDownloadRetry records a failed attempt: increments bookkeeping for
 // internal/importer's backoff without changing state — the row stays
 // provider_completed and is picked up again once next_retry_at passes.
@@ -399,6 +430,50 @@ const missingDetectionThreshold = 3
 // AcerviNode's own conclusion ("we stopped seeing it"), not something the
 // provider itself ever said.
 const missingDownloadErrorMessage = "no longer found in the provider's account"
+
+// massVanishMinTracked/massVanishFraction bound isSuspectedMassVanish: a
+// provider listing is only distrusted once there's enough tracked history
+// for a fraction to be meaningful (massVanishMinTracked) and the fraction of
+// currently-missing Manual downloads crosses massVanishFraction. Found
+// worth building the same day the underlying missing-detection feature
+// shipped: the debounce in missingDetectionThreshold only protects against
+// one item briefly disappearing, not against every tracked item looking
+// gone at once because the provider's own listing came back
+// successful-but-empty or truncated (a partial outage, a backend bug) —
+// nothing about a successful HTTP response distinguishes that from a
+// genuine mass-delete. massVanishFraction is deliberately conservative
+// (more than half) rather than a lower bar, so a real, ordinary case where
+// several downloads happen to finish/get cleaned up around the same time
+// doesn't false-trigger.
+const (
+	massVanishMinTracked = 3
+	massVanishFraction   = 0.5
+)
+
+// isSuspectedMassVanish reports whether the fraction of tracked
+// AddedViaManual rows absent from byID is high enough that the listing
+// itself is more likely anomalous than every one of them having genuinely
+// vanished at once — see RefreshFromProvider, the only caller, which skips
+// handleMissingFromProvider entirely for the whole pass when this is true.
+// Scoped to AddedViaManual only, mirroring handleMissingFromProvider itself
+// — a Managed row is never a candidate for missing-detection in the first
+// place, so it shouldn't factor into whether this pass looks suspicious.
+func isSuspectedMassVanish(rows []*Download, byID map[string]debrid.DownloadStatus) bool {
+	var manualTotal, manualMissing int
+	for _, d := range rows {
+		if d.AddedVia != AddedViaManual {
+			continue
+		}
+		manualTotal++
+		if _, ok := byID[d.ProviderDownloadID]; !ok {
+			manualMissing++
+		}
+	}
+	if manualTotal < massVanishMinTracked {
+		return false
+	}
+	return float64(manualMissing)/float64(manualTotal) > massVanishFraction
+}
 
 // handleMissingFromProvider is RefreshFromProvider's counterpart for a row
 // whose provider_download_id was absent from the current tick's listing —
@@ -529,10 +604,25 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		byID[string(st.ID)] = st
 	}
 
+	// suspectMassVanish guards handleMissingFromProvider against a listing
+	// that came back successful but anomalously empty/truncated (a partial
+	// provider-side outage, a transient backend bug — anything that isn't a
+	// hard error and so wouldn't otherwise be distinguished from every
+	// tracked item genuinely having vanished at once). Computed once per
+	// call rather than per row: a real mass-vanish would affect this whole
+	// batch identically, so there's nothing row-specific to decide.
+	suspectMassVanish := isSuspectedMassVanish(rows, byID)
+	if suspectMassVanish {
+		slog.Warn("database: suspected mass-vanish from provider listing, skipping missing-download detection this pass",
+			"tracked_rows", len(rows), "statuses_returned", len(statuses))
+	}
+
 	for _, d := range rows {
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
-			db.handleMissingFromProvider(ctx, d)
+			if !suspectMassVanish {
+				db.handleMissingFromProvider(ctx, d)
+			}
 			continue
 		}
 		if d.MissingCount > 0 {

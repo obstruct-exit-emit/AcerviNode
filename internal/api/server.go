@@ -90,6 +90,7 @@ type GeneralInfo struct {
 	ImportMaxRetries          int    `json:"import_max_retries"`
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
+	CleanupAfterDays          int    `json:"cleanup_after_days"`
 }
 
 // GeneralUpdate is a candidate change to AcerviNode's general configuration
@@ -107,6 +108,7 @@ type GeneralUpdate struct {
 	ImportMaxRetries          int    `json:"import_max_retries"`
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
+	CleanupAfterDays          int    `json:"cleanup_after_days"`
 }
 
 // Settings lets the API read and change configuration live, without a

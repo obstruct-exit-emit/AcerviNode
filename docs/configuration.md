@@ -16,13 +16,15 @@ units without a mounted config file.
 | `import_max_retries` | `ACERVINODE_IMPORT_MAX_RETRIES` | `5` | How many failed fetch attempts a download gets before `internal/importer` gives up and moves it to `error` instead of retrying again. Editable live (no restart) |
 | `max_concurrent_downloads` | `ACERVINODE_MAX_CONCURRENT_DOWNLOADS` | `3` | How many `provider_completed` downloads `internal/importer` fetches to local disk at once — previously always strictly one at a time, with no way to change it. Editable live (no restart); a value below 1 is clamped up to 1 rather than rejected |
 | `import_fetch_timeout_seconds` | `ACERVINODE_IMPORT_FETCH_TIMEOUT_SECONDS` | `600` | Deadline for a single file's whole fetch (not just connecting) before `internal/importer` gives up on it — same retry/backoff as any other fetch failure applies. Raise it if large files on a slow connection are failing partway through. Editable live (no restart); in-flight fetches keep whatever deadline they already started with |
+| `cleanup_after_days` | `ACERVINODE_CLEANUP_AFTER_DAYS` | `0` (disabled) | Automatically removes a **Managed** download once it's sat in `ready_for_import` (already handed off to Sonarr/Radarr) for at least this many days — local files, the provider-side download, and the row itself all removed. `0` disables cleanup entirely; the only setting here where `0` is a meaningful, valid value rather than an error. Never touches a Manual download — see [Providers](providers.md#retentioncleanup-policy). Editable live (no restart) |
 | `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings). `POST /api/v1/settings/providers/torbox/test` makes one real, live call to confirm the key actually works |
 | `category_paths.<category>` | *(none — set via API/UI, not env)* | *(none)* | Per-category override for `download_dir`, e.g. to route one category to a different disk/mount — see [Categories and save paths](#categories-and-save-paths) below. Editable live (no restart) via `PUT /api/v1/settings/categories/path` or the web UI's Settings tab |
 
 `download_dir`, `log_level`, `import_interval_seconds`, `import_max_retries`,
-`max_concurrent_downloads`, and `import_fetch_timeout_seconds` can all be
-changed together in one call via `PUT /api/v1/settings/general` (alongside
-`port`/`data_dir`, which persist but need a restart) — see [API](api.md).
+`max_concurrent_downloads`, `import_fetch_timeout_seconds`, and
+`cleanup_after_days` can all be changed together in one call via
+`PUT /api/v1/settings/general` (alongside `port`/`data_dir`, which persist
+but need a restart) — see [API](api.md).
 `api_key`, `providers.torbox.api_key`, and `category_paths` each have their
 own dedicated endpoint instead (regenerate, provider settings, and category
 paths respectively).

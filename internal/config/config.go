@@ -52,6 +52,20 @@ type Config struct {
 	// the whole transfer, not just connecting, so it needs headroom for
 	// large files on a slow connection.
 	ImportFetchTimeoutSeconds int `yaml:"import_fetch_timeout_seconds"`
+	// CleanupAfterDays, if > 0, has internal/importer automatically remove a
+	// Managed (AddedViaArr) download once it's been ready_for_import for at
+	// least this many days: local files deleted, the provider-side download
+	// deleted (best-effort), and the row itself removed. Deliberately scoped
+	// to ready_for_import only — that's a Managed download an *arr app has
+	// already imported elsewhere, so AcerviNode's own copy is redundant
+	// storage at that point; a Manual download in provider_completed is
+	// never eligible, since that's the ongoing "available, not yet grabbed"
+	// state for something the user hasn't downloaded yet — auto-deleting
+	// that would delete something before it was ever used. 0 (the default)
+	// disables cleanup entirely — the only field in this config with a
+	// meaningful "off" value, since every other numeric setting here is
+	// always-on and just tunes how it behaves.
+	CleanupAfterDays int `yaml:"cleanup_after_days"`
 
 	// CategoryPaths overrides DownloadDir on a per-category basis: a download
 	// in category "movies" mapped to "/mnt/movies" lands directly under that
@@ -78,6 +92,7 @@ func defaults() *Config {
 		ImportMaxRetries:          5,
 		MaxConcurrentDownloads:    3,
 		ImportFetchTimeoutSeconds: 600,
+		CleanupAfterDays:          0,
 		CategoryPaths:             map[string]string{},
 	}
 }
@@ -164,6 +179,11 @@ func applyEnv(cfg *Config) {
 			cfg.ImportFetchTimeoutSeconds = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_CLEANUP_AFTER_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CleanupAfterDays = n
+		}
+	}
 
 	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
 	const prefix = "ACERVINODE_PROVIDERS_"
@@ -211,6 +231,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ImportFetchTimeoutSeconds < 1 {
 		return fmt.Errorf("import_fetch_timeout_seconds must be at least 1")
+	}
+	if c.CleanupAfterDays < 0 {
+		return fmt.Errorf("cleanup_after_days must not be negative")
 	}
 	return nil
 }

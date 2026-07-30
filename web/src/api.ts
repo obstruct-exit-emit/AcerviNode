@@ -216,6 +216,7 @@ export interface GeneralSettings {
   import_max_retries: number
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
+  cleanup_after_days: number
 }
 
 export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
@@ -238,6 +239,7 @@ export interface GeneralUpdateInput {
   import_max_retries: number
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
+  cleanup_after_days: number
 }
 
 // updateGeneralSettings applies everything except port/data_dir immediately,

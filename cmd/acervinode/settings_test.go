@@ -172,7 +172,8 @@ func TestLiveSettings_General_ReflectsConfig(t *testing.T) {
 	if got.APIKey != cfg.APIKey || got.Port != cfg.Port || got.DataDir != cfg.DataDir ||
 		got.DownloadDir != cfg.DownloadDir || got.LogLevel != cfg.LogLevel ||
 		got.ImportIntervalSeconds != cfg.ImportIntervalSeconds || got.ImportMaxRetries != cfg.ImportMaxRetries ||
-		got.MaxConcurrentDownloads != cfg.MaxConcurrentDownloads || got.ImportFetchTimeoutSeconds != cfg.ImportFetchTimeoutSeconds {
+		got.MaxConcurrentDownloads != cfg.MaxConcurrentDownloads || got.ImportFetchTimeoutSeconds != cfg.ImportFetchTimeoutSeconds ||
+		got.CleanupAfterDays != cfg.CleanupAfterDays {
 		t.Errorf("General() = %+v, want it to mirror cfg (%+v)", got, cfg)
 	}
 }
@@ -299,6 +300,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		DownloadDir: newDownloadDir, LogLevel: "debug",
 		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
 		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
+		CleanupAfterDays: 14,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -326,6 +328,9 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if got := imp.FetchTimeout(); got != 120*time.Second {
 		t.Errorf("importer FetchTimeout() = %v, want 120s applied live", got)
 	}
+	if got := imp.CleanupAfterDays(); got != 14 {
+		t.Errorf("importer CleanupAfterDays() = %d, want 14 applied live", got)
+	}
 
 	reloaded, err := config.Load(configPath)
 	if err != nil {
@@ -333,7 +338,8 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	}
 	if reloaded.DownloadDir != newDownloadDir || reloaded.LogLevel != "debug" ||
 		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 ||
-		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 {
+		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 ||
+		reloaded.CleanupAfterDays != 14 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
 	}
 }
