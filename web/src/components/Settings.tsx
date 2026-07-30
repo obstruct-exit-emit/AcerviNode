@@ -21,17 +21,21 @@ import { formatBytes } from '../format'
 import { SecuritySettings } from './SecuritySettings'
 
 // Settings groups, *arr-style (matching LibriNode's own SettingsView): pages
-// organized by concern instead of one long scroll, each with an icon and a
-// one-line blurb so the group a user lands on always explains itself.
-// Smaller than LibriNode's own six groups — AcerviNode's whole settings
-// surface is one provider, categories, and login accounts, not a full
-// media-manager's worth of libraries/quality profiles/indexers.
+// organized by concern instead of one long scroll, each with a one-line
+// blurb so the group a user lands on always explains itself. No icons —
+// unlike LibriNode's own version, AcerviNode's UI doesn't use emoji as UI
+// chrome anywhere else (only the 📦 header logo), and a row of five
+// different emoji next to plain-text tabs read as visually inconsistent,
+// especially against the top-level Manual/Managed/Settings tabs, which are
+// text-only. Smaller than LibriNode's own six groups, too — AcerviNode's
+// whole settings surface is one provider, categories, and login accounts,
+// not a full media-manager's worth of libraries/quality profiles/indexers.
 const settingsGroups = [
-  { name: 'General', icon: '⚙️', blurb: "This instance's API key and import/cleanup behavior." },
-  { name: 'Provider', icon: '🔌', blurb: 'The TorBox account AcerviNode resolves every download through.' },
-  { name: 'Categories', icon: '🏷️', blurb: "Redirect a Sonarr/Radarr category's downloads to a specific directory." },
-  { name: 'Downloads', icon: '⬇️', blurb: "This browser's remembered folder for the Manual tab's downloads." },
-  { name: 'Security', icon: '🔒', blurb: 'Login accounts on top of the API key, and their roles.' },
+  { name: 'General', blurb: "This instance's API key and import/cleanup behavior." },
+  { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through.' },
+  { name: 'Categories', blurb: "Redirect a Sonarr/Radarr category's downloads to a specific directory." },
+  { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
+  { name: 'Security', blurb: 'Login accounts on top of the API key, and their roles.' },
 ] as const
 type SettingsGroup = (typeof settingsGroups)[number]['name']
 
@@ -290,9 +294,6 @@ export function Settings({ apiKey }: Props) {
             aria-current={g.name === group ? 'page' : undefined}
             onClick={() => setGroup(g.name)}
           >
-            <span className="tab-icon" aria-hidden="true">
-              {g.icon}
-            </span>{' '}
             {g.name}
           </button>
         ))}

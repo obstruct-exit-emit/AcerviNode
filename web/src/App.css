@@ -100,10 +100,6 @@
   margin-bottom: 4px;
 }
 
-.subnav .tab-icon {
-  margin-right: 2px;
-}
-
 .settings-card {
   max-width: 420px;
   background: var(--bg-elevated);
