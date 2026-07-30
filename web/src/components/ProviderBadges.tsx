@@ -7,10 +7,15 @@ export function ProviderBadges({ providers }: { providers: ProviderStatus[] }) {
   return (
     <>
       {providers.map((p) => (
-        <span key={p.name} className="provider-badge" title={`torrents: ${p.torrent_capable}, usenet: ${p.usenet_capable}`}>
+        <span
+          key={p.name}
+          className="provider-badge"
+          title={`torrents: ${p.torrent_capable}, usenet: ${p.usenet_capable}, web downloads: ${p.webdl_capable}`}
+        >
           {p.name}
           {p.torrent_capable && <span className="cap">⇩T</span>}
           {p.usenet_capable && <span className="cap">⇩U</span>}
+          {p.webdl_capable && <span className="cap">⇩W</span>}
         </span>
       ))}
     </>
