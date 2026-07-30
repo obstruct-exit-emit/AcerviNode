@@ -678,6 +678,89 @@ func TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded(t *testing.T) {
 	}
 }
 
+// TestDiscoverManual_SetsSourceFromOriginalURL proves a newly discovered
+// download's Source is captured immediately from the provider's
+// OriginalURL, if it has one — what lets Re-add work for a discovered
+// download without waiting for a later RefreshFromProvider backfill tick
+// (see database.BackfillSource, which covers a row already tracked before
+// the provider happened to report one). Empty OriginalURL (e.g. a
+// file-upload-based usenet add) correctly leaves Source empty too.
+func TestDiscoverManual_SetsSourceFromOriginalURL(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "already-tracked-1", Name: "Pre-existing", State: debrid.StateCompleted},
+	}}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	provider.statuses = append(provider.statuses,
+		debrid.DownloadStatus{ID: "with-url", Name: "Has A Source", State: debrid.StateDownloading, OriginalURL: "magnet:?xt=urn:btih:abc123"},
+		debrid.DownloadStatus{ID: "without-url", Name: "No Source", State: debrid.StateDownloading},
+	)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	withURL, err := db.GetDownloadByProviderID(ctx, "faketorbox", "with-url")
+	if err != nil {
+		t.Fatalf("GetDownloadByProviderID(with-url) error = %v", err)
+	}
+	if withURL == nil || withURL.Source != "magnet:?xt=urn:btih:abc123" {
+		t.Errorf("with-url Source = %+v, want the OriginalURL", withURL)
+	}
+
+	withoutURL, err := db.GetDownloadByProviderID(ctx, "faketorbox", "without-url")
+	if err != nil {
+		t.Fatalf("GetDownloadByProviderID(without-url) error = %v", err)
+	}
+	if withoutURL == nil || withoutURL.Source != "" {
+		t.Errorf("without-url Source = %+v, want empty", withoutURL)
+	}
+}
+
+// TestDiscoverManual_SkipsRecentlyDeletedDownload proves a provider item
+// that's still technically present in a listing right after being
+// intentionally deleted (a real, observed race — the provider's own delete
+// isn't always instantly reflected in its listing endpoints) doesn't get
+// re-adopted as a fresh "discovered" ghost — see
+// database.RecordDeletedDownload/RecentlyDeletedDownloads, which
+// internal/api's handleDeleteDownload records into on every real delete.
+func TestDiscoverManual_SkipsRecentlyDeletedDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil { // seeds the (empty) baseline
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	if err := db.RecordDeletedDownload(ctx, "faketorbox", database.KindTorrent, "just-deleted"); err != nil {
+		t.Fatalf("RecordDeletedDownload() error = %v", err)
+	}
+
+	// The provider still reports it — simulating the provider's own
+	// delete-propagation lag.
+	provider.statuses = []debrid.DownloadStatus{
+		{ID: "just-deleted", Name: "Should Not Be Re-adopted", State: debrid.StateCompleted},
+	}
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("downloads after tick = %+v, want none (recently-deleted item must not be re-adopted)", rows)
+	}
+}
+
 // TestTick_NeverAutoFetchesManualDownloads proves an AddedViaManual download
 // sitting in provider_completed is never picked up by Completed Download
 // Handling's fetch step, regardless of how long it's been there — Manual

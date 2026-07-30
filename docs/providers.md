@@ -264,11 +264,31 @@ marker that seeding has already happened) and permanently ignored — this is
 what stops the feature from flooding the Manual tab with an account's entire
 pre-existing history the moment it ships. Only items that show up
 *afterward* — added to TorBox at any time from then on, whether through
-AcerviNode or directly — are ever adopted. A discovered download has no
-`Source` (there's no original magnet/NZB URL to know), so Re-add is never
-available for one even in the (currently impossible, since manual downloads
-never reach `error` via a local fetch attempt) hypothetical case Retry/Re-add
-were shown for it.
+AcerviNode or directly — are ever adopted.
+
+A discovered download has no add-request `Source` to capture the normal way
+(there was never a request through AcerviNode's own add endpoints for one),
+but it isn't always stuck with an empty one either — see
+[Re-add for a discovered download](#re-add-for-a-discovered-download) below.
+
+**A just-deleted download can't be immediately re-discovered as a ghost.**
+Confirmed live as a real race, not just a theoretical one: a provider's own
+delete isn't always instantly reflected in its own listing endpoints (TorBox's
+`mylist` could still briefly show a torrent right after its delete call
+returned success), and `discoverManual` runs on its own schedule, independent
+of any specific delete request. A tick landing in that narrow window would
+otherwise see the still-technically-present item with no local row anymore
+and adopt it fresh — a ghost Manual download for something a user just
+intentionally removed, showing as "Available" when it genuinely isn't.
+`handleDeleteDownload` (`internal/api`) now tombstones every real delete
+(`database.RecordDeletedDownload`) before removing the local row;
+`discoverManual` skips adopting anything tombstoned within
+`recentlyDeletedGracePeriod` (5 minutes, generous on purpose — a
+`provider_download_id` that's genuinely gone never legitimately reappears,
+since a fresh add always gets a new one, so this only ever blocks
+re-adopting the exact same now-defunct id). Tombstones older than the grace
+period are pruned opportunistically on every new one recorded, rather than
+needing a separate cleanup job.
 
 **Category is deliberately not offered for Manual downloads** — no input on
 the web UI's "+ Add" form, no Category column in the Manual tab, no Category
@@ -325,6 +345,71 @@ a later poll, `RefreshFromProvider`'s own
 and it self-heals with no special-case code. A row already `error` for some
 other reason (e.g. a genuine provider-reported failure) is left alone by this
 path entirely, so it never overwrites a more specific existing reason.
+
+### Re-add for a discovered download
+
+Retry/Re-add aren't gated on `added_via` at all on the backend (see
+`internal/api`'s `handleReAddDownload`) — only on `state == error` and a
+non-empty `Source`. The frontend used to only ever show them for a Managed
+download, back when a Manual one could never actually reach `error` in the
+first place; now that the vanish-detection feature above can put a Manual
+download there too, the web UI shows Re-add (not Retry — there's still no
+local fetch to retry for Manual) for *any* download in error state that has
+one, gated on a `has_source` field (`GET /api/v1/downloads[/{id}]`) rather
+than a blind `added_via` check.
+
+The remaining question is where a **discovered** download's `Source` — never
+captured the normal way, since there was no add request through AcerviNode to
+capture a link from — comes from at all. `debrid.DownloadStatus.OriginalURL`
+is the answer, and it means something different per kind, confirmed live
+against real account data for each:
+
+- **Torrent**: always a reconstructed magnet, `magnet:?xt=urn:btih:<hash>` —
+  a torrent client/debrid service resolves the rest (name, trackers, files)
+  from DHT/trackers on its own, so nothing needs to come from TorBox at all.
+  Confirmed live that TorBox itself doesn't reliably record an original
+  magnet anywhere retrievable (a real magnet-added torrent's `mylist` entry
+  had both its `magnet` *and* `original_url` fields `null`), so this doesn't
+  rely on it — the hash alone is always enough, and a torrent always has one
+  once indexed (`magnetFromHash`, empty only if `hash` itself is still
+  empty — e.g. mid-indexing at discovery time).
+- **Usenet/webdl**: TorBox's own `mylist` response for both services
+  includes an `original_url` field — confirmed live for both: a real
+  usenet download submitted via an uploaded `.nzb` file had it `null`
+  (nothing to record — there was no URL, just raw bytes), while a real web
+  download submitted via a link had it populated with the real URL. Neither
+  field is in any published TorBox docs or the official SDK; found by
+  inspecting real responses.
+
+`debrid.DownloadStatus.OriginalURL` carries whichever of these applies,
+computed by each provider adapter (`torrentToStatus`/`usenetToStatus`/
+`webDownloadToStatus`). Two places consume it, covering both timing cases:
+`internal/importer.discoverManual` sets a newly-adopted row's `Source`
+directly from it at discovery time, and `database.RefreshFromProvider`
+(`BackfillSource`) retroactively fills in `Source` for a row already tracked
+before the provider happened to report one — gated the same way as the
+existing hash/name backfill (only when `Source` is currently empty, so this
+never overwrites a value that was already there).
+
+**The one real limit**: once a download has *already* vanished from the
+provider entirely (the scenario the vanish-detection feature above catches),
+there's nothing left to backfill from — the provider has no record of it at
+all anymore, `original_url` included. Source can only ever be backfilled
+while the download is still visible in a listing; a discovered usenet
+download that was originally added via a file upload (so `original_url` was
+always `null`, even before it vanished) has no recoverable Source either way,
+and genuinely can't support Re-add.
+
+Verified live end to end, not just in tests: a real torrent (Big Buck Bunny,
+a Creative Commons short film) was added directly through TorBox — bypassing
+AcerviNode entirely — and discovered with `Source` already set to the
+reconstructed magnet; deleted directly from TorBox to simulate a genuine
+vanish; AcerviNode's own background polling flagged it `error` on its own;
+and `POST .../readd` was called for real, successfully resubmitting the
+reconstructed magnet and landing a fresh, real `queued` torrent on the
+account. A real NZB file (provided directly for this test) confirmed usenet's
+`original_url` is `null` for a file-upload-based add, matching the documented
+limit above.
 
 ## TorBox (`internal/debrid/torbox`)
 

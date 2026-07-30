@@ -167,15 +167,32 @@ func planName(plan float64) string {
 
 func torrentToStatus(t Torrent) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
-		ID:         debrid.ProviderDownloadID(formatID(t.ID)),
-		Name:       t.Name,
-		Hash:       t.Hash,
-		SizeBytes:  int64(t.Size),
-		Progress:   t.Progress,
-		State:      mapDownloadState(t.DownloadState),
-		ETASeconds: int64(t.Eta),
-		RawState:   t.DownloadState,
+		ID:          debrid.ProviderDownloadID(formatID(t.ID)),
+		Name:        t.Name,
+		Hash:        t.Hash,
+		SizeBytes:   int64(t.Size),
+		Progress:    t.Progress,
+		State:       mapDownloadState(t.DownloadState),
+		ETASeconds:  int64(t.Eta),
+		RawState:    t.DownloadState,
+		OriginalURL: magnetFromHash(t.Hash),
 	}
+}
+
+// magnetFromHash reconstructs a bare, genuinely resubmittable magnet URI from
+// just a torrent's infohash — a torrent client/debrid service resolves the
+// rest (name, trackers, files) from DHT/trackers on its own, so this doesn't
+// need TorBox to have recorded the original magnet anywhere (confirmed live
+// it doesn't: a real torrent's mylist entry had both magnet and
+// original_url as null even though it was added via a real magnet link).
+// Empty hash (e.g. a torrent still mid-indexing at discovery time, before
+// TorBox has assigned one — see BackfillHashAndName) returns "" rather than
+// a bogus, hash-less magnet.
+func magnetFromHash(hash string) string {
+	if hash == "" {
+		return ""
+	}
+	return "magnet:?xt=urn:btih:" + hash
 }
 
 // queuedToStatus maps a QueuedDownload — shared by both the torrent and

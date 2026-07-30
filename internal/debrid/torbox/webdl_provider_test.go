@@ -12,6 +12,17 @@ import (
 
 var _ debrid.WebDownloadProvider = (*WebDownloadProvider)(nil)
 
+// TestWebDownloadToStatus_PassesThroughOriginalURL proves a web download's
+// original_url (confirmed live against a real account: a pre-existing Mega
+// folder download's original_url was the real mega.nz link) passes through
+// unchanged into debrid.DownloadStatus.OriginalURL.
+func TestWebDownloadToStatus_PassesThroughOriginalURL(t *testing.T) {
+	status := webDownloadToStatus(WebDownload{ID: 1, OriginalURL: "https://mega.nz/folder/abc123"})
+	if status.OriginalURL != "https://mega.nz/folder/abc123" {
+		t.Errorf("OriginalURL = %q", status.OriginalURL)
+	}
+}
+
 func TestWebDownloadProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	downloads := []map[string]any{}
 

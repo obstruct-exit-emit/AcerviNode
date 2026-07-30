@@ -615,6 +615,46 @@ button already used (same mode preference/folder-picker/Downloads-popup
 behavior), rather than duplicating it. This one hasn't been confirmed by an
 actual browser click-through yet — see [CHANGELOG](CHANGELOG.md).
 
+**Second immediate follow-on, same day**: extending Re-add to Manual only
+helps if a Manual download actually has a `Source` — a *discovered* one
+never did (nothing to capture, since AcerviNode never received an add
+request for it), which the user hit directly and asked about ("can we store
+the nzb info for retry?"). Researched what TorBox's three services actually
+expose per download, confirmed live: a torrent needs nothing from TorBox at
+all (a magnet is always reconstructable from just its `hash`), while usenet
+and webdl `mylist` both include an undocumented `original_url` field,
+populated only for a URL-based add. `internal/importer.discoverManual` and a
+new `database.BackfillSource` (wired into `RefreshFromProvider`) now capture
+this into `Source` at discovery time and retroactively for an already-tracked
+row, respectively. **Verified live in full** — not just unit tests — using
+the exact same real Big Buck Bunny torrent from the vanish-detection
+verification above: discovered with the reconstructed magnet already as its
+`Source`, deleted from TorBox to simulate a vanish, flagged `error`
+automatically, then `POST .../readd` was called for real and *actually
+resubmitted successfully*, landing a genuine fresh `queued` torrent on the
+account — the strongest verification of any change this session. A real NZB
+file (provided directly for this test) confirmed usenet's file-upload case
+correctly has `original_url: null`, matching the documented limit: once a
+download has already vanished from the provider, there's nothing left to
+backfill from either way. See
+[Providers](docs/providers.md#re-add-for-a-discovered-download).
+
+**Third immediate follow-on, found live during the verification above**:
+repeatedly deleting and immediately re-checking Big Buck Bunny surfaced a
+real, reproducible race — a just-deleted download could reappear as a ghost
+Manual download, because TorBox's own delete isn't always instantly
+reflected in its listing endpoints, and `discoverManual` runs independently
+of any specific delete request. Fixed with a short-lived tombstone
+(`deleted_downloads` table, `RecordDeletedDownload`/
+`RecentlyDeletedDownloads`) that `handleDeleteDownload` writes to and
+`discoverManual` checks before adopting anything — see
+[CHANGELOG](CHANGELOG.md) for full detail. Briefly investigated what looked
+like real data loss while chasing this down (several of the user's own
+in-progress downloads had vanished from the local database) — confirmed
+directly with the user before continuing rather than assumed, and it turned
+out to be them cleaning up their own downloads through the web UI in
+parallel with this testing, not a bug.
+
 💡 **Real pause/resume for streamed Manual downloads, surviving an AcerviNode
 restart**: requested by the user after the Downloads popup work above. Once a
 download link is resolved, AcerviNode's server is already out of the data

@@ -1398,6 +1398,31 @@ func TestHandleDeleteDownload(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteDownload_RecordsDeletedTombstone proves a real delete
+// through the API records a tombstone — see
+// database.RecordDeletedDownload/RecentlyDeletedDownloads, which
+// internal/importer's discoverManual checks to avoid re-adopting a
+// just-deleted item as a fresh "discovery" if the provider's own listing
+// endpoints haven't caught up with the delete yet.
+func TestHandleDeleteDownload_RecordsDeletedTombstone(t *testing.T) {
+	srv, db := newTestServer(t, &fakeProvider{}, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+
+	tombstoned, err := db.RecentlyDeletedDownloads(context.Background(), d.Provider, d.Kind)
+	if err != nil {
+		t.Fatalf("RecentlyDeletedDownloads() error = %v", err)
+	}
+	if !tombstoned["p1"] {
+		t.Errorf("RecentlyDeletedDownloads() = %v, want it to contain p1", tombstoned)
+	}
+}
+
 func TestHandleDeleteDownload_UsenetKindUsesUsenetProvider(t *testing.T) {
 	torrentDeleter := &fakeProvider{}
 	usenetDeleter := &fakeProvider{}

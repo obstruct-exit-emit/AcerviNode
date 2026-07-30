@@ -141,12 +141,13 @@ func (p *UsenetProvider) Delete(ctx context.Context, id debrid.ProviderDownloadI
 
 func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
-		ID:         debrid.ProviderDownloadID(formatID(d.ID)),
-		Name:       d.Name,
-		SizeBytes:  int64(d.Size),
-		Progress:   d.Progress,
-		State:      mapDownloadState(d.DownloadState), // TorBox shares one state vocabulary across both services
-		ETASeconds: int64(d.Eta),
-		RawState:   d.DownloadState,
+		ID:          debrid.ProviderDownloadID(formatID(d.ID)),
+		Name:        d.Name,
+		SizeBytes:   int64(d.Size),
+		Progress:    d.Progress,
+		State:       mapDownloadState(d.DownloadState), // TorBox shares one state vocabulary across both services
+		ETASeconds:  int64(d.Eta),
+		RawState:    d.DownloadState,
+		OriginalURL: d.OriginalURL,
 	}
 }

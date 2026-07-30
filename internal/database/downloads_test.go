@@ -611,6 +611,63 @@ func TestRefreshFromProvider_NeverOverwritesExistingHash(t *testing.T) {
 	}
 }
 
+// TestRefreshFromProvider_BackfillsEmptySource proves a row with no stored
+// Source (e.g. a discovered download — see internal/importer.discoverManual)
+// gets it backfilled from the provider's OriginalURL the moment the provider
+// reports one — what lets Re-add work for a discovered download after the
+// fact, not just one added directly through AcerviNode's own form.
+func TestRefreshFromProvider_BackfillsEmptySource(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Source = ""
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: d.Hash, State: debrid.StateDownloading, Progress: 0.5, OriginalURL: "magnet:?xt=urn:btih:abc123"},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.Source != "magnet:?xt=urn:btih:abc123" {
+		t.Errorf("Source = %q, want the backfilled magnet", d.Source)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.Source != "magnet:?xt=urn:btih:abc123" {
+		t.Errorf("persisted Source = %q, want the backfilled magnet", got.Source)
+	}
+}
+
+// TestRefreshFromProvider_NeverOverwritesExistingSource mirrors
+// TestRefreshFromProvider_NeverOverwritesExistingHash: a row that already has
+// a Source (e.g. one AcerviNode itself recorded at add time) must never have
+// it replaced, even if the provider also reports an OriginalURL.
+func TestRefreshFromProvider_NeverOverwritesExistingSource(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Source = "magnet:?xt=urn:btih:original&dn=Original"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	statuses := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: d.Hash, State: debrid.StateDownloading, Progress: 0.5, OriginalURL: "magnet:?xt=urn:btih:different"},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+
+	if d.Source != "magnet:?xt=urn:btih:original&dn=Original" {
+		t.Errorf("Source = %q, want left untouched since it was already non-empty", d.Source)
+	}
+}
+
 // TestRefreshFromProvider_ManagedDownloadMissingFromStatuses_NeverFlaggedByThisMechanism
 // proves a Managed (AddedViaArr) row missing from the provider's listing is
 // left entirely alone by handleMissingFromProvider, however many ticks it

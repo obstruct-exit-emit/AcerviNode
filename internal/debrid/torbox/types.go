@@ -281,6 +281,11 @@ type UsenetDownload struct {
 	DownloadFinished bool         `json:"download_finished"`
 	Eta              float64      `json:"eta"`
 	Files            []UsenetFile `json:"files"`
+	// OriginalURL is the NZB URL this download was submitted with — present
+	// (confirmed live against a real account) when added via a URL, null
+	// when added via an uploaded .nzb file (nothing to record in that case).
+	// Not in any published TorBox docs; found by inspecting a real response.
+	OriginalURL string `json:"original_url"`
 }
 
 // ListUsenetDownloads returns every usenet download on the account. Same
@@ -451,6 +456,11 @@ type WebDownload struct {
 	DownloadFinished bool              `json:"download_finished"`
 	Eta              float64           `json:"eta"`
 	Files            []WebDownloadFile `json:"files"`
+	// OriginalURL is the hoster link this download was submitted with —
+	// confirmed live against a real account (a pre-existing Mega folder
+	// download's original_url was the real mega.nz link). Not in any
+	// published TorBox docs.
+	OriginalURL string `json:"original_url"`
 }
 
 // ListWebDownloads returns every web download on the account. Same

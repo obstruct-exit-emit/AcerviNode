@@ -314,6 +314,18 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Tombstone before the local row is actually gone — a real, observed
+	// race otherwise exists: the provider's own delete isn't always
+	// instantly reflected in its listing endpoints, and internal/importer's
+	// background discovery poll runs independently of this request, so a
+	// tick landing in that window would see the still-technically-present
+	// item with no local row anymore and adopt it fresh as a ghost Manual
+	// download for something that was just intentionally deleted. See
+	// database.RecordDeletedDownload.
+	if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+		slog.Error("api: record deleted-download tombstone failed", "id", d.ID, "error", err)
+	}
+
 	if err := s.db.DeleteDownload(ctx, d.ID); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

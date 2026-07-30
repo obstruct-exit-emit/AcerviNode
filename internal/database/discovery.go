@@ -79,3 +79,64 @@ func (db *DB) DiscoveryBaseline(ctx context.Context, provider string, kind Kind)
 	}
 	return out, rows.Err()
 }
+
+// recentlyDeletedGracePeriod is how long a tombstone recorded by
+// RecordDeletedDownload keeps an item excluded from discovery — see
+// RecentlyDeletedDownloads. Generous on purpose: a provider's own delete
+// isn't always instantly reflected in its listing endpoints (confirmed live
+// against a real account: TorBox's mylist could still briefly show a torrent
+// just after its delete call returned success), and there's essentially no
+// downside to erring long here — a provider_download_id that's genuinely
+// gone never legitimately reappears (a fresh add always gets a new one), so
+// this only ever blocks re-adopting the exact same now-defunct id.
+const recentlyDeletedGracePeriod = 5 * time.Minute
+
+// RecordDeletedDownload tombstones a just-deleted download so
+// internal/importer's discoverManual doesn't immediately re-adopt it as a
+// "new" discovery if the provider's own listing endpoints haven't caught up
+// with the delete yet — see handleDeleteDownload (internal/api), the only
+// caller, and RecentlyDeletedDownloads. Opportunistically prunes tombstones
+// older than recentlyDeletedGracePeriod on every call rather than needing a
+// separate cleanup job — this table is small and write-infrequent, so a
+// delete-then-insert on every real deletion is cheap.
+func (db *DB) RecordDeletedDownload(ctx context.Context, provider string, kind Kind, providerDownloadID string) error {
+	if _, err := db.ExecContext(ctx,
+		`DELETE FROM deleted_downloads WHERE deleted_at < ?`,
+		time.Now().UTC().Add(-recentlyDeletedGracePeriod),
+	); err != nil {
+		return fmt.Errorf("prune old deleted-download tombstones: %w", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO deleted_downloads (provider, kind, provider_download_id, deleted_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (provider, kind, provider_download_id) DO UPDATE SET deleted_at = excluded.deleted_at`,
+		provider, string(kind), providerDownloadID, time.Now().UTC(),
+	); err != nil {
+		return fmt.Errorf("record deleted download %s: %w", providerDownloadID, err)
+	}
+	return nil
+}
+
+// RecentlyDeletedDownloads returns the set of provider download IDs for
+// provider+kind tombstoned within recentlyDeletedGracePeriod — discoverManual
+// skips adopting any of these, rather than re-creating a ghost Manual
+// download for something that was just intentionally deleted (see
+// RecordDeletedDownload).
+func (db *DB) RecentlyDeletedDownloads(ctx context.Context, provider string, kind Kind) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT provider_download_id FROM deleted_downloads WHERE provider = ? AND kind = ? AND deleted_at >= ?`,
+		provider, string(kind), time.Now().UTC().Add(-recentlyDeletedGracePeriod))
+	if err != nil {
+		return nil, fmt.Errorf("list recently deleted downloads: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan deleted-download entry: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}

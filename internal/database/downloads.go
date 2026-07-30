@@ -424,6 +424,30 @@ func (db *DB) BackfillHashAndName(ctx context.Context, id, hash, name string) er
 	return checkRowsAffected(res, id)
 }
 
+// BackfillSource fills in a row's Source from the provider's own recorded
+// original link — see RefreshFromProvider, the only caller. Only ever called
+// when the row's own Source is currently empty, so this never overwrites a
+// value that was already there (e.g. one AcerviNode itself submitted at add
+// time). What lets a *discovered* download (one AcerviNode never received an
+// add request for — see internal/importer.discoverManual) still support
+// Re-add, whenever the provider happens to know the original link: a
+// reconstructed magnet for a torrent (always derivable from its hash), or
+// TorBox's own recorded original_url for usenet/webdl (present for a
+// URL-based add, empty for a file-upload-based one — see
+// debrid.DownloadStatus.OriginalURL).
+func (db *DB) BackfillSource(ctx context.Context, id, source string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET source = ?, updated_at = ?
+		WHERE id = ?`,
+		nullable(source), time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("backfill source %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // LocalStateFromProvider translates a debrid provider's own DownloadState
 // into AcerviNode's local state machine (see the State* constants above) —
 // shared by both compat shims and internal/importer so all three interpret a
@@ -502,6 +526,22 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 			} else {
 				d.Hash = hash
 				d.Name = name
+			}
+		}
+
+		// A discovered download (see internal/importer.discoverManual) never
+		// had a Source recorded at insert time — there was no add request
+		// for AcerviNode to capture a link from. Backfilling it retroactively
+		// here, gated the same way as the hash/name backfill above (only
+		// when currently empty, so this never overwrites a value that was
+		// already there), is what lets Re-add work for a discovered download
+		// whenever the provider happens to know its original link — see
+		// debrid.DownloadStatus.OriginalURL and BackfillSource.
+		if d.Source == "" && st.OriginalURL != "" {
+			if err := db.BackfillSource(ctx, d.ID, st.OriginalURL); err != nil {
+				slog.Error("database: backfill source from provider failed", "id", d.ID, "error", err)
+			} else {
+				d.Source = st.OriginalURL
 			}
 		}
 

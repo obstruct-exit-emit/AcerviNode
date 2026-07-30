@@ -50,6 +50,19 @@ type DownloadStatus struct {
 	// visible to the user through both compat shims and the native API/UI,
 	// not just server logs (see database.RefreshFromProvider).
 	RawState string
+	// OriginalURL is the link this download could be resubmitted with — a
+	// reconstructed magnet for a torrent (always derivable from Hash, so
+	// always populated once indexed, regardless of how it was originally
+	// added), or the provider's own recorded original link for usenet/webdl
+	// (confirmed live: TorBox's mylist exposes this for a URL-based add,
+	// null for a file-upload-based one — there's nothing to reconstruct in
+	// that case). Empty means genuinely nothing resubmittable is known.
+	// Backfilled into database.Download.Source whenever Source is currently
+	// empty — see database.RefreshFromProvider and
+	// internal/importer.discoverManual — which is what lets a *discovered*
+	// download (one AcerviNode never received an add request for) still
+	// support Re-add if the provider happens to know its original link.
+	OriginalURL string
 }
 
 // DownloadFile is one file within a download.

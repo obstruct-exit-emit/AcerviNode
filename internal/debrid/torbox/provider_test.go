@@ -26,6 +26,32 @@ var (
 // reference for TorBox's actual vocabulary, since TorBox's docs don't
 // publish an exhaustive list; "Error" itself is independently confirmed by
 // TorBox's help center ("Download Statuses").
+// TestMagnetFromHash proves a torrent's OriginalURL is always reconstructed
+// from its hash alone — confirmed live that TorBox itself doesn't reliably
+// record an original magnet/original_url for a torrent (a real magnet-added
+// torrent's mylist entry had both fields null) — and that an empty hash
+// (e.g. a torrent still mid-indexing) produces "" rather than a bogus,
+// hash-less magnet.
+func TestMagnetFromHash(t *testing.T) {
+	if got := magnetFromHash("abc123"); got != "magnet:?xt=urn:btih:abc123" {
+		t.Errorf("magnetFromHash(abc123) = %q", got)
+	}
+	if got := magnetFromHash(""); got != "" {
+		t.Errorf("magnetFromHash(\"\") = %q, want empty", got)
+	}
+}
+
+// TestTorrentToStatus_PopulatesOriginalURL proves the reconstructed magnet
+// flows through into debrid.DownloadStatus.OriginalURL, what
+// database.RefreshFromProvider/internal/importer.discoverManual backfill
+// Source from.
+func TestTorrentToStatus_PopulatesOriginalURL(t *testing.T) {
+	status := torrentToStatus(Torrent{ID: 42, Hash: "abc123"})
+	if status.OriginalURL != "magnet:?xt=urn:btih:abc123" {
+		t.Errorf("OriginalURL = %q", status.OriginalURL)
+	}
+}
+
 func TestMapDownloadState(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -260,6 +286,23 @@ func TestPlanName(t *testing.T) {
 		if got := planName(c.plan); got != c.want {
 			t.Errorf("planName(%v) = %q, want %q", c.plan, got, c.want)
 		}
+	}
+}
+
+// TestUsenetToStatus_PassesThroughOriginalURL proves a usenet download's
+// original_url (confirmed live: populated for a URL-based add, null for a
+// file-upload-based one) passes through unchanged into
+// debrid.DownloadStatus.OriginalURL.
+func TestUsenetToStatus_PassesThroughOriginalURL(t *testing.T) {
+	status := usenetToStatus(UsenetDownload{ID: 1, OriginalURL: "https://example.com/release.nzb"})
+	if status.OriginalURL != "https://example.com/release.nzb" {
+		t.Errorf("OriginalURL = %q", status.OriginalURL)
+	}
+
+	// A file-upload-based add has no original_url — confirmed live.
+	fileBased := usenetToStatus(UsenetDownload{ID: 2})
+	if fileBased.OriginalURL != "" {
+		t.Errorf("OriginalURL = %q, want empty for a file-upload-based add", fileBased.OriginalURL)
 	}
 }
 

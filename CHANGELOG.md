@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A just-deleted download could reappear as a "ghost" Manual download** —
+  found live while verifying the Source-backfill feature below: deleting a
+  download, then immediately checking again, sometimes showed it right back
+  as "Available," even though it was genuinely gone from the provider. Root
+  cause: a provider's own delete isn't always instantly reflected in its own
+  listing endpoints (confirmed live against a real account — TorBox's
+  `mylist` could still briefly show a torrent right after its delete call
+  returned success), and `internal/importer`'s discovery step runs on its own
+  schedule, independent of any specific delete request — a tick landing in
+  that narrow window sees the still-technically-present item with no local
+  row anymore and adopts it fresh, as if it were new. `handleDeleteDownload`
+  now tombstones every real delete (new `deleted_downloads` table, migration
+  `0007_deleted_downloads.sql`) before removing the local row;
+  `discoverManual` skips adopting anything tombstoned within the last 5
+  minutes (generous on purpose — a deleted `provider_download_id` never
+  legitimately reappears, since a fresh add always gets a new one, so this
+  only ever blocks re-adopting the exact same now-defunct id). Verified live:
+  the exact repro (add directly through TorBox, discover it, delete it
+  through AcerviNode, immediately recheck) no longer reappears. New tests at
+  every layer: the tombstone round-trips and is scoped per provider+kind,
+  old tombstones get pruned automatically, `discoverManual` actually skips a
+  tombstoned item end-to-end, and `handleDeleteDownload` records one on a
+  real delete. See
+  [Providers](docs/providers.md#managed-vs-manual).
+
 ### Added
 
 - **Extended Re-add to Manual downloads, and a streamed "Download all" button
@@ -43,6 +70,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   empty source on different real rows), but actually clicking through the
   new "Download all" button's folder picker/streaming behavior in the
   detail view specifically hasn't been.
+
+- **Backfilled `Source` for discovered downloads, so Re-add can actually work
+  for them** — direct follow-on, prompted by the user asking "can we store
+  the nzb info for retry?" after seeing a discovered download with no Re-add
+  button at all (per the entry above, that's because a discovered download
+  never had a `Source` recorded — there was no add request through
+  AcerviNode to capture a link from). Researched what each of TorBox's three
+  services actually exposes, confirmed live rather than assumed: a torrent
+  needs nothing from TorBox at all — a magnet is always reconstructable from
+  just its `hash` (`magnet:?xt=urn:btih:<hash>`), confirmed that TorBox
+  itself doesn't reliably record one anywhere retrievable (a real
+  magnet-added torrent's `mylist` entry had both `magnet` and `original_url`
+  null); usenet and webdl `mylist` responses both include an undocumented
+  `original_url` field, populated for a URL-based add and `null` for a
+  file-upload-based one (confirmed live for both, including uploading a real
+  NZB file provided directly for this test). `debrid.DownloadStatus` gained
+  an `OriginalURL` field carrying whichever applies per provider adapter;
+  `internal/importer.discoverManual` sets a newly-discovered row's `Source`
+  from it immediately, and a new `database.BackfillSource` (wired into
+  `RefreshFromProvider`, mirroring the existing hash/name backfill's
+  empty-only gating) retroactively fills it in for a row already tracked
+  before the provider happened to report one. The real, unavoidable limit:
+  once a download has already vanished from the provider entirely, there's
+  nothing left to backfill from — Source can only be recovered while the
+  download is still visible in a listing, and a discovered download
+  originally added via a file upload never had a URL to begin with.
+
+  **Verified live end to end, the most thorough verification of any single
+  change this session**: a real Creative Commons torrent (Big Buck Bunny)
+  was added directly through TorBox, bypassing AcerviNode entirely, and
+  correctly discovered with `Source` already set to the reconstructed
+  magnet; deleted directly from TorBox to simulate a genuine vanish;
+  AcerviNode's own background polling flagged it `error` on its own,
+  unprompted; and `POST .../readd` was called for real and *actually
+  successfully resubmitted* the reconstructed magnet, landing a fresh,
+  real `queued` torrent on the account — not just a mocked assertion that
+  the right string got stored. A real NZB file confirmed the file-upload
+  case's `original_url: null` directly. Along the way, briefly investigated
+  what looked like real data loss (several of the user's own real,
+  in-progress downloads had vanished from the local database) — turned out
+  to be the user themselves cleaning up their own downloads through the web
+  UI while this testing was happening in parallel on the same live
+  instance, not a bug; confirmed directly with the user before continuing
+  rather than assumed. See
+  [Providers](docs/providers.md#re-add-for-a-discovered-download).
 
 - **Proactively detect a vanished Manual download** — closes a
   previously-documented, long-standing gap (ROADMAP.md's Phase 7): a Manual

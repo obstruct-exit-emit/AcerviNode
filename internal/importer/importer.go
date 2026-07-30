@@ -416,8 +416,21 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 		return
 	}
 
+	// A download deleted moments ago can still briefly appear "untracked"
+	// here — the provider's own delete isn't always instantly reflected in
+	// its listing endpoints, and this tick runs independently of any
+	// specific delete request. Without this check, that timing gap would
+	// silently re-adopt it as a ghost Manual download for something a user
+	// just intentionally removed — confirmed live. See
+	// database.RecordDeletedDownload/RecentlyDeletedDownloads.
+	recentlyDeleted, err := im.db.RecentlyDeletedDownloads(ctx, providerName, kind)
+	if err != nil {
+		slog.Error("importer: get recently deleted downloads failed", "kind", kind, "error", err)
+		return
+	}
+
 	for _, st := range untracked {
-		if baseline[string(st.ID)] {
+		if baseline[string(st.ID)] || recentlyDeleted[string(st.ID)] {
 			continue
 		}
 		d := &database.Download{
@@ -431,6 +444,17 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 			State:              database.LocalStateFromProvider(st.State),
 			Progress:           st.Progress,
 			AddedVia:           database.AddedViaManual,
+			// A discovered download has no add-request source to capture
+			// the normal way — this is the closest equivalent, whenever the
+			// provider happens to know the original link (a reconstructed
+			// magnet for a torrent, or TorBox's own recorded original_url
+			// for usenet/webdl — see debrid.DownloadStatus.OriginalURL).
+			// Empty is still possible (e.g. a file-upload-based add TorBox
+			// never got a URL for) — RefreshFromProvider's own backfill
+			// covers a row already tracked before the provider happened to
+			// know a link; this just avoids waiting a whole extra tick for
+			// the common case of a brand-new discovery.
+			Source: st.OriginalURL,
 		}
 		if d.Name == "" {
 			d.Name = d.Hash
