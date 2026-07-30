@@ -53,13 +53,6 @@ this unattended. Recommendations first.
   provider-side copy, and row once it's sat `ready_for_import` for at least
   that many days — never a Manual download. Surfaced in Settings → General.
   See [Providers](docs/providers.md#retentioncleanup-policy).
-- 💡 **Database backup story.** No documented or automated backup for
-  `acervinode.db` — losing it loses all local history/state (though
-  re-discovery would eventually re-adopt anything still on the provider).
-- 💡 **Alerting/observability.** The only way to know the importer's stuck
-  today is manually tailing the log, which is what verification has relied
-  on all along. A "notify if the importer hasn't ticked successfully in N
-  minutes" story matters a lot for genuinely unattended use.
 
 **Verify before trusting this daily** — process, not code:
 
@@ -81,6 +74,27 @@ this unattended. Recommendations first.
   it inside a docker-compose stack alongside Sonarr/Radarr, and a binary
   that doesn't fit that pattern is a real adoption friction point even
   though it isn't a functional gap.
+
+**Someday / maybe** — deprioritized on purpose, not dismissed:
+
+- 💡 **Database backup story.** No documented or automated backup for
+  `acervinode.db`. Explicitly deprioritized by the user ("I don't care if we
+  lose database") — re-discovery would eventually re-adopt anything still on
+  the provider anyway, so the actual cost of losing it is lower than it
+  first looks. Revisit if that changes.
+- 💡 **Alerting/observability.** The only way to know the importer's stuck
+  today is manually tailing the log. Two real shapes discussed and neither
+  started yet: (a) a richer `/api/v1/status` endpoint exposing last
+  successful tick time, per-kind rate-limit cooldown state, and error-state
+  download counts, for an external monitor (Uptime Kuma, Healthchecks.io) to
+  poll and alert on — small, low-risk, AcerviNode stays passive; or (b) an
+  outbound webhook AcerviNode itself fires on specific events (a download
+  reaching `error`, sustained rate-limiting, the tick loop going quiet,
+  auth failure) — matches the *arr "Connect" pattern, more flexible, but
+  real new surface (event scoping, retry semantics, per-event config) this
+  project already passed on once for a similar reason (TorBox's own
+  Notifications API, skipped in Phase 8). (a) first if this gets picked back
+  up — it's nearly free relative to (b).
 
 **Structural, blocking, and honestly big:**
 
