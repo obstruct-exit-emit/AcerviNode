@@ -77,10 +77,18 @@ export function clearStoredApiKey(): void {
   localStorage.removeItem(STORAGE_KEY)
 }
 
+// request is used two ways: with a real apiKey (the master credential, sent
+// as Authorization: Bearer — always works, restart-proof, what Sonarr/
+// Radarr always use since they can't do cookie logins), or with an empty
+// string for a signed-in login session instead — fetch() already sends the
+// session cookie automatically for a same-origin request with no special
+// config needed, and the backend falls through to checking it whenever the
+// Authorization header doesn't match the real key (see internal/api's
+// currentRole), so simply omitting the header here is enough.
 async function request<T>(path: string, apiKey: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     ...init,
-    headers: { ...init?.headers, Authorization: `Bearer ${apiKey}` },
+    headers: apiKey ? { ...init?.headers, Authorization: `Bearer ${apiKey}` } : init?.headers,
   })
   if (!resp.ok) {
     const text = await resp.text().catch(() => '')
@@ -303,4 +311,106 @@ export interface TorBoxAccount {
 
 export function getTorBoxAccount(apiKey: string): Promise<TorBoxAccount> {
   return request('/api/v1/settings/account', apiKey)
+}
+
+// --- Auth: optional login accounts on top of the API key, which keeps
+// working unaffected by any of this (see internal/api/auth.go). Every
+// function here uses an empty apiKey ('') — none of them need the master
+// credential, and a signed-in browser has no reason to know or hold it.
+
+export type Role = 'admin' | 'member'
+
+export interface AuthStatus {
+  auth_enabled: boolean
+  authenticated: boolean
+  username?: string
+  role?: Role
+}
+
+// getAuthStatus is unauthenticated — the UI needs it to decide between the
+// login form, the API-key prompt, and going straight in, before it knows
+// anything else.
+export function getAuthStatus(): Promise<AuthStatus> {
+  return request('/api/v1/auth/status', '')
+}
+
+// getSetupStatus is unauthenticated — it must answer before any credentials
+// exist, to decide whether to open the first-run wizard.
+export function getSetupStatus(): Promise<{ needed: boolean }> {
+  return request('/api/v1/setup/status', '')
+}
+
+// setupInstance claims a fresh instance in one step: creates the first
+// (always admin) login account and signs this browser in — no API key
+// involved. Rejected (403) once the instance is no longer fresh (see
+// docs/providers.md#roles).
+export function setupInstance(username: string, password: string): Promise<{ ok: boolean }> {
+  return request('/api/v1/setup', '', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export function login(username: string, password: string): Promise<{ ok: boolean }> {
+  return request('/api/v1/auth/login', '', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export function logout(): Promise<void> {
+  return request('/api/v1/auth/logout', '', { method: 'POST' })
+}
+
+// UserAccount is one login account, as reported to Settings → Security —
+// never includes a password.
+export interface UserAccount {
+  username: string
+  role: Role
+  default: boolean
+}
+
+// The user-management endpoints below are admin-only (except
+// setUserPassword's self-service case) — always called with the real
+// apiKey/admin session, never ''.
+
+export function listUsers(apiKey: string): Promise<{ users: UserAccount[] }> {
+  return request('/api/v1/settings/users', apiKey)
+}
+
+export function addUser(apiKey: string, username: string, password: string, role: Role): Promise<{ users: UserAccount[] }> {
+  return request('/api/v1/settings/users', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, role }),
+  })
+}
+
+export function removeUser(apiKey: string, username: string): Promise<{ users: UserAccount[] }> {
+  return request(`/api/v1/settings/users/${encodeURIComponent(username)}`, apiKey, { method: 'DELETE' })
+}
+
+// setUserPassword also works for a member changing their own password —
+// call it with '' (the caller is relying on the session cookie, not an
+// admin API key) when that's the case.
+export function setUserPassword(apiKey: string, username: string, password: string): Promise<{ ok: boolean }> {
+  return request(`/api/v1/settings/users/${encodeURIComponent(username)}/password`, apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+}
+
+export function setUserRole(apiKey: string, username: string, role: Role): Promise<{ users: UserAccount[] }> {
+  return request(`/api/v1/settings/users/${encodeURIComponent(username)}/role`, apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function makeDefaultUser(apiKey: string, username: string): Promise<{ users: UserAccount[] }> {
+  return request(`/api/v1/settings/users/${encodeURIComponent(username)}/default`, apiKey, { method: 'POST' })
 }

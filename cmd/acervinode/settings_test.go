@@ -504,3 +504,173 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 		t.Errorf("importer CategoryPaths() after clear = %v, want no movies entry applied live", got)
 	}
 }
+
+// --- Auth: liveSettings' wiring of config.Config's user-account methods,
+// plus the SetupNeeded convenience check built specifically for this layer
+// (the underlying business rules — default-account protection, role
+// validation, etc. — are already exhaustively tested in
+// internal/config/auth_test.go; these tests confirm delegation,
+// persistence, and the TorBox-configured/auth-enabled composition).
+
+func TestLiveSettings_SetupNeeded(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	if !settings.SetupNeeded() {
+		t.Error("SetupNeeded() = false for a fresh instance, want true")
+	}
+
+	if err := settings.SetTorBoxAPIKey(context.Background(), "a-key"); err != nil {
+		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
+	}
+	if settings.SetupNeeded() {
+		t.Error("SetupNeeded() = true once TorBox is configured, want false")
+	}
+}
+
+func TestLiveSettings_SetupNeeded_FalseOnceAuthEnabled(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	if err := settings.Setup(context.Background(), "alice", "somehash"); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if settings.SetupNeeded() {
+		t.Error("SetupNeeded() = true after Setup, want false")
+	}
+	if !settings.AuthEnabled() {
+		t.Error("AuthEnabled() = false after Setup, want true")
+	}
+}
+
+func TestLiveSettings_Setup_CreatesDefaultAdminAndPersists(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	if err := settings.Setup(context.Background(), "alice", "hashed-pw"); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	users := settings.ListUsers()
+	if len(users) != 1 || users[0].Username != "alice" || !users[0].Default || users[0].Role != config.RoleAdmin {
+		t.Errorf("users = %+v, want one Default admin alice", users)
+	}
+
+	hash, role, found := settings.FindUser("alice")
+	if !found || hash != "hashed-pw" || role != config.RoleAdmin {
+		t.Errorf("FindUser(alice) = hash:%q role:%q found:%v", hash, role, found)
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if u := reloaded.AuthSettings().Find("alice"); u == nil || u.PasswordHash != "hashed-pw" {
+		t.Errorf("persisted user = %+v, want alice with the hashed password", u)
+	}
+}
+
+func TestLiveSettings_AddRemoveSetPasswordSetRoleSetDefault(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+	ctx := context.Background()
+
+	if err := settings.Setup(ctx, "alice", "hash1"); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if err := settings.AddUser(ctx, "bob", "hash2", config.RoleMember); err != nil {
+		t.Fatalf("AddUser() error = %v", err)
+	}
+	if len(settings.ListUsers()) != 2 {
+		t.Fatalf("ListUsers() = %+v, want 2 users", settings.ListUsers())
+	}
+
+	if err := settings.SetUserPassword(ctx, "bob", "hash2-new"); err != nil {
+		t.Fatalf("SetUserPassword() error = %v", err)
+	}
+	if hash, _, _ := settings.FindUser("bob"); hash != "hash2-new" {
+		t.Errorf("FindUser(bob) hash = %q, want hash2-new", hash)
+	}
+
+	if err := settings.SetUserRole(ctx, "bob", config.RoleAdmin); err != nil {
+		t.Fatalf("SetUserRole() error = %v", err)
+	}
+	if _, role, _ := settings.FindUser("bob"); role != config.RoleAdmin {
+		t.Errorf("bob role = %q, want admin", role)
+	}
+
+	if err := settings.SetDefaultUser(ctx, "bob"); err != nil {
+		t.Fatalf("SetDefaultUser() error = %v", err)
+	}
+	for _, u := range settings.ListUsers() {
+		if u.Username == "bob" && !u.Default {
+			t.Error("bob should be Default after SetDefaultUser")
+		}
+		if u.Username == "alice" && u.Default {
+			t.Error("alice should no longer be Default")
+		}
+	}
+
+	// alice is no longer Default, so she can now be removed.
+	if err := settings.RemoveUser(ctx, "alice"); err != nil {
+		t.Fatalf("RemoveUser(alice) error = %v", err)
+	}
+	if len(settings.ListUsers()) != 1 {
+		t.Errorf("ListUsers() = %+v, want just bob remaining", settings.ListUsers())
+	}
+
+	// Persisted across a reload.
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if u := reloaded.AuthSettings().Find("bob"); u == nil || !u.Default || u.EffectiveRole() != config.RoleAdmin {
+		t.Errorf("persisted bob = %+v, want Default admin", u)
+	}
+	if reloaded.AuthSettings().Find("alice") != nil {
+		t.Error("alice should be gone from the persisted config")
+	}
+}
+
+func TestLiveSettings_RemoveUser_RefusesDefaultAccount(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+	if err := settings.Setup(context.Background(), "alice", "hash1"); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if err := settings.RemoveUser(context.Background(), "alice"); err == nil {
+		t.Error("expected an error removing the sole Default account")
+	}
+}
+
+func TestLiveSettings_FindUser_UnknownUsername(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+	if _, _, found := settings.FindUser("nobody"); found {
+		t.Error("FindUser() found = true for an unknown username, want false")
+	}
+}

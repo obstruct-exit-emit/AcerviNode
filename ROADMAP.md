@@ -1,6 +1,6 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 and 5–8 are
+Where the project has been and where it's going. Phases 0–3 and 5–9 are
 complete; Phase 4 (more debrid providers) is blocked for now. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
@@ -19,6 +19,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [6 — Full QA pass](#phase-6--full-qa-pass-) | Systematic review + live testing of every existing ability; 3 real bugs found and fixed | ✅ |
 | [7 — Managed vs. Manual downloads](#phase-7--managed-vs-manual-downloads-) | Split the web UI into two tabs by how a download was added, plus discovering items added directly through TorBox | ✅ |
 | [8 — Web Downloads & account status](#phase-8--web-downloads--account-status-) | TorBox's generic hoster-debrid service (Mega, 1Fichier, and ~160 others), plus a TorBox account status display | ✅ |
+| [9 — Login, users & roles](#phase-9--login-users--roles-) | Optional login accounts on top of the API key, admin/member roles, first-run setup wizard | ✅ |
 
 ---
 
@@ -892,3 +893,80 @@ UserService-based account-status display, everything else skipped.
   to any of this session's code — every other package's tests ran fine); the
   full suite, including that package, was instead run and confirmed green
   from a WSL environment against the same working tree.
+
+## Phase 9 — Login, users & roles ✅
+
+Requested directly: "Maybe we should make login, users and first time setup
+wizard? look at librinode to understand the feel of it." Followed the
+instruction literally — read LibriNode's actual real implementation
+(`internal/api/auth.go`, `internal/config/config.go`'s `AuthSettings`/
+`UserAccount`, `App.tsx`'s gating logic, the full `SetupWizard.tsx`) before
+designing anything, rather than approximating the idea from memory. Then
+asked, and got an answer, on the one real design fork this raised for
+AcerviNode specifically (LibriNode's own member role only restricts
+Settings/System; AcerviNode's member is scoped to Manual downloads only,
+"because of manual download ability and possible future additions").
+
+- **The API key is completely unaffected.** It's still the instance's
+  root-equivalent master credential — `currentRole` (`internal/api/auth.go`)
+  treats a matching key as an anonymous admin session, unconditionally, the
+  same as always. Sonarr/Radarr and scripts never need to change anything.
+- **No login accounts means the feature is entirely inert** —
+  `AuthSettings.Enabled()` is just `len(Users) > 0`. This is what makes it
+  safe to ship as a default-on upgrade rather than something requiring an
+  opt-in flag: confirmed live against the real WSL instance, `auth_enabled`
+  read `false` after deploying this and every existing API-key-based call
+  continued working completely unchanged.
+- **Roles, enforced server-side**: `admin` — everything. `member` —
+  Manual downloads only (add/view/manage a magnet/NZB/hoster link grabbed
+  directly), no access to the *arr-driven Managed pipeline at all, no
+  Settings. `internal/api/downloads.go`'s `downloadByID` — the single choke
+  point every single-download handler (Get/Delete/Retry/Re-add/file-link/
+  zip-link) already routed through — is where this actually lives, not
+  scattered per-handler; `handleListDownloads` separately forces
+  `added_via=manual` for a non-admin regardless of the request's own query
+  param. Every `/api/v1/settings/*` route (general config, providers,
+  categories, account status, user management) requires admin, except
+  password self-service (any signed-in account can change its own).
+- **First-run setup wizard**: `SetupNeeded` is `!AuthEnabled() &&
+  !TorBoxConfigured()` — deliberately not also a database check, since
+  every download insert path already requires an active provider, making
+  "TorBox never configured" a reliable-enough proxy for "genuinely fresh."
+  Three steps (Account → TorBox key, skippable, with a live Test → Done),
+  much shorter than LibriNode's own six (it walks through library folders,
+  metadata, indexers, and download clients — AcerviNode's whole setup
+  surface is one provider).
+- **The Default account** (created by the wizard, or promoted later via
+  "Make default") can't be removed or demoted — an instance with login
+  enabled can never end up with zero admins able to sign in.
+- Sessions are in-memory only (a restart logs everyone out — matches this
+  project's own accepted stance on losing the database, and LibriNode's
+  identical choice for the same reason), PBKDF2-SHA256 (600,000 iterations,
+  same format string LibriNode uses), HttpOnly/`SameSite=Lax` cookie,
+  30-day expiry.
+- New: `internal/config/auth.go` (16 tests), `internal/api/auth.go` (~35
+  tests — password hashing, session lifecycle, `requireAuth`/`requireAdmin`,
+  setup/login/logout, user management, member row-level enforcement),
+  `cmd/acervinode` wiring (6 tests). Frontend: `SetupWizard.tsx`,
+  `LoginForm.tsx`, `SecuritySettings.tsx` (Settings → Security — list/add/
+  remove accounts, change role, promote default, reset password),
+  `App.tsx`'s gating rewritten to insert setup/login ahead of the existing
+  API-key prompt (not replacing it), Managed/Settings tabs hidden for a
+  member.
+- **Verified live end to end, deliberately never against the real
+  instance**: a separate scratch instance (its own `config.yaml`, its own
+  data dir) was taken through the entire flow for real — fresh install
+  correctly reported `setup needed: true`, `POST /setup` created the first
+  admin and signed the browser in via cookie, a second account added as
+  `member` correctly got `403` from `/settings/general` and `200` (empty)
+  from `/downloads`, correctly reached the provider layer (`503`, no TorBox
+  key on the scratch instance) rather than being blocked by auth when
+  adding a webdl link, attempting to remove the Default admin correctly
+  failed, and logging out correctly ended the session (`401` on the next
+  call). The real, already-in-use WSL instance was only ever hit with safe,
+  read-only checks (`auth_enabled: false`, `setup needed: false`, existing
+  API key still works) — deliberately never given a real test user, since
+  the first account added becomes permanently un-removable (the
+  Default-account protection) and would have flipped a real, currently-
+  working instance into requiring login by accident. See
+  [Providers](docs/providers.md#auth-login-accounts-and-roles).

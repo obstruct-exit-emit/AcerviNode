@@ -7,14 +7,27 @@ that surface.
 
 ## Auth
 
-Every endpoint except `/health` requires `Authorization: Bearer <api_key>` (see
-[Configuration](configuration.md)). Unlike a provider credential (see
-`GET /api/v1/settings/providers`, which never echoes the actual TorBox key back),
-`GET /api/v1/settings/general` does return AcerviNode's own `api_key` in
-plaintext — there's nothing to protect by hiding it from a caller who already
-had to present it to reach the endpoint, and the whole point of exposing it is
-so a human can find and copy it from the web UI instead of digging through
-server logs or `config.yaml`.
+Every endpoint except `/health` and the ones listed below requires either
+`Authorization: Bearer <api_key>` (see [Configuration](configuration.md)) or
+a valid `acervinode_session` cookie from a signed-in login account (see
+[Providers](providers.md#auth-login-accounts-and-roles) for the full design
+— optional, off by default, doesn't change how the API key works). Unlike a
+provider credential (see `GET /api/v1/settings/providers`, which never
+echoes the actual TorBox key back), `GET /api/v1/settings/general` does
+return AcerviNode's own `api_key` in plaintext — there's nothing to protect
+by hiding it from a caller who already had to present it to reach the
+endpoint, and the whole point of exposing it is so a human can find and copy
+it from the web UI instead of digging through server logs or `config.yaml`.
+
+Every `/api/v1/settings/*` endpoint (general config, providers, categories,
+user management) additionally requires the **admin** role — a `member`
+login account gets `403`. A member's access is scoped to Manual downloads
+only; see the same Providers section for exactly what that means and why.
+
+Unauthenticated by design, since each needs to answer before any credentials
+necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
+`POST /api/v1/auth/login`, `POST /api/v1/auth/logout`,
+`GET /api/v1/setup/status`, `POST /api/v1/setup`.
 
 ## Endpoints
 
@@ -43,6 +56,17 @@ server logs or `config.yaml`.
 | `POST` | `/api/v1/settings/categories` | Body `{"protocol": "torrent"\|"usenet", "name": "..."}` — manually registers a category, the same way an *arr app declaring one does. Not exposed in the web UI (a save-path override can be set for any category name directly, with no need to pre-declare it — see `PUT .../categories/path` below) but still available directly |
 | `PUT` | `/api/v1/settings/categories/path` | Body `{"category": "...", "path": "..."}` — sets category's override destination directory, used by Completed Download Handling instead of `download_dir`/`<category>` (see [Configuration](configuration.md#categories-and-save-paths)). An empty `path` clears a previously set override. Takes effect immediately (no restart) and is persisted to `config.yaml`. 400 if `category` is empty |
 | `GET` | `/api/v1/settings/account` | The configured provider's own account status (plan tier, subscription state, premium expiry, lifetime bytes downloaded) — a live call, not a cached snapshot. Always HTTP 200: `{"available": false, "error": "..."}` if nothing's configured yet or the provider doesn't support this; `{"available": true, "plan_name": "...", "is_subscribed": bool, "premium_expires_at": "...", "total_bytes_downloaded": N}` otherwise. See [Providers](providers.md#accountprovider) |
+| `GET` | `/api/v1/auth/status` | Unauthenticated. `{"auth_enabled": bool, "authenticated": bool, "username"?: "...", "role"?: "admin"\|"member"}` — the web UI's own decision point between the login form and the (unaffected) API-key prompt |
+| `POST` | `/api/v1/auth/login` | Unauthenticated. Body `{"username": "...", "password": "..."}` — sets the session cookie on success. `400` if no login accounts exist at all; `401` for a wrong username/password (deliberately slowed by ~500ms and logged, same either way, so a failure doesn't reveal whether the username existed) |
+| `POST` | `/api/v1/auth/logout` | Unauthenticated by nature (safe to call with no session). Revokes the current session and clears the cookie. `204` |
+| `GET` | `/api/v1/setup/status` | Unauthenticated. `{"needed": bool}` — whether this instance is claimable by its first visitor (no login account *and* no provider configured yet — see [Providers](providers.md#auth-login-accounts-and-roles)) |
+| `POST` | `/api/v1/setup` | Unauthenticated, but refused (`403`) once the instance is no longer fresh. Body `{"username": "...", "password": "..."}` (password ≥ 8 characters) — creates the first (always admin, always the protected Default) login account and signs the browser in, in one step. No API key involved |
+| `GET` | `/api/v1/settings/users` | Admin-only. `{"users": [{"username": "...", "role": "admin"\|"member", "default": bool}, ...]}` — never a password hash |
+| `POST` | `/api/v1/settings/users` | Admin-only. Body `{"username": "...", "password": "...", "role": "admin"\|"member"}` (password ≥ 8 characters) — creates an additional login account. Returns the updated user list |
+| `DELETE` | `/api/v1/settings/users/{username}` | Admin-only. Deletes a login account and ends its active sessions immediately. `400` for the protected Default account — promote a replacement via `.../default` first |
+| `PUT` | `/api/v1/settings/users/{username}/role` | Admin-only. Body `{"role": "admin"\|"member"}` — promotes/demotes an account and ends its active sessions (so a demoted account can't keep using an admin session it already holds). `400` for the Default account, which can't be demoted |
+| `POST` | `/api/v1/settings/users/{username}/default` | Admin-only. Promotes an account to the protected Default (and to admin, in the same step) |
+| `PUT` | `/api/v1/settings/users/{username}/password` | **Not** admin-only — any signed-in account may change its own password. Changing someone *else's* password still requires admin. Body `{"password": "..."}` (≥ 8 characters). Ends the account's other sessions (the browser making the change keeps its own) |
 
 ## Download JSON shape
 

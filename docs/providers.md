@@ -678,6 +678,104 @@ status display actually uses: `plan` (an integer tier — 0 Free, 1 Essential, 2
 3 Standard, confirmed live against the real account, which is a Pro/`plan: 2`
 subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`.
 
+## Auth: login accounts and roles
+
+The API key (`config.yaml`'s `api_key`) has always been AcerviNode's only
+credential, and it still is — nothing here changes that. What's new is an
+*optional* login layer on top of it: real accounts, a session-cookie-based
+sign-in for the web UI, and two roles. Requested directly, with the reasoning
+"because of manual download ability and possible future additions." Modeled
+directly on LibriNode's own real implementation (`internal/api/auth.go`,
+`internal/config/config.go`'s `AuthSettings`/`UserAccount`) — same PBKDF2
+hash format, same in-memory session store, same first-run wizard trigger
+logic — read from the actual sibling-project source rather than guessed at,
+since the whole point was matching its feel.
+
+**The API key stays the root-equivalent master credential.** Sonarr/Radarr
+and scripts can't do cookie logins, so they keep using it exactly as before
+— `currentRole` (`internal/api/auth.go`) treats a matching API key as an
+anonymous admin session, unconditionally. Nothing about existing
+integrations changes whether or not login is ever set up.
+
+**No accounts means login is disabled entirely** — `AuthSettings.Enabled()`
+is just `len(Users) > 0`. An instance that's never had a login account added
+behaves exactly as every AcerviNode instance did before this feature
+existed: the web UI's existing `ApiKeyGate` prompt, nothing more. This is
+deliberately how an *upgrade* stays inert — confirmed live against the real
+WSL instance: after deploying this, `auth_enabled` read `false` and
+everything continued working unchanged with the existing API key, since it
+already had no login accounts and TorBox already configured.
+
+**Roles**: `admin` can do everything — Settings (TorBox key, general
+config, categories, cleanup policy), user management, and both the Managed
+and Manual tabs. `member` is scoped to Manual downloads only — adding,
+viewing, and managing a magnet/NZB/hoster link grabbed directly, the same
+things the Manual tab's own "+ Add" already does. A member has **no**
+access to the *arr-driven Managed pipeline at all, and no Settings access.
+The reasoning: interfering with a Managed download (retrying/deleting
+something Sonarr/Radarr is actively tracking) is a materially bigger deal
+than a member managing their own manual grabs, and this leaves room for
+"possible future additions" (the second half of the request) to have a
+natural home in the member tier without touching admin-only surface.
+
+This is enforced server-side, not just hidden in the UI (`internal/api`):
+- `downloadByID` — the single choke point every single-download handler
+  (Get/Delete/Retry/Re-add/file-link/zip-link) routes through — 403s a
+  non-admin touching a row whose `AddedVia` isn't `manual`.
+- `handleListDownloads` forces `added_via=manual` for a non-admin regardless
+  of what the request's own query param asked for.
+- Every `/api/v1/settings/*` route (including the new user-management ones)
+  is `requireAdmin`, not just `requireAuth` — except
+  `PUT .../users/{username}/password`, which allows self-service: any
+  signed-in account may change its own password without being an admin.
+
+**The first-run setup wizard** (`SetupNeeded`, `internal/api/setup.go`-style
+handlers) claims a genuinely fresh instance in one step: create the login
+account (always admin, always the protected *Default* account — see below),
+sign the browser in, no API key required. `SetupNeeded` is deliberately
+`!AuthEnabled() && !TorBoxConfigured()` — not also a check for existing
+tracked downloads, since every download insert path already requires an
+active provider, so "TorBox never configured" is already a reliable proxy
+for "nothing's happened here yet." An instance already in real use is never
+claimable just because its operator happened not to set up a login account
+— confirmed by the exact live check above. Much shorter than LibriNode's own
+wizard (Account → Library → Metadata → Indexer → Downloads → Done) since
+AcerviNode's whole setup surface is one provider: Account → TorBox key
+(skippable) → Done.
+
+**The Default account** is the one account that can't be removed or
+demoted (`config.Config.RemoveUser`/`SetUserRole`) — whichever account the
+setup wizard created, or whoever's since been promoted via "Make default."
+Guarantees a login-enabled instance can never end up with zero admins able
+to sign in. `SetDefaultUser` promotes a replacement (and admin, in the same
+step) before the old default can be safely removed.
+
+**Sessions are in-memory only** — a process restart logs everyone out,
+matching LibriNode's identical choice for an identical reason: simpler than
+persisting session state somewhere durable for a benefit (surviving a
+restart while signed in) nobody's asked for, and consistent with this
+project's own stance on the database itself (acceptable to lose). PBKDF2-
+SHA256, 600,000 iterations, format `pbkdf2-sha256$<iterations>$<salt
+hex>$<hash hex>` — the exact same format LibriNode uses (not that anything
+reads across between the two projects; just consistency within the same
+author's work). Cookie is `acervinode_session`, HttpOnly, `SameSite=Lax`,
+30-day expiry.
+
+**Verified live**, not just in tests: a separate scratch instance (own
+`config.yaml`/data dir, never the real one) was taken through the entire
+flow for real — fresh install correctly reported `setup needed: true`,
+`POST /setup` created the first admin and signed in, a second account added
+as `member` correctly got 403 from `/settings/general` and 200 from
+`/downloads` (empty), correctly reached the provider layer (503, no TorBox
+key on the scratch instance) rather than being blocked by auth when adding a
+webdl link, and logging out correctly ended the session (401 on the next
+call). The real, already-configured WSL instance was deliberately *not*
+used for any of this — adding even one test user there would have become
+permanently un-removable (the Default-account protection) and would have
+flipped it into requiring login for a real, currently-in-use instance,
+which is exactly the risk this design is supposed to avoid inflicting on
+anyone by accident.
+
 ## Adding a new provider
 
 1. New subpackage under `internal/debrid/<name>/`.

@@ -157,6 +157,43 @@ type Settings interface {
 	// error here (e.g. not configured yet, or the provider doesn't support
 	// this) is routine and shown as "unavailable" rather than a hard failure.
 	AccountStatus(ctx context.Context) (debrid.AccountStatus, error)
+
+	// --- Auth: optional login accounts on top of the API key, which keeps
+	// working unaffected by any of this (see internal/api/auth.go) ---------
+
+	// AuthEnabled reports whether any login account exists — the UI uses
+	// this to decide between the login form and the API-key prompt.
+	AuthEnabled() bool
+	// SetupNeeded reports whether this instance is claimable by its first
+	// visitor: no login account and no provider configured yet — a
+	// genuinely fresh install. An instance already in real use (a
+	// configured provider) is never claimable just because its operator
+	// happened not to set up a login account.
+	SetupNeeded() bool
+	// Setup claims a fresh instance in one step: creates the first
+	// (Default, always admin) login account. Refused by the caller
+	// (internal/api) if SetupNeeded is false.
+	Setup(ctx context.Context, username, passwordHash string) error
+	// FindUser looks up a login account's stored password hash and
+	// effective role, for handleLogin to verify a plaintext password
+	// against — never exposed directly to a client (see ListUsers).
+	FindUser(username string) (passwordHash, role string, found bool)
+	// ListUsers reports every login account, never a password hash — backs
+	// Settings → Security's user list.
+	ListUsers() []UserAccount
+	// AddUser creates an additional login account. role is RoleAdmin or
+	// RoleMember; anything else (including "") becomes RoleMember.
+	AddUser(ctx context.Context, username, passwordHash, role string) error
+	// RemoveUser deletes a login account; the Default account is refused.
+	RemoveUser(ctx context.Context, username string) error
+	// SetUserPassword changes one account's password.
+	SetUserPassword(ctx context.Context, username, passwordHash string) error
+	// SetUserRole promotes/demotes an account between admin and member;
+	// the Default account can't be demoted.
+	SetUserRole(ctx context.Context, username, role string) error
+	// SetDefaultUser promotes an account to the protected default (and
+	// admin in the same step).
+	SetDefaultUser(ctx context.Context, username string) error
 }
 
 // Server is AcerviNode's native API.
@@ -167,18 +204,22 @@ type Server struct {
 	usenetProvider      usenetAdder      // nil if no usenet-capable provider is configured
 	webDownloadProvider webDownloadAdder // nil if no web-download-capable provider is configured
 	settings            Settings
+	sessions            *sessionStore
 	mux                 *http.ServeMux
 }
 
 // NewServer builds the native API server. version is a free-form build
 // identifier. Any provider may be nil. Auth checks settings.APIKey() live on
 // every request rather than a value captured at construction, so a
-// regenerated key takes effect immediately — see requireAuth.
+// regenerated key takes effect immediately — see requireAuth. Login
+// sessions live only in this Server's own memory (see sessionStore) — a
+// process restart logs everyone out.
 func NewServer(version string, db *database.DB, torrentProvider torrentAdder, usenetProvider usenetAdder, webDownloadProvider webDownloadAdder, settings Settings) *Server {
 	s := &Server{
 		version: version, db: db,
 		torrentProvider: torrentProvider, usenetProvider: usenetProvider, webDownloadProvider: webDownloadProvider,
 		settings: settings,
+		sessions: newSessionStore(),
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
@@ -190,11 +231,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
-	// Health is intentionally unauthenticated — it's what a container
-	// orchestrator or systemd healthcheck hits, and shouldn't need a key.
+	// Health, and everything auth needs to answer before any credentials
+	// exist (or without any at all), are intentionally unauthenticated —
+	// health is what a container orchestrator or systemd healthcheck hits
+	// and shouldn't need a key; the rest is what the web UI needs to decide
+	// between the first-run wizard, the login form, and the (existing)
+	// API-key prompt.
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/v1/auth/status", s.handleAuthStatus)
+	s.mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	s.mux.HandleFunc("GET /api/v1/setup/status", s.handleSetupStatus)
+	s.mux.HandleFunc("POST /api/v1/setup", s.handleSetup)
+
 	s.mux.HandleFunc("GET /api/v1/version", s.requireAuth(s.handleVersion))
 	s.mux.HandleFunc("GET /api/v1/providers", s.requireAuth(s.handleProviders))
+	// Downloads: any authenticated user (admin or member) can reach these —
+	// handleListDownloads/downloadByID are what actually scope a member to
+	// Manual downloads only (see their own doc comments and
+	// docs/providers.md#roles), not the route registration here.
 	s.mux.HandleFunc("GET /api/v1/downloads", s.requireAuth(s.handleListDownloads))
 	s.mux.HandleFunc("POST /api/v1/downloads/torrent", s.requireAuth(s.handleAddTorrent))
 	s.mux.HandleFunc("POST /api/v1/downloads/usenet", s.requireAuth(s.handleAddUsenet))
@@ -205,16 +260,28 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/readd", s.requireAuth(s.handleReAddDownload))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}/files/{fileId}/link", s.requireAuth(s.handleGetFileLink))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}/zip-link", s.requireAuth(s.handleGetZipLink))
-	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAuth(s.handleGetProviderSettings))
-	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAuth(s.handleSetTorBoxAPIKey))
-	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAuth(s.handleTestTorBoxConnection))
-	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAuth(s.handleGetGeneralSettings))
-	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAuth(s.handleUpdateGeneralSettings))
-	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAuth(s.handleRegenerateAPIKey))
-	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAuth(s.handleGetCategories))
-	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAuth(s.handleAddCategory))
-	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAuth(s.handleSetCategoryPath))
-	s.mux.HandleFunc("GET /api/v1/settings/account", s.requireAuth(s.handleGetAccountStatus))
+
+	// Settings and user management are admin-only — a member has no
+	// business changing system configuration or other accounts.
+	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAdmin(s.handleGetProviderSettings))
+	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAdmin(s.handleSetTorBoxAPIKey))
+	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAdmin(s.handleTestTorBoxConnection))
+	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAdmin(s.handleGetGeneralSettings))
+	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAdmin(s.handleUpdateGeneralSettings))
+	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAdmin(s.handleRegenerateAPIKey))
+	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAdmin(s.handleGetCategories))
+	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAdmin(s.handleAddCategory))
+	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAdmin(s.handleSetCategoryPath))
+	s.mux.HandleFunc("GET /api/v1/settings/account", s.requireAdmin(s.handleGetAccountStatus))
+	s.mux.HandleFunc("GET /api/v1/settings/users", s.requireAdmin(s.handleListUsers))
+	s.mux.HandleFunc("POST /api/v1/settings/users", s.requireAdmin(s.handleAddUser))
+	s.mux.HandleFunc("DELETE /api/v1/settings/users/{username}", s.requireAdmin(s.handleRemoveUser))
+	s.mux.HandleFunc("PUT /api/v1/settings/users/{username}/role", s.requireAdmin(s.handleSetUserRole))
+	s.mux.HandleFunc("POST /api/v1/settings/users/{username}/default", s.requireAdmin(s.handleMakeDefaultUser))
+	// Not requireAdmin: self-service password changes are allowed for any
+	// signed-in account, admin or not — see handleSetUserPassword's own
+	// admin-or-self check.
+	s.mux.HandleFunc("PUT /api/v1/settings/users/{username}/password", s.requireAuth(s.handleSetUserPassword))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

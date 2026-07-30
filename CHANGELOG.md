@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Optional login accounts with two roles (admin/member), on top of the API
+  key** — requested directly ("maybe we should have login, users and first
+  time setup wizard"), with roles specifically "because of manual download
+  ability and possible future additions." Researched LibriNode's actual real
+  implementation first rather than designing from scratch (`internal/api/
+  auth.go`, `internal/config/config.go`'s `AuthSettings`/`UserAccount`,
+  `App.tsx`'s gating, the full `SetupWizard.tsx`) — same PBKDF2-SHA256 hash
+  format, same in-memory session store, same first-run wizard trigger logic,
+  matching its actual feel rather than approximating it.
+
+  The API key is completely unaffected and stays the root-equivalent master
+  credential — Sonarr/Radarr and scripts keep using it exactly as before. No
+  login accounts means auth is disabled entirely (`AuthSettings.Enabled()`),
+  which is how an *upgrade* stays inert: confirmed live against the real WSL
+  instance, `auth_enabled` read `false` and everything continued working
+  unchanged after deploying this.
+
+  **Roles**: `admin` does everything (Settings, user management, both
+  Managed and Manual tabs). `member` is scoped to Manual downloads only —
+  no access to the *arr-driven Managed pipeline (interfering with something
+  Sonarr/Radarr is actively tracking is a bigger deal than a member managing
+  their own manual grabs) and no Settings access. Enforced server-side, not
+  just hidden in the UI: `downloadByID` (the single choke point every
+  single-download handler routes through) 403s a non-admin touching a
+  Managed row; `handleListDownloads` forces `added_via=manual` for a
+  non-admin regardless of the request's own query param; every
+  `/api/v1/settings/*` route is `requireAdmin` except password
+  self-service.
+
+  **First-run setup wizard**: claims a genuinely fresh instance (no login
+  account *and* no provider configured — deliberately not also a database
+  check, since every download requires an active provider already) in one
+  step — Account → TorBox key (skippable, with a live Test) → Done. Much
+  shorter than LibriNode's own 6-step wizard since AcerviNode's whole setup
+  surface is one provider.
+
+  **The Default account** (whoever the wizard created, or anyone since
+  promoted) can't be removed or demoted — guarantees a login-enabled
+  instance always has at least one admin able to sign in.
+
+  New: `internal/config/auth.go` (roles, accounts, all the mutation rules —
+  16 tests), `internal/api/auth.go` (hashing, sessions, every handler — ~35
+  tests spanning password hashing, session lifecycle, `requireAuth`/
+  `requireAdmin`, setup/login/logout, user management, and member row-level
+  enforcement), `cmd/acervinode` wiring (6 tests). Frontend:
+  `SetupWizard.tsx`, `LoginForm.tsx`, `SecuritySettings.tsx` (Settings →
+  Security), `App.tsx`'s gating rewritten to insert setup/login ahead of the
+  existing API-key prompt rather than replacing it, Managed/Settings tabs
+  hidden for a member.
+
+  **Verified live end to end** on a genuinely separate scratch instance (own
+  `config.yaml`/data dir) — never the real one, deliberately: adding even
+  one test user to the real instance would have become permanently
+  un-removable (the Default-account protection) and flipped it into
+  requiring login for an instance actually in use. On the scratch instance:
+  fresh install correctly reported `setup needed: true`, `POST /setup`
+  created the first admin and signed in, a `member` account correctly got
+  403 from Settings and 200 (empty) from downloads, correctly reached the
+  provider layer (503, no TorBox key there) rather than being blocked by
+  auth when adding a webdl link, and logout correctly ended the session
+  (401 afterward). The real instance was only ever hit with safe, read-only
+  checks confirming `auth_enabled: false`/`setup needed: false`/existing API
+  key still works. See
+  [Providers](docs/providers.md#auth-login-accounts-and-roles).
+
 ### Fixed
 
 - **`data_dir` was editable in Settings but silently didn't move the

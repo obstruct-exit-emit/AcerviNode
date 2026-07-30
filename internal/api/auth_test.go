@@ -1,0 +1,538 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/acervinode/acervinode/internal/database"
+)
+
+// --- Password hashing --------------------------------------------------
+
+func TestHashPassword_VerifyRoundTrip(t *testing.T) {
+	hash, err := hashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hashPassword() error = %v", err)
+	}
+	if !verifyPassword(hash, "correct horse battery staple") {
+		t.Error("verifyPassword() = false for the correct password")
+	}
+}
+
+func TestVerifyPassword_WrongPasswordFails(t *testing.T) {
+	hash, err := hashPassword("the-real-password")
+	if err != nil {
+		t.Fatalf("hashPassword() error = %v", err)
+	}
+	if verifyPassword(hash, "not-the-password") {
+		t.Error("verifyPassword() = true for the wrong password")
+	}
+}
+
+func TestVerifyPassword_MalformedHashRejectedNotPanicked(t *testing.T) {
+	cases := []string{"", "not-a-hash-at-all", "pbkdf2-sha256$notanumber$aa$bb", "pbkdf2-sha256$100$zz$bb"}
+	for _, stored := range cases {
+		if verifyPassword(stored, "anything") {
+			t.Errorf("verifyPassword(%q) = true, want false", stored)
+		}
+	}
+}
+
+// --- Session store -------------------------------------------------------
+
+func TestSessionStore_CreateAndLookup(t *testing.T) {
+	st := newSessionStore()
+	token := st.create("alice", RoleAdmin)
+	sess, ok := st.lookup(token)
+	if !ok {
+		t.Fatal("lookup() ok = false for a freshly created token")
+	}
+	if sess.user != "alice" || sess.role != RoleAdmin {
+		t.Errorf("session = %+v, want user=alice role=admin", sess)
+	}
+}
+
+func TestSessionStore_LookupUnknownOrEmptyToken(t *testing.T) {
+	st := newSessionStore()
+	if _, ok := st.lookup("unknown-token"); ok {
+		t.Error("lookup() of an unknown token should fail")
+	}
+	if _, ok := st.lookup(""); ok {
+		t.Error("lookup() of an empty token should fail")
+	}
+}
+
+func TestSessionStore_RevokeEndsSession(t *testing.T) {
+	st := newSessionStore()
+	token := st.create("alice", RoleAdmin)
+	st.revoke(token)
+	if _, ok := st.lookup(token); ok {
+		t.Error("session should be gone after revoke()")
+	}
+}
+
+func TestSessionStore_RevokeUserEndsAllExceptGiven(t *testing.T) {
+	st := newSessionStore()
+	keep := st.create("alice", RoleAdmin)
+	drop := st.create("alice", RoleAdmin)
+	other := st.create("bob", RoleMember)
+
+	st.revokeUser("alice", keep)
+
+	if _, ok := st.lookup(keep); !ok {
+		t.Error("the excepted token should survive revokeUser")
+	}
+	if _, ok := st.lookup(drop); ok {
+		t.Error("alice's other token should be revoked")
+	}
+	if _, ok := st.lookup(other); !ok {
+		t.Error("bob's session should be untouched by revoking alice")
+	}
+}
+
+func TestSessionStore_ExpiredSessionIsNotValid(t *testing.T) {
+	st := newSessionStore()
+	token := st.create("alice", RoleAdmin)
+	// White-box: same package, so the unexported session's expiry can be
+	// backdated directly rather than waiting out sessionTTL in a test.
+	st.mu.Lock()
+	sess := st.tokens[token]
+	sess.expiry = time.Now().Add(-time.Minute)
+	st.tokens[token] = sess
+	st.mu.Unlock()
+
+	if _, ok := st.lookup(token); ok {
+		t.Error("an expired session should not be valid")
+	}
+}
+
+// --- requireAuth / requireAdmin, exercised through real endpoints --------
+
+func TestRequireAuth_SessionCookieWorks(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	token := srv.sessions.create("alice", RoleMember)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (valid session should authenticate)", rec.Code)
+	}
+}
+
+func TestRequireAuth_NeitherApiKeyNorSessionRejected(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestRequireAdmin_MemberSessionForbidden(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (member must not reach Settings)", rec.Code)
+	}
+}
+
+func TestRequireAdmin_AdminSessionAllowed(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	token := srv.sessions.create("alice", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (admin session should reach Settings)", rec.Code)
+	}
+}
+
+func TestRequireAdmin_ApiKeyAlwaysAdmin(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/general"))
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (API key is root-equivalent admin)", rec.Code)
+	}
+}
+
+// --- auth status / setup / login / logout ---------------------------------
+
+func TestHandleAuthStatus_NotAuthenticated(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got map[string]any
+	json.NewDecoder(rec.Body).Decode(&got)
+	if got["authenticated"] != false {
+		t.Errorf("authenticated = %v, want false", got["authenticated"])
+	}
+}
+
+func TestHandleAuthStatus_AuthenticatedReportsUsernameAndRole(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	settings.users = []UserAccount{{Username: "alice", Role: RoleAdmin, Default: true}}
+	token := srv.sessions.create("alice", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var got map[string]any
+	json.NewDecoder(rec.Body).Decode(&got)
+	if got["authenticated"] != true || got["username"] != "alice" || got["role"] != RoleAdmin {
+		t.Errorf("auth status = %+v", got)
+	}
+	if got["auth_enabled"] != true {
+		t.Errorf("auth_enabled = %v, want true (a user exists)", got["auth_enabled"])
+	}
+}
+
+func TestHandleSetupStatus_ReflectsSettings(t *testing.T) {
+	settings := &fakeSettings{setupNeeded: true}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil))
+	var got map[string]bool
+	json.NewDecoder(rec.Body).Decode(&got)
+	if !got["needed"] {
+		t.Error("needed = false, want true")
+	}
+}
+
+func TestHandleSetup_CreatesAdminAndSignsIn(t *testing.T) {
+	settings := &fakeSettings{setupNeeded: true}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	body := strings.NewReader(`{"username":"alice","password":"correcthorse"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", body)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.users) != 1 || settings.users[0].Username != "alice" || !settings.users[0].Default {
+		t.Errorf("users = %+v, want one Default alice", settings.users)
+	}
+	// Should have set a session cookie signing the browser in immediately.
+	resp := rec.Result()
+	found := false
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookie && c.Value != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected a session cookie to be set after setup")
+	}
+}
+
+func TestHandleSetup_RefusedWhenNotNeeded(t *testing.T) {
+	settings := &fakeSettings{setupNeeded: false}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	body := strings.NewReader(`{"username":"alice","password":"correcthorse"}`)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", body))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestHandleSetup_RejectsShortPassword(t *testing.T) {
+	settings := &fakeSettings{setupNeeded: true}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	body := strings.NewReader(`{"username":"alice","password":"short"}`)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleLogin_Success(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	hash, _ := hashPassword("correcthorse")
+	settings.users = []UserAccount{{Username: "alice", Role: RoleAdmin}}
+	settings.userHashes = map[string]string{"alice": hash}
+
+	body := strings.NewReader(`{"username":"alice","password":"correcthorse"}`)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	resp := rec.Result()
+	found := false
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookie && c.Value != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected a session cookie after a successful login")
+	}
+}
+
+func TestHandleLogin_WrongPassword(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	hash, _ := hashPassword("correcthorse")
+	settings.users = []UserAccount{{Username: "alice", Role: RoleAdmin}}
+	settings.userHashes = map[string]string{"alice": hash}
+
+	body := strings.NewReader(`{"username":"alice","password":"wrong"}`)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", body))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleLogin_AuthNotEnabled(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	body := strings.NewReader(`{"username":"alice","password":"whatever1"}`)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (no users configured)", rec.Code)
+	}
+}
+
+func TestHandleLogout_ClearsCookie(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+	token := srv.sessions.create("alice", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if _, ok := srv.sessions.lookup(token); ok {
+		t.Error("session should be revoked after logout")
+	}
+}
+
+// --- user management -------------------------------------------------------
+
+func TestHandleListUsers(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "alice", Role: RoleAdmin, Default: true}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/users"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "alice") {
+		t.Errorf("body = %s, want it to mention alice", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "password") {
+		t.Error("response must never mention a password/hash field")
+	}
+}
+
+func TestHandleAddUser_Success(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	body := strings.NewReader(`{"username":"bob","password":"longenough1","role":"member"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/users", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.users) != 1 || settings.users[0].Username != "bob" {
+		t.Errorf("users = %+v", settings.users)
+	}
+}
+
+func TestHandleAddUser_ShortPasswordRejected(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	body := strings.NewReader(`{"username":"bob","password":"short","role":"member"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/users", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleRemoveUser_SurfacesSettingsError(t *testing.T) {
+	settings := &fakeSettings{
+		users:         []UserAccount{{Username: "alice", Role: RoleAdmin, Default: true}},
+		removeUserErr: context.DeadlineExceeded,
+	}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/settings/users/alice"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (default-account removal refused by Settings)", rec.Code)
+	}
+}
+
+func TestHandleSetUserPassword_SelfServiceAllowedWithoutAdmin(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "bob", Role: RoleMember}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/bob/password", strings.NewReader(`{"password":"newpassword1"}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (a member can change their own password)", rec.Code)
+	}
+}
+
+func TestHandleSetUserPassword_OtherUserRequiresAdmin(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "bob", Role: RoleMember}, {Username: "carol", Role: RoleMember}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/carol/password", strings.NewReader(`{"password":"newpassword1"}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (a member can't change someone else's password)", rec.Code)
+	}
+}
+
+func TestHandleMakeDefaultUser(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "alice", Default: true, Role: RoleAdmin}, {Username: "bob", Role: RoleMember}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/users/bob/default"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	for _, u := range settings.users {
+		if u.Username == "bob" && (!u.Default || u.Role != RoleAdmin) {
+			t.Errorf("bob = %+v, want default=true role=admin", u)
+		}
+		if u.Username == "alice" && u.Default {
+			t.Error("alice should no longer be default")
+		}
+	}
+}
+
+// --- member row-level enforcement on downloads -----------------------------
+
+func seedDownloadWithAddedVia(t *testing.T, db *database.DB, kind database.Kind, providerDownloadID string, addedVia database.AddedVia) *database.Download {
+	t.Helper()
+	d := &database.Download{
+		ID: "dl-" + providerDownloadID, Provider: "fake", ProviderDownloadID: providerDownloadID,
+		Kind: kind, Hash: "hash-" + providerDownloadID, Name: "Test Download",
+		State: database.StateDownloading, Progress: 0.5, AddedVia: addedVia,
+	}
+	if err := db.InsertDownload(context.Background(), d); err != nil {
+		t.Fatalf("seed InsertDownload() error = %v", err)
+	}
+	return d
+}
+
+func TestDownloadByID_MemberCanAccessManualDownload(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, nil, nil, settings)
+	d := seedDownloadWithAddedVia(t, db, database.KindTorrent, "manual-1", database.AddedViaManual)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (member accessing a Manual download)", rec.Code)
+	}
+}
+
+func TestDownloadByID_MemberForbiddenFromManagedDownload(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, nil, nil, settings)
+	d := seedDownloadWithAddedVia(t, db, database.KindTorrent, "arr-1", database.AddedViaArr)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (member must not reach a Managed download)", rec.Code)
+	}
+}
+
+func TestDownloadByID_AdminCanAccessEitherKind(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, nil, nil, settings)
+	d := seedDownloadWithAddedVia(t, db, database.KindTorrent, "arr-1", database.AddedViaArr)
+	token := srv.sessions.create("alice", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads/"+d.ID, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (admin can access a Managed download)", rec.Code)
+	}
+}
+
+func TestHandleListDownloads_MemberForcedToManualOnly(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, nil, nil, settings)
+	seedDownloadWithAddedVia(t, db, database.KindTorrent, "arr-1", database.AddedViaArr)
+	seedDownloadWithAddedVia(t, db, database.KindTorrent, "manual-1", database.AddedViaManual)
+	token := srv.sessions.create("bob", RoleMember)
+
+	// Even explicitly asking for added_via=arr, a member only ever gets
+	// Manual rows back.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads?added_via=arr", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var got []map[string]any
+	json.NewDecoder(rec.Body).Decode(&got)
+	if len(got) != 1 || got[0]["added_via"] != "manual" {
+		t.Errorf("results = %+v, want exactly the one Manual row regardless of the added_via=arr query", got)
+	}
+}
+
+func TestHandleListDownloads_AdminSeesRequestedFilter(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, nil, nil, settings)
+	seedDownloadWithAddedVia(t, db, database.KindTorrent, "arr-1", database.AddedViaArr)
+	seedDownloadWithAddedVia(t, db, database.KindTorrent, "manual-1", database.AddedViaManual)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads?added_via=arr"))
+	var got []map[string]any
+	json.NewDecoder(rec.Body).Decode(&got)
+	if len(got) != 1 || got[0]["added_via"] != "arr" {
+		t.Errorf("results = %+v, want exactly the one arr row", got)
+	}
+}

@@ -121,6 +121,13 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	case string(database.AddedViaManual):
 		addedVia = database.AddedViaManual
 	}
+	// A member only ever sees Manual downloads, regardless of what the
+	// query param asked for — the web UI never asks for anything else for
+	// a member, but this is what actually enforces it server-side (see
+	// docs/providers.md#roles).
+	if role, _ := s.currentRole(r); role != RoleAdmin {
+		addedVia = database.AddedViaManual
+	}
 
 	out := make([]downloadResponse, 0, len(rows))
 	for _, d := range rows {
@@ -359,6 +366,13 @@ func (s *Server) handleRetryDownload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, toDownloadResponse(updated))
 }
 
+// downloadByID resolves the {id} path value, and is the single choke point
+// every single-download handler (Get/Delete/Retry/Re-add/file-link/
+// zip-link) routes through — which is why the member-role check lives here
+// rather than duplicated in each of them: a member's access is scoped to
+// Manual downloads only, never the *arr-driven Managed pipeline (see
+// docs/providers.md#roles). requireAuth already guaranteed a valid identity
+// before any handler here ran, so currentRole's ok is always true.
 func (s *Server) downloadByID(w http.ResponseWriter, r *http.Request) (*database.Download, bool) {
 	id := r.PathValue("id")
 	d, err := s.db.GetDownloadByID(r.Context(), id)
@@ -368,6 +382,10 @@ func (s *Server) downloadByID(w http.ResponseWriter, r *http.Request) (*database
 	}
 	if d == nil {
 		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	if role, _ := s.currentRole(r); role != RoleAdmin && d.AddedVia != database.AddedViaManual {
+		http.Error(w, "member access is limited to Manual downloads", http.StatusForbidden)
 		return nil, false
 	}
 	return d, true

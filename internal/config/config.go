@@ -77,6 +77,11 @@ type Config struct {
 	// category name means the same destination whether it came from the
 	// qBittorrent or SABnzbd compat shim.
 	CategoryPaths map[string]string `yaml:"category_paths"`
+
+	// Auth holds the optional login accounts — see auth.go. No accounts
+	// means authentication is disabled entirely, the same API-key-only
+	// model AcerviNode always used before this existed.
+	Auth AuthSettings `yaml:"auth,omitempty"`
 }
 
 var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

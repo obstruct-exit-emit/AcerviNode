@@ -18,6 +18,7 @@ import {
 } from '../api'
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
 import { formatBytes } from '../format'
+import { SecuritySettings } from './SecuritySettings'
 
 // One row of the "Save path overrides" list — kept as its own component,
 // keyed by category name, so an in-progress edit in one row survives a
@@ -508,6 +509,8 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
           </>
         )}
       </section>
+
+      <SecuritySettings apiKey={apiKey} />
     </div>
   )
 }

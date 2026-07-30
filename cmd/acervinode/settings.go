@@ -305,6 +305,128 @@ func (s *liveSettings) AccountStatus(ctx context.Context) (debrid.AccountStatus,
 	return s.torrentDyn.Account(ctx)
 }
 
+// --- Auth: optional login accounts (see internal/api/auth.go for the
+// password hashing/session logic — this file only ever handles already-
+// hashed passwords, matching how internal/config itself never sees a
+// plaintext one either) ------------------------------------------------
+
+func (s *liveSettings) AuthEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.AuthSettings().Enabled()
+}
+
+// SetupNeeded reports whether this instance is claimable by its first
+// visitor: no login account, and TorBox never configured — a genuinely
+// fresh install. Deliberately doesn't also check for tracked downloads:
+// every download insert path requires an active provider already, so "no
+// TorBox configured" is already a reliable proxy for "nothing's happened
+// here yet" without needing a database query.
+func (s *liveSettings) SetupNeeded() bool {
+	return !s.AuthEnabled() && !s.TorBoxConfigured()
+}
+
+// Setup claims a fresh instance: the first login account, always Default
+// and admin regardless of what's passed (see config.Config.AddUser).
+// Callers (internal/api's handleSetup) are expected to have already
+// checked SetupNeeded.
+func (s *liveSettings) Setup(_ context.Context, username, passwordHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.AddUser(username, passwordHash, config.RoleAdmin); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
+// FindUser looks up a login account's stored hash and effective role, for
+// internal/api's handleLogin to verify a plaintext password against.
+func (s *liveSettings) FindUser(username string) (passwordHash, role string, found bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.cfg.AuthSettings().Find(username)
+	if u == nil {
+		return "", "", false
+	}
+	return u.PasswordHash, u.EffectiveRole(), true
+}
+
+// ListUsers reports every login account — never a password hash, see
+// api.UserAccount's own doc comment.
+func (s *liveSettings) ListUsers() []api.UserAccount {
+	s.mu.Lock()
+	users := s.cfg.AuthSettings().Users
+	s.mu.Unlock()
+	out := make([]api.UserAccount, len(users))
+	for i, u := range users {
+		out[i] = api.UserAccount{Username: u.Username, Role: u.EffectiveRole(), Default: u.Default}
+	}
+	return out
+}
+
+func (s *liveSettings) AddUser(_ context.Context, username, passwordHash, role string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.AddUser(username, passwordHash, role); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
+func (s *liveSettings) RemoveUser(_ context.Context, username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.RemoveUser(username); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
+func (s *liveSettings) SetUserPassword(_ context.Context, username, passwordHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.SetUserPassword(username, passwordHash); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
+func (s *liveSettings) SetUserRole(_ context.Context, username, role string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.SetUserRole(username, role); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
+func (s *liveSettings) SetDefaultUser(_ context.Context, username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cfg.SetDefaultUser(username); err != nil {
+		return err
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
 func copyCategoryPaths(src map[string]string) map[string]string {
 	out := make(map[string]string, len(src))
 	for k, v := range src {

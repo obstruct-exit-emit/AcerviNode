@@ -3,15 +3,19 @@ import {
   ApiError,
   clearStoredApiKey,
   deleteDownload,
+  getAuthStatus,
   getDownload,
   getFileLink,
   getStoredApiKey,
   getProviders,
+  getSetupStatus,
   getVersion,
   getZipLink,
   listDownloads,
+  logout as apiLogout,
   retryDownload,
   storeApiKey,
+  type AuthStatus,
   type Download,
   type ProviderStatus,
 } from './api'
@@ -20,8 +24,10 @@ import { ApiKeyGate } from './components/ApiKeyGate'
 import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadOptionsDialog, type DownloadOptions } from './components/DownloadOptionsDialog'
 import { DownloadsTable } from './components/DownloadsTable'
+import { LoginForm } from './components/LoginForm'
 import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
+import SetupWizard from './components/SetupWizard'
 import {
   forceDownload,
   listenForDownloadWindowMessages,
@@ -46,8 +52,16 @@ const POLL_INTERVAL_MS = 4000
 type View = 'managed' | 'manual' | 'settings'
 
 export default function App() {
+  // apiKey is the literal stored key (or null) — only ever used by the
+  // ApiKeyGate flow itself. Every actual API call downstream uses activeKey
+  // instead (see below), which is '' for a signed-in login session — a
+  // login account replaces the API-key prompt entirely when one exists (see
+  // auth.auth_enabled), but nothing here ever needs to know the real key in
+  // that case.
   const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey())
   const [gateError, setGateError] = useState<string | undefined>(undefined)
+  const [auth, setAuth] = useState<AuthStatus | null>(null)
+  const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null)
   const [view, setView] = useState<View>('manual')
   const [version, setVersion] = useState<string>('')
   const [providers, setProviders] = useState<ProviderStatus[]>([])
@@ -98,11 +112,43 @@ export default function App() {
     })
   }
 
+  const refreshAuth = useCallback(() => {
+    getAuthStatus()
+      .then(setAuth)
+      .catch(() => setAuth({ auth_enabled: false, authenticated: false }))
+  }, [])
+
   const handleUnauthorized = useCallback(() => {
+    // Covers both auth models: a rejected API key (the existing gate flow)
+    // and a session that expired/was revoked server-side — refreshing auth
+    // status picks up the latter and brings back the login form on its own,
+    // since authenticated will now read false.
     clearStoredApiKey()
     setApiKey(null)
     setGateError('That key was rejected by the server.')
+    refreshAuth()
+  }, [refreshAuth])
+
+  useEffect(() => {
+    refreshAuth()
+    getSetupStatus()
+      .then((s) => setSetupNeeded(s.needed))
+      .catch(() => setSetupNeeded(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ready mirrors LibriNode's own convention exactly: if login is enabled,
+  // "ready" means signed in via session; otherwise it means the (existing)
+  // API-key prompt has been satisfied. activeKey is what every downstream
+  // API call actually uses — '' for a login session (the browser has no
+  // reason to know or hold the real API key in that case; the session
+  // cookie carries the request instead — see api.ts's request()).
+  const ready = auth ? (auth.auth_enabled ? auth.authenticated : !!apiKey) : false
+  const activeKey = auth?.auth_enabled ? '' : (apiKey ?? '')
+  // A member's access is scoped to Manual downloads only (see
+  // docs/providers.md#roles) — the API-key path and an admin session are
+  // both root-equivalent.
+  const isAdmin = !auth?.auth_enabled || auth.role === 'admin'
 
   const refresh = useCallback(
     async (key: string) => {
@@ -130,11 +176,11 @@ export default function App() {
   )
 
   useEffect(() => {
-    if (!apiKey) return
-    refresh(apiKey)
-    const interval = setInterval(() => refresh(apiKey), POLL_INTERVAL_MS)
+    if (!ready) return
+    refresh(activeKey)
+    const interval = setInterval(() => refresh(activeKey), POLL_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [apiKey, refresh])
+  }, [ready, activeKey, refresh])
 
   // Relays the Downloads popup window's progress back into each row's own
   // progress bar, keyed by download id — best-effort, since the popup works
@@ -169,21 +215,21 @@ export default function App() {
   }
 
   async function handleDelete(d: Download) {
-    if (!apiKey) return
+    if (!ready) return
     if (!confirm(`Delete "${d.name}"? This also removes it from the debrid provider.`)) return
     try {
-      await deleteDownload(apiKey, d.id, true)
-      refresh(apiKey)
+      await deleteDownload(activeKey, d.id, true)
+      refresh(activeKey)
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function handleRetry(d: Download) {
-    if (!apiKey) return
+    if (!ready) return
     try {
-      await retryDownload(apiKey, d.id)
-      refresh(apiKey)
+      await retryDownload(activeKey, d.id)
+      refresh(activeKey)
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
     }
@@ -197,7 +243,7 @@ export default function App() {
   // remembers the last one chosen — see startDownloadAll, its confirm
   // handler, for the actual per-mode dispatch.
   function handleDownloadAll(d: Download) {
-    if (!apiKey) return
+    if (!ready) return
     setDownloadDialogFor(d)
   }
 
@@ -214,10 +260,10 @@ export default function App() {
   }
 
   async function handleDownloadAllZip(d: Download) {
-    if (!apiKey) return
+    if (!ready) return
     markBusy(d.id)
     try {
-      const { url } = await getZipLink(apiKey, d.id)
+      const { url } = await getZipLink(activeKey, d.id)
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
@@ -233,10 +279,10 @@ export default function App() {
   // matters). The only mode available at all on a browser without folder
   // access, but can be chosen deliberately on any browser now too.
   async function handleDownloadAllIndividual(d: Download) {
-    if (!apiKey) return
+    if (!ready) return
     markBusy(d.id)
     try {
-      const detail = await getDownload(apiKey, d.id)
+      const detail = await getDownload(activeKey, d.id)
       const files = detail.files.filter((f) => f.provider_file_id)
       if (files.length === 0) {
         alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
@@ -245,7 +291,7 @@ export default function App() {
       const failed: string[] = []
       for (const f of files) {
         try {
-          const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
+          const { url } = await getFileLink(activeKey, d.id, f.provider_file_id as string)
           await forceDownload(url, basename(f.path))
         } catch (err) {
           console.error(`Failed to download ${f.path}`, err)
@@ -265,7 +311,7 @@ export default function App() {
   // The 'folder' mode chosen in DownloadOptionsDialog — folder and the
   // Downloads-window choice are already decided by then.
   async function startStreamedDownload(d: Download, folder: FileSystemDirectoryHandle, useDownloadManager: boolean) {
-    if (!apiKey) return
+    if (!ready) return
 
     // Deliberately the first statement, before any await — window.open()
     // is synchronous, and this needs the dialog confirm button's own click
@@ -280,7 +326,7 @@ export default function App() {
     // listenForDownloadWindowMessages relay set up above.
     if (opened) {
       try {
-        const detail = await getDownload(apiKey, d.id)
+        const detail = await getDownload(activeKey, d.id)
         const files = detail.files.filter((f) => f.provider_file_id)
         if (files.length === 0) {
           alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
@@ -306,7 +352,7 @@ export default function App() {
     // blocked — either way, stream straight to the chosen folder here.
     markBusy(d.id)
     try {
-      const detail = await getDownload(apiKey, d.id)
+      const detail = await getDownload(activeKey, d.id)
       const files = detail.files.filter((f) => f.provider_file_id)
       if (files.length === 0) {
         alert(detail.files_error ? `Couldn't get this download's files: ${detail.files_error}` : 'No files available to download yet.')
@@ -320,7 +366,7 @@ export default function App() {
       const failed: string[] = []
       for (const f of files) {
         try {
-          const { url } = await getFileLink(apiKey, d.id, f.provider_file_id as string)
+          const { url } = await getFileLink(activeKey, d.id, f.provider_file_id as string)
           const resp = await fetch(url)
           if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
           await writeFileToDirectory(folder, f.path, resp, (chunkBytes) => {
@@ -343,7 +389,30 @@ export default function App() {
     }
   }
 
-  if (!apiKey) {
+  // Brief loading state — both auth/status and setup/status are fast, local
+  // requests, but rendering nothing meaningful before they answer avoids a
+  // flash of the wrong gate (e.g. the API-key prompt for a moment on an
+  // instance that actually has login enabled).
+  if (auth === null || setupNeeded === null) {
+    return null
+  }
+
+  if (setupNeeded) {
+    return (
+      <SetupWizard
+        onDone={() => {
+          setSetupNeeded(false)
+          refreshAuth()
+        }}
+      />
+    )
+  }
+
+  if (auth.auth_enabled && !auth.authenticated) {
+    return <LoginForm onLoggedIn={refreshAuth} />
+  }
+
+  if (!auth.auth_enabled && !apiKey) {
     return <ApiKeyGate onSubmit={handleKeySubmit} error={gateError} />
   }
 
@@ -354,14 +423,19 @@ export default function App() {
         <div className="header-meta">
           <ProviderBadges providers={providers} />
           <span className="version">v{version}</span>
+          {auth.auth_enabled && auth.username && <span className="current-user">{auth.username}</span>}
           <button
             className="logout-btn"
             onClick={() => {
-              clearStoredApiKey()
-              setApiKey(null)
+              if (auth.auth_enabled) {
+                apiLogout().finally(refreshAuth)
+              } else {
+                clearStoredApiKey()
+                setApiKey(null)
+              }
             }}
           >
-            Sign out
+            {auth.auth_enabled ? 'Log out' : 'Sign out'}
           </button>
         </div>
       </header>
@@ -370,12 +444,16 @@ export default function App() {
         <button className={view === 'manual' ? 'tab tab-active' : 'tab'} onClick={() => setView('manual')}>
           Manual
         </button>
-        <button className={view === 'managed' ? 'tab tab-active' : 'tab'} onClick={() => setView('managed')}>
-          Managed
-        </button>
-        <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
-          Settings
-        </button>
+        {isAdmin && (
+          <button className={view === 'managed' ? 'tab tab-active' : 'tab'} onClick={() => setView('managed')}>
+            Managed
+          </button>
+        )}
+        {isAdmin && (
+          <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
+            Settings
+          </button>
+        )}
         <button className="add-download-btn" onClick={() => setAddOpen(true)}>
           + Add
         </button>
@@ -383,7 +461,7 @@ export default function App() {
 
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
-        {view === 'managed' && (
+        {isAdmin && view === 'managed' && (
           <DownloadsTable
             downloads={managedDownloads}
             onDelete={handleDelete}
@@ -411,12 +489,12 @@ export default function App() {
             emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
           />
         )}
-        {view === 'settings' && <Settings apiKey={apiKey} onApiKeyChanged={handleApiKeyChanged} />}
+        {isAdmin && view === 'settings' && <Settings apiKey={activeKey} onApiKeyChanged={handleApiKeyChanged} />}
       </main>
 
       {selectedId && (
         <DownloadDetail
-          apiKey={apiKey}
+          apiKey={activeKey}
           id={selectedId}
           onClose={() => setSelectedId(null)}
           onDownloadAll={handleDownloadAll}
@@ -433,13 +511,13 @@ export default function App() {
       )}
       {addOpen && (
         <AddDownload
-          apiKey={apiKey}
+          apiKey={activeKey}
           providers={providers}
           onClose={() => setAddOpen(false)}
           onAdded={() => {
             setAddOpen(false)
             setView('manual')
-            refresh(apiKey)
+            refresh(activeKey)
           }}
         />
       )}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,111 @@ type fakeSettings struct {
 
 	accountStatus debrid.AccountStatus
 	accountErr    error
+
+	// Auth: a simple in-memory user list — enough to exercise
+	// requireAuth/requireAdmin/downloadByID's role checks and the user-
+	// management handlers without needing a real config.Config.
+	users          []UserAccount
+	userHashes     map[string]string // username -> password hash
+	setupNeeded    bool
+	setupErr       error
+	addUserErr     error
+	removeUserErr  error
+	setPasswordErr error
+	setRoleErr     error
+	setDefaultErr  error
+}
+
+func (f *fakeSettings) AuthEnabled() bool { return len(f.users) > 0 }
+func (f *fakeSettings) SetupNeeded() bool { return f.setupNeeded }
+
+func (f *fakeSettings) Setup(_ context.Context, username, passwordHash string) error {
+	if f.setupErr != nil {
+		return f.setupErr
+	}
+	f.users = append(f.users, UserAccount{Username: username, Role: RoleAdmin, Default: true})
+	if f.userHashes == nil {
+		f.userHashes = map[string]string{}
+	}
+	f.userHashes[username] = passwordHash
+	f.setupNeeded = false
+	return nil
+}
+
+func (f *fakeSettings) FindUser(username string) (passwordHash, role string, found bool) {
+	for _, u := range f.users {
+		if strings.EqualFold(u.Username, username) {
+			return f.userHashes[u.Username], u.Role, true
+		}
+	}
+	return "", "", false
+}
+
+func (f *fakeSettings) ListUsers() []UserAccount { return f.users }
+
+func (f *fakeSettings) AddUser(_ context.Context, username, passwordHash, role string) error {
+	if f.addUserErr != nil {
+		return f.addUserErr
+	}
+	if role != RoleAdmin {
+		role = RoleMember
+	}
+	f.users = append(f.users, UserAccount{Username: username, Role: role})
+	if f.userHashes == nil {
+		f.userHashes = map[string]string{}
+	}
+	f.userHashes[username] = passwordHash
+	return nil
+}
+
+func (f *fakeSettings) RemoveUser(_ context.Context, username string) error {
+	if f.removeUserErr != nil {
+		return f.removeUserErr
+	}
+	for i, u := range f.users {
+		if strings.EqualFold(u.Username, username) {
+			f.users = append(f.users[:i], f.users[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("no user named %q", username)
+}
+
+func (f *fakeSettings) SetUserPassword(_ context.Context, username, passwordHash string) error {
+	if f.setPasswordErr != nil {
+		return f.setPasswordErr
+	}
+	if f.userHashes == nil {
+		f.userHashes = map[string]string{}
+	}
+	f.userHashes[username] = passwordHash
+	return nil
+}
+
+func (f *fakeSettings) SetUserRole(_ context.Context, username, role string) error {
+	if f.setRoleErr != nil {
+		return f.setRoleErr
+	}
+	for i, u := range f.users {
+		if strings.EqualFold(u.Username, username) {
+			f.users[i].Role = role
+			return nil
+		}
+	}
+	return fmt.Errorf("no user named %q", username)
+}
+
+func (f *fakeSettings) SetDefaultUser(_ context.Context, username string) error {
+	if f.setDefaultErr != nil {
+		return f.setDefaultErr
+	}
+	for i := range f.users {
+		f.users[i].Default = strings.EqualFold(f.users[i].Username, username)
+		if f.users[i].Default {
+			f.users[i].Role = RoleAdmin
+		}
+	}
+	return nil
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }

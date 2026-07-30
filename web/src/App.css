@@ -1105,3 +1105,130 @@ table.detail-files tbody tr:last-child td {
   opacity: 0.6;
   cursor: default;
 }
+
+/* SetupWizard / LoginForm / SecuritySettings */
+
+.wizard {
+  max-width: 480px;
+  width: 100%;
+  text-align: left;
+}
+
+.wizard-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.dot.active {
+  background: var(--accent);
+}
+
+.dot.done {
+  background: var(--text-muted);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13.5px;
+  margin: 0 0 14px;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.notice {
+  font-size: 13px;
+}
+
+.notice.ok {
+  color: var(--state-ready);
+}
+
+.notice.bad {
+  color: var(--state-error);
+}
+
+.wizard-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  gap: 10px;
+}
+
+.toggle {
+  background: none !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+}
+
+.badge-default {
+  background: var(--text-muted);
+}
+
+.current-user {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.rows {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rows .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rows .row:last-child {
+  border-bottom: none;
+}
+
+.user-row-name {
+  flex: 1;
+  min-width: 120px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rows .row select,
+.rows .row button {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font: inherit;
+}
+
+.rows .row button {
+  background: none;
+}
+
+.rows .row button:hover {
+  border-color: var(--accent);
+}
