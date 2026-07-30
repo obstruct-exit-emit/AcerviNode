@@ -970,3 +970,15 @@ Settings/System; AcerviNode's member is scoped to Manual downloads only,
   Default-account protection) and would have flipped a real, currently-
   working instance into requiring login by accident. See
   [Providers](docs/providers.md#auth-login-accounts-and-roles).
+
+**Follow-up: login made mandatory for the web UI.** Once the user actually
+created a real admin account on the real instance through separate live
+testing, "no accounts yet" stopped being this instance's reality — at that
+point the original `ApiKeyGate` browser prompt was unreachable dead code (a
+login-enabled instance can never go back to zero accounts), so it was
+removed along with the `SetupNeeded`/`TorBoxConfigured` composition it
+depended on. `SetupNeeded` is now simply `!AuthEnabled()`; the web UI always
+requires a signed-in session, and the API key's role is purely programmatic
+(Sonarr/Radarr/scripts) from here on. Verified by redeploying straight to
+the real instance (already past setup, already signed in as its own
+account) and confirming it came back up unaffected.

@@ -10,14 +10,17 @@ that surface.
 Every endpoint except `/health` and the ones listed below requires either
 `Authorization: Bearer <api_key>` (see [Configuration](configuration.md)) or
 a valid `acervinode_session` cookie from a signed-in login account (see
-[Providers](providers.md#auth-login-accounts-and-roles) for the full design
-— optional, off by default, doesn't change how the API key works). Unlike a
-provider credential (see `GET /api/v1/settings/providers`, which never
-echoes the actual TorBox key back), `GET /api/v1/settings/general` does
-return AcerviNode's own `api_key` in plaintext — there's nothing to protect
-by hiding it from a caller who already had to present it to reach the
-endpoint, and the whole point of exposing it is so a human can find and copy
-it from the web UI instead of digging through server logs or `config.yaml`.
+[Providers](providers.md#auth-login-accounts-and-roles) for the full
+design). The API key is what Sonarr/Radarr/scripts always use, since they
+can't do cookie logins; the web UI itself always uses a login session — a
+person signs in with a username and password, there's no way to browse the
+dashboard by pasting the API key in instead. Unlike a provider credential
+(see `GET /api/v1/settings/providers`, which never echoes the actual TorBox
+key back), `GET /api/v1/settings/general` does return AcerviNode's own
+`api_key` in plaintext — there's nothing to protect by hiding it from a
+caller who already had to present it to reach the endpoint, and the whole
+point of exposing it is so a human can find and copy it from the web UI
+instead of digging through server logs or `config.yaml`.
 
 Every `/api/v1/settings/*` endpoint (general config, providers, categories,
 user management) additionally requires the **admin** role — a `member`

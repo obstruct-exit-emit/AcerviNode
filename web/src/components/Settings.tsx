@@ -65,15 +65,11 @@ function CategoryPathRow({ name, currentPath, apiKey, onSaved }: { name: string;
 
 interface Props {
   apiKey: string
-  // Called after a successful regenerate with the new key — App.tsx uses
-  // this to keep the UI's own session (and localStorage) in sync, since the
-  // key it's currently authenticated with just stopped working everywhere.
-  onApiKeyChanged: (newKey: string) => void
 }
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error']
 
-export function Settings({ apiKey, onApiKeyChanged }: Props) {
+export function Settings({ apiKey }: Props) {
   const [settings, setSettings] = useState<ProviderSettings | null>(null)
   const [torboxKey, setTorboxKey] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
@@ -169,18 +165,14 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
   }
 
   async function handleRegenerate() {
-    if (!confirm('Regenerate the AcerviNode API key? The current key stops working immediately everywhere — this browser, and any Sonarr/Radarr client using it — until updated with the new one.')) {
+    if (!confirm('Regenerate the AcerviNode API key? The current key stops working immediately everywhere — any Sonarr/Radarr client or script using it — until updated with the new one. The web UI itself is unaffected, since it authenticates via your login session, not the API key.')) {
       return
     }
     setRegenStatus({ kind: 'saving' })
     try {
       const { api_key } = await regenerateApiKey(apiKey)
       setRegenStatus({ kind: 'idle' })
-      // Update locally rather than re-fetching: the key this component was
-      // just called with is now invalid everywhere, so a re-fetch using it
-      // would only 401.
       setGeneral((g) => (g ? { ...g, api_key } : g))
-      onApiKeyChanged(api_key)
     } catch (err) {
       setRegenStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }

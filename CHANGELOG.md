@@ -73,6 +73,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   key still works. See
   [Providers](docs/providers.md#auth-login-accounts-and-roles).
 
+### Changed
+
+- **Login is now mandatory for the web UI; the old API-key-only
+  `ApiKeyGate` browser prompt is gone.** Once a real admin account existed
+  on the real instance (from live-testing the setup wizard), there was no
+  longer any reachable state where the dashboard needed to fall back to a
+  raw API key — a login-enabled instance can never go back to having zero
+  accounts (the Default-account protection). Simplified accordingly:
+  `SetupNeeded` is now just `!AuthEnabled()` instead of also checking
+  whether TorBox was configured; `App.tsx`'s gating dropped the
+  `auth_enabled`-conditional branches entirely (`ready`/`activeKey`/
+  `isAdmin` no longer branch on it); `ApiKeyGate.tsx` and the unused
+  `getStoredApiKey`/`storeApiKey`/`clearStoredApiKey` helpers were deleted.
+  The API key is unaffected as the master credential for Sonarr/Radarr and
+  scripts — this only removes a browser-only bypass a human could use
+  instead of signing in.
+
+  Also fixed a real bug this surfaced: the Downloads popup window
+  (`DownloadWindow.tsx`, used for streamed folder downloads) required a
+  *stored* API key to fetch file links, which is never set for anyone who
+  only ever signs in with a username and password — the popup would show
+  "Not signed in" for every session-only user. It now relies on the same
+  cookie every other authenticated call already uses.
+
 ### Fixed
 
 - **Account-creation forms (Setup wizard, Settings → Security's "Add account")

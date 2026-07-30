@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getFileLink, getStoredApiKey } from '../api'
+import { getFileLink } from '../api'
 import { queryWritePermission, requestWritePermission, writeFileToDirectory } from '../fsAccess'
 import { DOWNLOAD_CHANNEL_NAME } from '../downloadWindowProtocol'
 import type { AddBatchMessage, BatchCompleteMessage, BatchProgressMessage, FailedFile, ToPopupMessage } from '../downloadWindowProtocol'
@@ -140,16 +140,10 @@ export function DownloadWindow() {
   }
 
   async function processBatch(batch: AddBatchMessage, totalBytes: number) {
-    const apiKey = getStoredApiKey()
-    if (!apiKey) {
-      processing.current.delete(batch.downloadId)
-      setBatches((prev) => ({
-        ...prev,
-        [batch.downloadId]: { ...prev[batch.downloadId], status: 'error', failed: [{ path: '(all files)', error: 'Not signed in to AcerviNode in this window.' }] },
-      }))
-      return
-    }
-
+    // '' — this popup is always same-origin with the main AcerviNode tab
+    // that opened it, so it shares the same session cookie automatically;
+    // no need to hold or pass the API key around separately (see api.ts's
+    // request()).
     const controller = new AbortController()
     controllers.current[batch.downloadId] = controller
 
@@ -160,7 +154,7 @@ export function DownloadWindow() {
     for (const f of batch.files) {
       if (controller.signal.aborted) break
       try {
-        const { url } = await getFileLink(apiKey, batch.downloadId, f.providerFileId)
+        const { url } = await getFileLink('', batch.downloadId, f.providerFileId)
         if (controller.signal.aborted) break
         const resp = await fetch(url, { signal: controller.signal })
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)

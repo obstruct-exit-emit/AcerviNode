@@ -694,7 +694,7 @@ table.downloads tbody tr:hover {
   transition: width 0.15s ease;
 }
 
-/* ApiKeyGate */
+/* Full-page gates: LoginForm, SetupWizard */
 .gate {
   min-height: 100svh;
   display: flex;

@@ -509,8 +509,8 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 // plus the SetupNeeded convenience check built specifically for this layer
 // (the underlying business rules — default-account protection, role
 // validation, etc. — are already exhaustively tested in
-// internal/config/auth_test.go; these tests confirm delegation,
-// persistence, and the TorBox-configured/auth-enabled composition).
+// internal/config/auth_test.go; these tests confirm delegation and
+// persistence, and that SetupNeeded tracks auth alone).
 
 func TestLiveSettings_SetupNeeded(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -524,11 +524,13 @@ func TestLiveSettings_SetupNeeded(t *testing.T) {
 		t.Error("SetupNeeded() = false for a fresh instance, want true")
 	}
 
+	// Login is mandatory — configuring TorBox alone doesn't satisfy setup,
+	// since there'd still be no way to sign into the web UI.
 	if err := settings.SetTorBoxAPIKey(context.Background(), "a-key"); err != nil {
 		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
 	}
-	if settings.SetupNeeded() {
-		t.Error("SetupNeeded() = true once TorBox is configured, want false")
+	if !settings.SetupNeeded() {
+		t.Error("SetupNeeded() = false once TorBox is configured but still no login account, want true")
 	}
 }
 

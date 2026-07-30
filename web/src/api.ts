@@ -63,20 +63,6 @@ export class ApiError extends Error {
   }
 }
 
-const STORAGE_KEY = 'acervinode_api_key'
-
-export function getStoredApiKey(): string | null {
-  return localStorage.getItem(STORAGE_KEY)
-}
-
-export function storeApiKey(key: string): void {
-  localStorage.setItem(STORAGE_KEY, key)
-}
-
-export function clearStoredApiKey(): void {
-  localStorage.removeItem(STORAGE_KEY)
-}
-
 // request is used two ways: with a real apiKey (the master credential, sent
 // as Authorization: Bearer — always works, restart-proof, what Sonarr/
 // Radarr always use since they can't do cookie logins), or with an empty

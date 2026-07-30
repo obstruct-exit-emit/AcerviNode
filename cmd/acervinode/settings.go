@@ -317,13 +317,12 @@ func (s *liveSettings) AuthEnabled() bool {
 }
 
 // SetupNeeded reports whether this instance is claimable by its first
-// visitor: no login account, and TorBox never configured — a genuinely
-// fresh install. Deliberately doesn't also check for tracked downloads:
-// every download insert path requires an active provider already, so "no
-// TorBox configured" is already a reliable proxy for "nothing's happened
-// here yet" without needing a database query.
+// visitor: simply, no login account exists yet. Login is mandatory — there
+// is no API-key-only way into the web UI — so an instance with a TorBox key
+// but no account is still a fresh install as far as the wizard is
+// concerned, not an upgrade case to special-case around.
 func (s *liveSettings) SetupNeeded() bool {
-	return !s.AuthEnabled() && !s.TorBoxConfigured()
+	return !s.AuthEnabled()
 }
 
 // Setup claims a fresh instance: the first login account, always Default

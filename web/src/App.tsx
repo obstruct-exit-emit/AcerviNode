@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ApiError,
-  clearStoredApiKey,
   deleteDownload,
   getAuthStatus,
   getDownload,
   getFileLink,
-  getStoredApiKey,
   getProviders,
   getSetupStatus,
   getVersion,
@@ -14,13 +12,11 @@ import {
   listDownloads,
   logout as apiLogout,
   retryDownload,
-  storeApiKey,
   type AuthStatus,
   type Download,
   type ProviderStatus,
 } from './api'
 import { AddDownload } from './components/AddDownload'
-import { ApiKeyGate } from './components/ApiKeyGate'
 import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadOptionsDialog, type DownloadOptions } from './components/DownloadOptionsDialog'
 import { DownloadsTable } from './components/DownloadsTable'
@@ -52,14 +48,6 @@ const POLL_INTERVAL_MS = 4000
 type View = 'managed' | 'manual' | 'settings'
 
 export default function App() {
-  // apiKey is the literal stored key (or null) — only ever used by the
-  // ApiKeyGate flow itself. Every actual API call downstream uses activeKey
-  // instead (see below), which is '' for a signed-in login session — a
-  // login account replaces the API-key prompt entirely when one exists (see
-  // auth.auth_enabled), but nothing here ever needs to know the real key in
-  // that case.
-  const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey())
-  const [gateError, setGateError] = useState<string | undefined>(undefined)
   const [auth, setAuth] = useState<AuthStatus | null>(null)
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null)
   const [view, setView] = useState<View>('manual')
@@ -115,17 +103,13 @@ export default function App() {
   const refreshAuth = useCallback(() => {
     getAuthStatus()
       .then(setAuth)
-      .catch(() => setAuth({ auth_enabled: false, authenticated: false }))
+      .catch(() => setAuth({ auth_enabled: true, authenticated: false }))
   }, [])
 
   const handleUnauthorized = useCallback(() => {
-    // Covers both auth models: a rejected API key (the existing gate flow)
-    // and a session that expired/was revoked server-side — refreshing auth
-    // status picks up the latter and brings back the login form on its own,
-    // since authenticated will now read false.
-    clearStoredApiKey()
-    setApiKey(null)
-    setGateError('That key was rejected by the server.')
+    // A session that expired or was revoked server-side — refreshing auth
+    // status brings back the login form on its own, since authenticated
+    // will now read false.
     refreshAuth()
   }, [refreshAuth])
 
@@ -137,18 +121,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ready mirrors LibriNode's own convention exactly: if login is enabled,
-  // "ready" means signed in via session; otherwise it means the (existing)
-  // API-key prompt has been satisfied. activeKey is what every downstream
-  // API call actually uses — '' for a login session (the browser has no
-  // reason to know or hold the real API key in that case; the session
-  // cookie carries the request instead — see api.ts's request()).
-  const ready = auth ? (auth.auth_enabled ? auth.authenticated : !!apiKey) : false
-  const activeKey = auth?.auth_enabled ? '' : (apiKey ?? '')
+  // Login is mandatory — there is no API-key-only way into the web UI (the
+  // API key remains the master credential for Sonarr/Radarr/scripts hitting
+  // the native API and compat shims directly, unaffected by any of this).
+  // ready means signed in via session; activeKey is always '' since every
+  // authenticated browser call relies on the session cookie instead (see
+  // api.ts's request()).
+  const ready = auth?.authenticated ?? false
+  const activeKey = ''
   // A member's access is scoped to Manual downloads only (see
-  // docs/providers.md#roles) — the API-key path and an admin session are
-  // both root-equivalent.
-  const isAdmin = !auth?.auth_enabled || auth.role === 'admin'
+  // docs/providers.md#roles).
+  const isAdmin = auth?.role === 'admin'
 
   const refresh = useCallback(
     async (key: string) => {
@@ -199,20 +182,6 @@ export default function App() {
       }
     })
   }, [])
-
-  function handleKeySubmit(key: string) {
-    storeApiKey(key)
-    setGateError(undefined)
-    setApiKey(key)
-  }
-
-  // Called by Settings after a successful regenerate — the old key just
-  // stopped working everywhere, so the UI's own session has to switch to
-  // the new one immediately or its next poll would 401 and log it out.
-  function handleApiKeyChanged(newKey: string) {
-    storeApiKey(newKey)
-    setApiKey(newKey)
-  }
 
   async function handleDelete(d: Download) {
     if (!ready) return
@@ -391,8 +360,7 @@ export default function App() {
 
   // Brief loading state — both auth/status and setup/status are fast, local
   // requests, but rendering nothing meaningful before they answer avoids a
-  // flash of the wrong gate (e.g. the API-key prompt for a moment on an
-  // instance that actually has login enabled).
+  // flash of the login form for a moment on a genuinely fresh instance.
   if (auth === null || setupNeeded === null) {
     return null
   }
@@ -408,12 +376,8 @@ export default function App() {
     )
   }
 
-  if (auth.auth_enabled && !auth.authenticated) {
+  if (!auth.authenticated) {
     return <LoginForm onLoggedIn={refreshAuth} />
-  }
-
-  if (!auth.auth_enabled && !apiKey) {
-    return <ApiKeyGate onSubmit={handleKeySubmit} error={gateError} />
   }
 
   return (
@@ -423,19 +387,9 @@ export default function App() {
         <div className="header-meta">
           <ProviderBadges providers={providers} />
           <span className="version">v{version}</span>
-          {auth.auth_enabled && auth.username && <span className="current-user">{auth.username}</span>}
-          <button
-            className="logout-btn"
-            onClick={() => {
-              if (auth.auth_enabled) {
-                apiLogout().finally(refreshAuth)
-              } else {
-                clearStoredApiKey()
-                setApiKey(null)
-              }
-            }}
-          >
-            {auth.auth_enabled ? 'Log out' : 'Sign out'}
+          {auth.username && <span className="current-user">{auth.username}</span>}
+          <button className="logout-btn" onClick={() => apiLogout().finally(refreshAuth)}>
+            Log out
           </button>
         </div>
       </header>
@@ -489,7 +443,7 @@ export default function App() {
             emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
           />
         )}
-        {isAdmin && view === 'settings' && <Settings apiKey={activeKey} onApiKeyChanged={handleApiKeyChanged} />}
+        {isAdmin && view === 'settings' && <Settings apiKey={activeKey} />}
       </main>
 
       {selectedId && (

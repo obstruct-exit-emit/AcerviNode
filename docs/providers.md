@@ -681,30 +681,31 @@ subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`.
 ## Auth: login accounts and roles
 
 The API key (`config.yaml`'s `api_key`) has always been AcerviNode's only
-credential, and it still is — nothing here changes that. What's new is an
-*optional* login layer on top of it: real accounts, a session-cookie-based
-sign-in for the web UI, and two roles. Requested directly, with the reasoning
-"because of manual download ability and possible future additions." Modeled
-directly on LibriNode's own real implementation (`internal/api/auth.go`,
-`internal/config/config.go`'s `AuthSettings`/`UserAccount`) — same PBKDF2
-hash format, same in-memory session store, same first-run wizard trigger
-logic — read from the actual sibling-project source rather than guessed at,
-since the whole point was matching its feel.
+credential, and it still is for programmatic access — nothing here changes
+that. On top of it, the web UI requires a real login: named accounts, a
+session-cookie-based sign-in, and two roles. Requested directly, with the
+reasoning "because of manual download ability and possible future
+additions." Modeled directly on LibriNode's own real implementation
+(`internal/api/auth.go`, `internal/config/config.go`'s
+`AuthSettings`/`UserAccount`) — same PBKDF2 hash format, same in-memory
+session store, same first-run wizard shape — read from the actual
+sibling-project source rather than guessed at, since the whole point was
+matching its feel.
 
-**The API key stays the root-equivalent master credential.** Sonarr/Radarr
-and scripts can't do cookie logins, so they keep using it exactly as before
-— `currentRole` (`internal/api/auth.go`) treats a matching API key as an
-anonymous admin session, unconditionally. Nothing about existing
-integrations changes whether or not login is ever set up.
+**The API key stays the root-equivalent master credential for programmatic
+access.** Sonarr/Radarr and scripts can't do cookie logins, so they keep
+using it exactly as before — `currentRole` (`internal/api/auth.go`) treats a
+matching API key as an anonymous admin session, unconditionally. This is
+unaffected by anything below.
 
-**No accounts means login is disabled entirely** — `AuthSettings.Enabled()`
-is just `len(Users) > 0`. An instance that's never had a login account added
-behaves exactly as every AcerviNode instance did before this feature
-existed: the web UI's existing `ApiKeyGate` prompt, nothing more. This is
-deliberately how an *upgrade* stays inert — confirmed live against the real
-WSL instance: after deploying this, `auth_enabled` read `false` and
-everything continued working unchanged with the existing API key, since it
-already had no login accounts and TorBox already configured.
+**Login is mandatory for the web UI** — there's no API-key-only way to
+browse the dashboard (the original `ApiKeyGate` prompt was removed once the
+one real instance had a login account of its own; a person now always signs
+in with a username and password, never by pasting the API key into the
+browser). `AuthSettings.Enabled()` (`len(Users) > 0`) still exists as the
+underlying signal, but in practice it's permanently true from the moment the
+first account is created — nothing ever removes the last one (see the
+Default account below).
 
 **Roles**: `admin` can do everything — Settings (TorBox key, general
 config, categories, cleanup policy), user management, and both the Managed
@@ -729,19 +730,16 @@ This is enforced server-side, not just hidden in the UI (`internal/api`):
   `PUT .../users/{username}/password`, which allows self-service: any
   signed-in account may change its own password without being an admin.
 
-**The first-run setup wizard** (`SetupNeeded`, `internal/api/setup.go`-style
-handlers) claims a genuinely fresh instance in one step: create the login
-account (always admin, always the protected *Default* account — see below),
-sign the browser in, no API key required. `SetupNeeded` is deliberately
-`!AuthEnabled() && !TorBoxConfigured()` — not also a check for existing
-tracked downloads, since every download insert path already requires an
-active provider, so "TorBox never configured" is already a reliable proxy
-for "nothing's happened here yet." An instance already in real use is never
-claimable just because its operator happened not to set up a login account
-— confirmed by the exact live check above. Much shorter than LibriNode's own
-wizard (Account → Library → Metadata → Indexer → Downloads → Done) since
-AcerviNode's whole setup surface is one provider: Account → TorBox key
-(skippable) → Done.
+**The first-run setup wizard** (`SetupNeeded`, `internal/api/auth.go`'s
+`handleSetup`) claims a genuinely fresh instance in one step: create the
+login account (always admin, always the protected *Default* account — see
+below), sign the browser in, no API key required. `SetupNeeded` is simply
+`!AuthEnabled()` — login being mandatory means there's no other condition to
+weigh; an instance with TorBox already configured but no login account yet
+is still treated as needing setup, not as an upgrade case to route around.
+Much shorter than LibriNode's own wizard (Account → Library → Metadata →
+Indexer → Downloads → Done) since AcerviNode's whole setup surface is one
+provider: Account → TorBox key (skippable) → Done.
 
 **The Default account** is the one account that can't be removed or
 demoted (`config.Config.RemoveUser`/`SetUserRole`) — whichever account the
@@ -775,6 +773,15 @@ permanently un-removable (the Default-account protection) and would have
 flipped it into requiring login for a real, currently-in-use instance,
 which is exactly the risk this design is supposed to avoid inflicting on
 anyone by accident.
+
+Once the user had actually created a real admin account on the real
+instance through separate live testing, login being permanently enabled
+there stopped being a hypothetical — at that point the `ApiKeyGate` browser
+prompt was dead code (the real instance can never go back to having zero
+accounts), so it and the `SetupNeeded`/`TorBoxConfigured` composition were
+both removed in favor of the simpler, permanent design described above.
+Verified by redeploying straight to the real instance (already past setup,
+already logged in as `dan`) and confirming it came back up unaffected.
 
 ## Adding a new provider
 
