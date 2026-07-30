@@ -353,7 +353,11 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
               on a slow connection are failing partway through. Cleanup only ever touches a Managed download once
               it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
               a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). Port and data dir
-              need a restart to take effect — edit them here to save the new value for next time.
+              need a restart to take effect — edit port here to save the new value for next time.
+              Data dir isn't editable here — changing it doesn't move your existing database, so
+              editing it in this form would look like everything vanished after a restart. Set it via
+              <code>config.yaml</code> or <code>ACERVINODE_DATA_DIR</code> instead, and move the
+              database file yourself first.
             </p>
             <label>
               Port
@@ -361,7 +365,7 @@ export function Settings({ apiKey, onApiKeyChanged }: Props) {
             </label>
             <label>
               Data dir
-              <input type="text" value={form.data_dir} onChange={(e) => setForm({ ...form, data_dir: e.target.value })} />
+              <input type="text" value={form.data_dir} disabled title="Not editable here — see the note above" />
             </label>
 
             <button type="submit" disabled={generalStatus.kind === 'saving'}>

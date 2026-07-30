@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`data_dir` was editable in Settings but silently didn't move the
+  database** — found by the user looking at a screenshot of their own
+  Settings page. `PUT /api/v1/settings/general` already correctly required
+  a restart to apply a `data_dir` change, but nothing about the UI (or the
+  restart-required message) warned that a restart doesn't move
+  `acervinode.db` to the new path — `main.go` just opens/creates one fresh
+  wherever the configured path points. Editing it and restarting would look
+  like every download and all local history had vanished, with the real
+  data sitting untouched but unread at the old path. The web UI now shows
+  `data_dir` read-only (with an explanation, and where to actually change
+  it — `config.yaml`/`ACERVINODE_DATA_DIR`, after moving the file
+  yourself), rather than inviting an edit that has a much bigger blast
+  radius than it looks like. The API itself is unchanged — `data_dir` is
+  still part of `GeneralUpdate`'s contract for a caller that wants it, the
+  UI just no longer offers a casual path to it. See
+  [Configuration](docs/configuration.md).
+
 ### Added
 
 - **Consolidated the download UX into one dialog, and fixed a real
