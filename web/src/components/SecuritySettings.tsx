@@ -11,6 +11,7 @@ export function SecuritySettings({ apiKey }: { apiKey: string }) {
   const [loadError, setLoadError] = useState('')
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [newConfirmPassword, setNewConfirmPassword] = useState('')
   const [newRole, setNewRole] = useState<Role>('member')
   const [addStatus, setAddStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
@@ -27,12 +28,17 @@ export function SecuritySettings({ apiKey }: { apiKey: string }) {
 
   function handleAdd(e: FormEvent) {
     e.preventDefault()
+    if (newPassword !== newConfirmPassword) {
+      setAddStatus({ kind: 'error', message: "Passwords don't match" })
+      return
+    }
     setAddStatus({ kind: 'saving' })
     addUser(apiKey, newUsername.trim(), newPassword, newRole)
       .then((r) => {
         setUsers(r.users)
         setNewUsername('')
         setNewPassword('')
+        setNewConfirmPassword('')
         setNewRole('member')
         setAddStatus({ kind: 'idle' })
       })
@@ -115,11 +121,29 @@ export function SecuritySettings({ apiKey }: { apiKey: string }) {
       <form className="general-form" onSubmit={handleAdd}>
         <label>
           Username
-          <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} />
+          <input
+            value={newUsername}
+            onChange={(e) => setNewUsername(e.target.value)}
+            autoComplete="off"
+          />
         </label>
         <label>
           Password (min. 8 characters)
-          <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+        </label>
+        <label>
+          Confirm password
+          <input
+            type="password"
+            value={newConfirmPassword}
+            onChange={(e) => setNewConfirmPassword(e.target.value)}
+            autoComplete="new-password"
+          />
         </label>
         <label>
           Role
@@ -129,7 +153,10 @@ export function SecuritySettings({ apiKey }: { apiKey: string }) {
           </select>
         </label>
         <div className="settings-actions">
-          <button type="submit" disabled={addStatus.kind === 'saving' || !newUsername.trim() || newPassword.length < 8}>
+          <button
+            type="submit"
+            disabled={addStatus.kind === 'saving' || !newUsername.trim() || newPassword.length < 8 || newPassword !== newConfirmPassword}
+          >
             {addStatus.kind === 'saving' ? 'Adding…' : 'Add account'}
           </button>
           {addStatus.kind === 'error' && <span className="settings-error">{addStatus.message}</span>}

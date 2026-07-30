@@ -89,15 +89,25 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             <div className="general-form">
               <label>
                 Username
-                <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} />
+                <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
               </label>
               <label>
                 Password (min. 8 characters)
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
               </label>
               <label>
                 Confirm password
-                <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+                <input
+                  type="password"
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  autoComplete="new-password"
+                />
               </label>
               <div className="settings-actions">
                 <button disabled={busy || !username.trim() || password.length < 8} onClick={claim}>
@@ -127,6 +137,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                   placeholder="Paste your key"
                   value={torboxKey}
                   onChange={(e) => setTorboxKey(e.target.value)}
+                  autoComplete="off"
                 />
               </label>
               <div className="settings-actions">

@@ -75,6 +75,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Account-creation forms (Setup wizard, Settings → Security's "Add account")
+  had no `autoComplete` hints, so the browser's own saved-credential autofill
+  silently repopulated the username/password fields** — found live-testing
+  the setup wizard on a scratch instance ("user name and password sticks
+  around here even after reboot"), which looked like state persisting across
+  restarts but wasn't. Fixed with `autoComplete="off"`/`"new-password"` on
+  every account-creation input; `LoginForm.tsx` got the opposite treatment
+  (`autoComplete="username"`/`"current-password"`) since a genuine sign-in
+  form *should* offer saved-credential autofill.
+- **Settings → Security's "Add account" form only had one password field**,
+  unlike the setup wizard's own account step — a typo went straight to a new
+  account with no way to catch it. Added a matching confirm-password field
+  with the same match validation the wizard already had.
+
 - **`data_dir` was editable in Settings but silently didn't move the
   database** — found by the user looking at a screenshot of their own
   Settings page. `PUT /api/v1/settings/general` already correctly required
