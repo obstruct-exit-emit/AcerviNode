@@ -32,7 +32,7 @@ server logs or `config.yaml`.
 | `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Direct file downloads](#direct-file-downloads)). Same error shape as the per-file endpoint above |
 | `DELETE` | `/api/v1/downloads/{id}?deleteFiles=true` | Deletes a download — provider call is best-effort, the local row is always cleaned up even if the provider call fails (matches the behavior already proven against a real upstream error, see ROADMAP.md Phase 1) |
 | `POST` | `/api/v1/downloads/{id}/retry` | Manually retries a download that gave up after exhausting `import_max_retries` — resets `state` back to `provider_completed` and clears `retry_count`/`error_message`, so `internal/importer`'s very next tick attempts the fetch again from scratch. `409` if the download isn't currently in `error` state |
-| `POST` | `/api/v1/downloads/{id}/readd` | Stronger sibling of `retry`, for when the *original* provider-side download is gone (e.g. expired from the provider's own list) rather than a transient fetch failure. Resubmits the download's stored original magnet/NZB URL to the provider as a brand new add, then points the local row at the new `provider_download_id` (best-effort delete of the old one first). `400` if no source was stored (added via file upload — nothing to resubmit); `409` if not in `error` state, or if the fresh add happens to dedupe back to a different already-tracked download |
+| `POST` | `/api/v1/downloads/{id}/readd` | Stronger sibling of `retry`, for when the *original* provider-side download is gone (e.g. expired from the provider's own list) rather than a transient fetch failure. Resubmits the download's stored original magnet/NZB URL/hoster link to the provider as a brand new add — a torrent's is always a magnet reconstructed from just its hash, so this works regardless of whether it was originally added by magnet or `.torrent` file upload — or, for a usenet download added via an uploaded `.nzb` file rather than a URL, the stored file bytes instead — then points the local row at the new `provider_download_id` (best-effort delete of the old one first). Works for any `protocol`/`added_via`, not just Managed torrents — see `has_source` below and [Providers](providers.md#re-add-for-a-discovered-download). `400` if nothing is stored to resubmit (a discovered download the provider no longer knows the source of, or a webdl added via a link the provider never recorded); `409` if not in `error` state, or if the fresh add happens to dedupe back to a different already-tracked download |
 | `GET` | `/api/v1/settings/providers` | `{"torbox": {"configured": bool}}` — never the actual key, only whether one is set |
 | `PUT` | `/api/v1/settings/providers/torbox` | Body `{"api_key": "..."}` — sets or replaces the TorBox key. Takes effect immediately (no restart) and is persisted to `config.yaml`; see [Providers](providers.md#live-settings) |
 | `POST` | `/api/v1/settings/providers/torbox/test` | Makes one real, live call to TorBox with the currently configured key — a genuine connectivity+auth check, not just "is a key set." Returns `{"ok": true, "latency_ms": N}` or `{"ok": false, "error": "..."}` — always HTTP 200; the failure is in the body, not the status code |
@@ -61,7 +61,8 @@ server logs or `config.yaml`.
   "added_at": "2026-07-27T05:15:00Z",
   "updated_at": "2026-07-27T05:16:17Z",
   "completed_at": "2026-07-27T05:16:17Z",
-  "added_via": "arr"
+  "added_via": "arr",
+  "has_source": true
 }
 ```
 
@@ -87,6 +88,18 @@ a download has failed at least once — see
 added — see [Providers](providers.md#managed-vs-manual) for what it means and
 how a `manual` download can also show up without ever being added through
 AcerviNode at all.
+
+`has_source` reports whether `POST .../readd` could actually resubmit this
+download if it's in `error` state — true for a link-based add (magnet/NZB
+URL/hoster link, including one backfilled after the fact for a *discovered*
+download, if the provider still knows it — see
+[Providers](providers.md#re-add-for-a-discovered-download)) or a usenet
+download added via an uploaded `.nzb` file (the raw bytes are stored for
+exactly this — see
+[Providers](providers.md#re-add-for-a-file-uploaded-nzb-not-discovered)).
+False for a discovered download with nothing known, or a torrent/webdl added
+via an uploaded `.torrent` file. The web UI's Re-add button is gated on this
+rather than `added_via`, since it works for Managed and Manual alike.
 `GET /api/v1/downloads/{id}` additionally embeds a `files` array
 (`[{"path": "...", "size_bytes": ..., "provider_file_id": "..."}]`), which the
 list endpoint omits since it would mean an extra provider query per row for

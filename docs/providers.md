@@ -244,10 +244,14 @@ added, never changed afterward:
   buttons appear at all — a Managed download is already being auto-fetched,
   so the UI doesn't offer a redundant manual download for it (the endpoints
   themselves don't restrict by AddedVia; this is purely a web UI choice).
-  Retry/Re-add aren't offered for a manual download in `error` state either
-  — there's no local fetch attempt to retry, the row is just reflecting the
-  provider's own live state (see [State mapping](#state-mapping) above for
-  how it gets there).
+  Retry isn't offered for a manual download in `error` state — there's no
+  local fetch attempt to retry, the row is just reflecting the provider's own
+  live state (see [State mapping](#state-mapping) above for how it gets
+  there) or the vanish-detection feature's own conclusion (see below). Re-add
+  *is* offered, though, whenever `has_source` is true — see
+  [Re-add for a discovered download](#re-add-for-a-discovered-download) and
+  [Re-add for a file-uploaded NZB](#re-add-for-a-file-uploaded-nzb-not-discovered)
+  below for where that source can come from even for a Manual download.
 
 **Discovery** is what makes an item added directly through TorBox's own
 site/app — not through AcerviNode at all — show up in Manual too, not just

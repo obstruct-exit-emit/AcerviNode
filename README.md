@@ -86,9 +86,15 @@ the storage layer.
   account — never auto-fetched, browse and grab files on demand instead) —
   live state/progress, provider status, one-click delete, a "+ Add" button
   to push a magnet/torrent file/NZB/hoster link straight in, a per-download
-  detail view (full metadata, file list, retry status), and a Settings tab
-  to add/change your TorBox key without touching `config.yaml` — takes
-  effect immediately, no restart
+  detail view (full metadata, streamed/zip/per-file downloads, retry
+  status), and a Settings tab to add/change your TorBox key without
+  touching `config.yaml` — takes effect immediately, no restart
+- A Manual download whose provider item vanishes entirely (deleted directly
+  through TorBox's own site, or genuinely expired) is detected proactively
+  and flagged, instead of sitting stuck looking "Available" forever. Re-add
+  works for it too, not just a Managed download — it resubmits the original
+  magnet/NZB URL/hoster link, or a stored NZB file for one added by upload,
+  whenever the provider (or AcerviNode itself) still knows it
 - The Settings tab also surfaces AcerviNode's own configuration (port, data/download
   dirs, log level, import settings), its own API key — copyable straight from
   the UI instead of digging through server logs or `config.yaml`, with a
