@@ -48,7 +48,7 @@ type View = 'managed' | 'manual' | 'settings'
 export default function App() {
   const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey())
   const [gateError, setGateError] = useState<string | undefined>(undefined)
-  const [view, setView] = useState<View>('managed')
+  const [view, setView] = useState<View>('manual')
   const [version, setVersion] = useState<string>('')
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   // Both tabs' downloads are kept loaded regardless of which is active, so
@@ -367,11 +367,11 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={view === 'managed' ? 'tab tab-active' : 'tab'} onClick={() => setView('managed')}>
-          Managed
-        </button>
         <button className={view === 'manual' ? 'tab tab-active' : 'tab'} onClick={() => setView('manual')}>
           Manual
+        </button>
+        <button className={view === 'managed' ? 'tab tab-active' : 'tab'} onClick={() => setView('managed')}>
+          Managed
         </button>
         <button className={view === 'settings' ? 'tab tab-active' : 'tab'} onClick={() => setView('settings')}>
           Settings
