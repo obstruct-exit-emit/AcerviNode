@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Adding a magnet-only torrent through the qBittorrent shim failed with
+  `HTTP 400: Unsupported Media Type` whenever the client sent a plain
+  `application/x-www-form-urlencoded` POST instead of `multipart/form-data`**
+  — reported live via LibriNode ("qbit is being a pain," a Prowlarr result
+  failing to add). Confirmed against real qBittorrent's own request parser
+  (`src/base/http/requestparser.cpp`) that it accepts *both* content types
+  for `/api/v2/torrents/add` — urlencoded is entirely normal for a
+  magnet-only add with no file to upload. `handleAdd` called
+  `ParseMultipartForm` and treated *any* error as fatal, including the
+  routine `http.ErrNotMultipart` it returns for a non-multipart body — even
+  though `ParseMultipartForm` already calls `ParseForm` internally first,
+  so `r.FormValue` works fine either way. Now only a genuine parse failure
+  (not "wasn't multipart") is treated as an error. Verified live: the exact
+  request LibriNode sends now returns `Ok.` instead of a 400.
+
 - **Every Sonarr/Radarr "Test" against the SABnzbd compat shim crashed
   outright** — reported live as "Test was aborted due to an error: Object
   reference not set to an instance of an object." Root cause: `GET

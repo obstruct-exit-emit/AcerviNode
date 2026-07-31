@@ -3,6 +3,7 @@ package qbittorrent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -20,9 +21,19 @@ import (
 // endpoint accepts either newline-separated magnet/URL strings in a "urls"
 // field, or one or more .torrent files in a "torrents" field — *arr apps use
 // whichever their indexer gave them.
+//
+// Real qBittorrent's own request parser (confirmed against its source,
+// src/base/http/requestparser.cpp) accepts a magnet-only add as a plain
+// application/x-www-form-urlencoded POST, not just multipart/form-data —
+// LibriNode sends exactly that. ParseMultipartForm always calls ParseForm
+// first internally, which is all a urlencoded body needs (r.FormValue below
+// works either way); it only returns http.ErrNotMultipart afterward because
+// there's no file part to read, which isn't a real failure here — treating
+// it as one rejected every magnet-only add with a 400 "Unsupported Media
+// Type" no matter how correctly the client behaved, found live.
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	if err := r.ParseMultipartForm(64 << 20); err != nil && !errors.Is(err, http.ErrNotMultipart) {
 		writeText(w, http.StatusBadRequest, "Unsupported Media Type")
 		return
 	}

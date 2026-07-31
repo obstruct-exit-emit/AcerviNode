@@ -335,3 +335,43 @@ func TestHandleInfo_ReportsETAFromProvider(t *testing.T) {
 		t.Errorf("Eta = %d, want 123 (from provider)", items[0].Eta)
 	}
 }
+
+// TestHandleAdd_AcceptsPlainUrlencodedMagnetOnlyPost proves a magnet-only
+// add works as a plain application/x-www-form-urlencoded POST (no file
+// part), not just multipart/form-data — confirmed against real
+// qBittorrent's own request parser (src/base/http/requestparser.cpp) that
+// it accepts both for this exact endpoint. LibriNode sends exactly this
+// shape; treating ParseMultipartForm's http.ErrNotMultipart as a hard
+// failure rejected every one of these with a 400 "Unsupported Media Type,"
+// found live.
+func TestHandleAdd_AcceptsPlainUrlencodedMagnetOnlyPost(t *testing.T) {
+	ts, client := newTestServer(t)
+
+	loginResp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"},
+		"password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	loginResp.Body.Close()
+
+	addResp, err := client.PostForm(ts.URL+"/api/v2/torrents/add", url.Values{
+		"urls":     {testMagnet},
+		"category": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("add error = %v", err)
+	}
+	if b := readBody(t, addResp); addResp.StatusCode != http.StatusOK || b != "Ok." {
+		t.Fatalf("add status=%d body=%q, want 200 Ok.", addResp.StatusCode, b)
+	}
+
+	items := getTorrentInfo(t, client, ts.URL)
+	if len(items) != 1 {
+		t.Fatalf("info after urlencoded add = %d items, want 1", len(items))
+	}
+	if items[0].Category != "tv-sonarr" {
+		t.Errorf("category = %q, want tv-sonarr", items[0].Category)
+	}
+}
