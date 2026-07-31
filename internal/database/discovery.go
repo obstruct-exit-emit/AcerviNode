@@ -80,6 +80,23 @@ func (db *DB) DiscoveryBaseline(ctx context.Context, provider string, kind Kind)
 	return out, rows.Err()
 }
 
+// HasAnyDownloads reports whether this database has ever tracked a single
+// download, of any kind, Managed or Manual. internal/importer's
+// discoverManual checks this once per tick to tell a genuinely fresh
+// install (nothing tracked yet at all) apart from an established instance
+// seeing a particular provider+kind for the first time (a newly added
+// second provider, say) — only the former should adopt everything already
+// sitting in the account instead of baselining it away forever. See
+// discoverManual's own doc comment.
+func (db *DB) HasAnyDownloads(ctx context.Context) (bool, error) {
+	var n int
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM downloads)`).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("check any downloads exist: %w", err)
+	}
+	return n > 0, nil
+}
+
 // recentlyDeletedGracePeriod is how long a tombstone recorded by
 // RecordDeletedDownload keeps an item excluded from discovery — see
 // RecentlyDeletedDownloads. Generous on purpose: a provider's own delete

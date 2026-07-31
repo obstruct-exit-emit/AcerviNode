@@ -115,6 +115,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A fresh install never showed pre-existing TorBox downloads in the
+  Manual tab, even once it recognized the account.** Found live: a fresh
+  Proxmox install. Root cause: `Importer.discoverManual`'s first-ever run
+  for a provider+kind always took the conservative "established instance"
+  branch — recording everything currently unmatched into a permanent
+  ignore-list instead of adopting it — regardless of whether the instance
+  had ever tracked anything before. That's the right call for this feature
+  (or a newly added second provider) landing on an instance that's already
+  been running a while, but wrong for a genuinely fresh install, where
+  there's no pre-existing history to protect and the account's current
+  contents are exactly what a first-time user expects to see. New
+  `database.HasAnyDownloads` (has this database ever tracked a single
+  download, of any kind) lets `discoverManual` tell the two cases apart;
+  computed once per `refreshStatuses` tick, before any kind's own discovery
+  runs, so torrent/usenet/webdl agree on the answer within the same tick
+  rather than the first kind processed making the database non-empty for
+  the next one. See [Providers](docs/providers.md#completed-download-handling-internalimporter).
 - **Two real layout bugs found visually verifying the Settings reorg with a
   scripted Playwright pass** (chromium-cli wasn't available in this
   environment, so a throwaway local Playwright + a scratch instance stood

@@ -6,6 +6,38 @@ import (
 	"time"
 )
 
+// TestHasAnyDownloads proves the empty-database and non-empty cases both
+// report correctly — internal/importer's discoverManual relies on this to
+// tell a genuinely fresh install apart from an established instance seeing
+// a provider+kind for the first time (see its own doc comment).
+func TestHasAnyDownloads(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	got, err := db.HasAnyDownloads(ctx)
+	if err != nil {
+		t.Fatalf("HasAnyDownloads() error = %v", err)
+	}
+	if got {
+		t.Error("HasAnyDownloads() = true on an empty database, want false")
+	}
+
+	if err := db.InsertDownload(ctx, &Download{
+		ID: "dl-1", Provider: "torbox", ProviderDownloadID: "provider-1", Kind: KindTorrent,
+		Hash: "abc123", Name: "Something", State: StateQueued, AddedVia: AddedViaManual,
+	}); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	got, err = db.HasAnyDownloads(ctx)
+	if err != nil {
+		t.Fatalf("HasAnyDownloads() error = %v", err)
+	}
+	if !got {
+		t.Error("HasAnyDownloads() = false after inserting a download, want true")
+	}
+}
+
 // TestRecordDeletedDownload_RecentlyDeletedDownloadsRoundTrips proves a
 // tombstoned download shows up in RecentlyDeletedDownloads for the same
 // provider+kind, and only that provider+kind — see discoverManual, which

@@ -767,7 +767,7 @@ func TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls(t *testing.T) {
 	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, provider)
+	im.refreshKind(ctx, database.KindTorrent, provider, false)
 	if provider.listCalls.Load() != 1 {
 		t.Fatalf("List() called %d times, want 1", provider.listCalls.Load())
 	}
@@ -781,7 +781,7 @@ func TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls(t *testing.T) {
 
 	// A second refreshKind call while still cooling must not call List()
 	// again at all.
-	im.refreshKind(ctx, database.KindTorrent, provider)
+	im.refreshKind(ctx, database.KindTorrent, provider, false)
 	if provider.listCalls.Load() != 1 {
 		t.Errorf("List() called %d times after a second refreshKind during cooldown, want still 1", provider.listCalls.Load())
 	}
@@ -799,8 +799,8 @@ func TestRefreshKind_RateLimit_ScopedPerKind(t *testing.T) {
 	usenetProvider := &fakeProvider{}
 	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, torrentProvider)
-	im.refreshKind(ctx, database.KindUsenet, usenetProvider)
+	im.refreshKind(ctx, database.KindTorrent, torrentProvider, false)
+	im.refreshKind(ctx, database.KindUsenet, usenetProvider, false)
 
 	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
 		t.Error("expected torrent kind to be cooling")
@@ -821,7 +821,7 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, provider)
+	im.refreshKind(ctx, database.KindTorrent, provider, false)
 	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
 		t.Fatal("expected torrent kind to be cooling after the rate-limited call")
 	}
@@ -832,7 +832,7 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	// unit test) — refreshKind's own cooldown check would otherwise skip
 	// the List() call entirely and never reach clearRateLimitHit.
 	im.clearRateLimitHit(database.KindTorrent)
-	im.refreshKind(ctx, database.KindTorrent, provider)
+	im.refreshKind(ctx, database.KindTorrent, provider, false)
 
 	if provider.listCalls.Load() != 2 {
 		t.Errorf("List() called %d times, want 2 (cooldown cleared, so the second refreshKind actually called List)", provider.listCalls.Load())
@@ -912,7 +912,16 @@ func TestDiscoverManual_SeedsEvenWithNothingUntrackedYet(t *testing.T) {
 	}
 }
 
-func TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting(t *testing.T) {
+// TestDiscoverManual_FreshInstall_AdoptsPreExistingItemsImmediately proves
+// a genuinely fresh install (an empty database, nothing tracked at all yet)
+// adopts whatever's already sitting in the provider account on the very
+// first tick, rather than baselining it away forever — found live: a fresh
+// Proxmox install recognized the configured TorBox account but never showed
+// its existing downloads, because the original version of this always took
+// the conservative "established instance" branch (see
+// TestDiscoverManual_EstablishedInstance_FirstRunSeedsBaselineWithoutAdopting
+// for that branch, still exercised for the case it's actually meant for).
+func TestDiscoverManual_FreshInstall_AdoptsPreExistingItemsImmediately(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
@@ -928,8 +937,118 @@ func TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDownloads() error = %v", err)
 	}
+	if len(rows) != 1 || rows[0].ProviderDownloadID != "already-in-torbox-1" {
+		t.Fatalf("downloads after first tick = %+v, want the pre-existing item adopted", rows)
+	}
+	if rows[0].AddedVia != database.AddedViaManual {
+		t.Errorf("adopted AddedVia = %q, want manual", rows[0].AddedVia)
+	}
+
+	seeded, err := db.IsDiscoveryBaselineSeeded(ctx, "faketorbox", database.KindTorrent)
+	if err != nil {
+		t.Fatalf("IsDiscoveryBaselineSeeded() error = %v", err)
+	}
+	if !seeded {
+		t.Error("IsDiscoveryBaselineSeeded() = false, want true after the first tick")
+	}
+
+	baseline, err := db.DiscoveryBaseline(ctx, "faketorbox", database.KindTorrent)
+	if err != nil {
+		t.Fatalf("DiscoveryBaseline() error = %v", err)
+	}
+	if len(baseline) != 0 {
+		t.Errorf("DiscoveryBaseline() = %v, want empty — a fresh install has nothing to permanently ignore", baseline)
+	}
+}
+
+// TestDiscoverManual_FreshInstall_AppliesConsistentlyAcrossKindsInSameTick
+// proves torrent and usenet both get their pre-existing items adopted on
+// the same first tick, not just whichever kind refreshStatuses happens to
+// process first. freshInstall is computed once per tick from whether the
+// database had any tracked download at all before the tick started — if it
+// were instead re-checked fresh inside each kind's own pass, torrent
+// adopting its item first would make the database non-empty by the time
+// usenet's own check ran, wrongly baselining usenet's pre-existing item
+// even though both kinds are equally part of the same fresh install.
+func TestDiscoverManual_FreshInstall_AppliesConsistentlyAcrossKindsInSameTick(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	torrentProvider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "pre-existing-torrent", Name: "Pre-existing Torrent", State: debrid.StateCompleted},
+	}}
+	usenetProvider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "pre-existing-usenet", Name: "Pre-existing Usenet", State: debrid.StateCompleted},
+	}}
+	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	torrentRows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads(torrent) error = %v", err)
+	}
+	if len(torrentRows) != 1 || torrentRows[0].ProviderDownloadID != "pre-existing-torrent" {
+		t.Errorf("torrent downloads = %+v, want pre-existing-torrent adopted", torrentRows)
+	}
+
+	usenetRows, err := db.ListDownloads(ctx, database.KindUsenet)
+	if err != nil {
+		t.Fatalf("ListDownloads(usenet) error = %v", err)
+	}
+	if len(usenetRows) != 1 || usenetRows[0].ProviderDownloadID != "pre-existing-usenet" {
+		t.Errorf("usenet downloads = %+v, want pre-existing-usenet adopted too, not baselined away", usenetRows)
+	}
+}
+
+// insertUnrelatedDownload seeds one throwaway tracked row so
+// database.HasAnyDownloads reports true — the signal discoverManual uses to
+// tell a genuinely fresh install apart from an established instance seeing
+// a particular provider+kind for the first time (a newly added second
+// provider, or this feature itself landing on an existing instance). Always
+// a different kind than whatever the test is actually exercising, so it
+// doesn't show up in that kind's own ListDownloads counts.
+func insertUnrelatedDownload(t *testing.T, ctx context.Context, db *database.DB) {
+	t.Helper()
+	if err := db.InsertDownload(ctx, &database.Download{
+		ID: "unrelated-existing-row", Provider: "faketorbox", ProviderDownloadID: "unrelated-provider-id",
+		Kind: database.KindUsenet, Hash: "unrelatedhash", Name: "Unrelated Pre-existing Download",
+		State: database.StateReadyForImport, AddedVia: database.AddedViaArr,
+	}); err != nil {
+		t.Fatalf("insertUnrelatedDownload: InsertDownload() error = %v", err)
+	}
+}
+
+// TestDiscoverManual_EstablishedInstance_FirstRunSeedsBaselineWithoutAdopting
+// proves an instance that already has real tracked history — not a fresh
+// install — still takes the conservative branch the first time it sees a
+// particular provider+kind in discovery: nothing adopted, everything
+// currently unmatched recorded as a permanent baseline instead. This is
+// what stops this feature (or a newly added second provider) from flooding
+// an established instance's Manual tab with a big pre-existing history —
+// contrasted with TestDiscoverManual_FreshInstall_AdoptsPreExistingItemsImmediately,
+// where the same "nothing tracked for this provider+kind yet" starting
+// point instead adopts everything, because the instance itself is fresh.
+func TestDiscoverManual_EstablishedInstance_FirstRunSeedsBaselineWithoutAdopting(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	insertUnrelatedDownload(t, ctx, db)
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
+	}}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
 	if len(rows) != 0 {
-		t.Fatalf("downloads after first tick = %d, want 0 (nothing adopted on the seeding run)", len(rows))
+		t.Fatalf("torrent downloads after first tick = %d, want 0 (nothing adopted on the seeding run)", len(rows))
 	}
 
 	seeded, err := db.IsDiscoveryBaselineSeeded(ctx, "faketorbox", database.KindTorrent)
@@ -953,10 +1072,14 @@ func TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting(t *testing.T) {
 // present on a later tick, but absent from the baseline recorded on the
 // first tick, gets adopted as a manual download — the actual "show up in
 // Manual" behavior, contrasted with the pre-existing item from
-// TestDiscoverManual_FirstRunSeedsBaselineWithoutAdopting, which never is.
+// TestDiscoverManual_EstablishedInstance_FirstRunSeedsBaselineWithoutAdopting,
+// which never is. Uses an established (not fresh) instance so that first
+// tick actually takes the baseline-without-adopting branch this test means
+// to build on.
 func TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
+	insertUnrelatedDownload(t, ctx, db)
 
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
@@ -1026,7 +1149,10 @@ func TestDiscoverManual_SetsSourceFromOriginalURL(t *testing.T) {
 		{ID: "already-tracked-1", Name: "Pre-existing", State: debrid.StateCompleted},
 	}}
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
-	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
+	// Primes discovery for this provider+kind (fresh install, so this also
+	// adopts already-tracked-1 — irrelevant here, only tick 2's own
+	// additions are checked below).
+	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() 1 error = %v", err)
 	}
 

@@ -388,18 +388,35 @@ func (im *Importer) Tick(ctx context.Context) error {
 // could sit looking stuck long after the provider actually finished. See
 // docs/providers.md#completed-download-handling.
 func (im *Importer) refreshStatuses(ctx context.Context) {
-	im.refreshKind(ctx, database.KindTorrent, im.torrentProvider)
-	im.refreshKind(ctx, database.KindUsenet, im.usenetProvider)
+	// Computed once per tick, before any kind's own discovery runs, so all
+	// three kinds agree on whether this is a genuinely fresh install — see
+	// discoverManual. Checking it fresh inside each kind's own pass instead
+	// would make the answer depend on iteration order (torrent adopting
+	// first would make the database non-empty by the time usenet's own
+	// check ran, even though both are equally "fresh").
+	hasAny, err := im.db.HasAnyDownloads(ctx)
+	// Safe default on error: treat as an established instance (freshInstall
+	// false), so a transient DB error can never cause an account's entire
+	// history to flood in.
+	freshInstall := false
+	if err != nil {
+		slog.Error("importer: check for any existing downloads failed", "error", err)
+	} else {
+		freshInstall = !hasAny
+	}
+
+	im.refreshKind(ctx, database.KindTorrent, im.torrentProvider, freshInstall)
+	im.refreshKind(ctx, database.KindUsenet, im.usenetProvider, freshInstall)
 	// Every webdl row is always AddedViaManual (no *arr-facing shim exists
 	// for it — see database.KindWebDL), but discovery/status-refresh still
 	// applies the same way it does for a discovered Manual torrent/usenet
 	// download: this is what makes a hoster link added directly through
 	// TorBox's own site show up here too, not just links added through
 	// AcerviNode's own "+ Add" form.
-	im.refreshKind(ctx, database.KindWebDL, im.getWebDownloadProvider())
+	im.refreshKind(ctx, database.KindWebDL, im.getWebDownloadProvider(), freshInstall)
 }
 
-func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provider) {
+func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provider, freshInstall bool) {
 	if p == nil {
 		return
 	}
@@ -432,7 +449,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	}
 	im.clearRateLimitHit(kind)
 	im.db.RefreshFromProvider(ctx, rows, statuses)
-	im.discoverManual(ctx, kind, p.Name(), rows, statuses)
+	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }
 
 // rateLimitCooldown reports whether kind is still within a backoff window
@@ -506,12 +523,23 @@ func rateLimitBackoffDuration(consecutiveHits int) time.Duration {
 // knows about) and adopts them as AddedViaManual downloads — this is what
 // makes an item added directly through the provider's own website/app show
 // up in the web UI's Manual tab, not just items added through AcerviNode's
-// own "+ Add" form. The very first time this runs for a given provider+kind,
-// nothing is adopted: every currently-unmatched item is instead recorded as
-// a permanent baseline to ignore (see database.SeedDiscoveryBaseline), so
-// shipping this feature doesn't flood the Manual tab with an account's
-// entire pre-existing history — only items that show up afterward ever are.
-func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, providerName string, tracked []*database.Download, statuses []debrid.DownloadStatus) {
+// own "+ Add" form.
+//
+// The very first time this runs for a given provider+kind, what happens to
+// whatever's currently unmatched depends on freshInstall (see
+// refreshStatuses): on an established instance, nothing is adopted —
+// every currently-unmatched item is instead recorded as a permanent
+// baseline to ignore (see database.SeedDiscoveryBaseline), so this feature
+// landing on an instance that's been running a while (or a second provider
+// being added to one) doesn't suddenly flood the Manual tab with a big
+// pre-existing history. On a genuinely fresh install, though, there is no
+// "pre-existing history" to protect against — the account's current
+// contents are exactly what a first-time user expects to see show up, so
+// they're adopted immediately instead, and the baseline is seeded empty.
+// Found live: a fresh Proxmox install recognized the configured TorBox
+// account but never showed its existing downloads, because the original
+// version of this always took the conservative branch.
+func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, providerName string, tracked []*database.Download, statuses []debrid.DownloadStatus, freshInstall bool) {
 	trackedIDs := make(map[string]bool, len(tracked))
 	for _, d := range tracked {
 		trackedIDs[d.ProviderDownloadID] = true
@@ -538,17 +566,28 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 		return
 	}
 	if !seeded {
-		ids := make([]string, len(untracked))
-		for i, st := range untracked {
-			ids[i] = string(st.ID)
-		}
-		if err := im.db.SeedDiscoveryBaseline(ctx, providerName, kind, ids); err != nil {
-			slog.Error("importer: seed discovery baseline failed", "kind", kind, "error", err)
+		if freshInstall {
+			if err := im.db.SeedDiscoveryBaseline(ctx, providerName, kind, nil); err != nil {
+				slog.Error("importer: seed discovery baseline failed", "kind", kind, "error", err)
+				return
+			}
+			slog.Info("importer: fresh install, adopting whatever's already in the account",
+				"kind", kind, "provider", providerName, "count", len(untracked))
+			// Falls through to the adoption loop below instead of returning —
+			// this tick's untracked items are exactly what should be adopted.
+		} else {
+			ids := make([]string, len(untracked))
+			for i, st := range untracked {
+				ids[i] = string(st.ID)
+			}
+			if err := im.db.SeedDiscoveryBaseline(ctx, providerName, kind, ids); err != nil {
+				slog.Error("importer: seed discovery baseline failed", "kind", kind, "error", err)
+				return
+			}
+			slog.Info("importer: seeded discovery baseline, nothing adopted this run",
+				"kind", kind, "provider", providerName, "count", len(ids))
 			return
 		}
-		slog.Info("importer: seeded discovery baseline, nothing adopted this run",
-			"kind", kind, "provider", providerName, "count", len(ids))
-		return
 	}
 
 	if len(untracked) == 0 {

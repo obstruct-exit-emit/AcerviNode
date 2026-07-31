@@ -297,13 +297,31 @@ items added through AcerviNode's own "+ Add" form. Every tick,
 at all gets adopted as a fresh `manual` download.
 
 The one wrinkle: the very first time this runs for a given provider+kind,
-nothing is adopted. Every currently-unmatched item is instead recorded into
-`discovery_baseline` (with `discovery_seeded` as the per-provider-per-kind
-marker that seeding has already happened) and permanently ignored — this is
-what stops the feature from flooding the Manual tab with an account's entire
-pre-existing history the moment it ships. Only items that show up
-*afterward* — added to TorBox at any time from then on, whether through
-AcerviNode or directly — are ever adopted.
+what happens to everything currently unmatched depends on whether the
+instance itself is genuinely fresh (`database.HasAnyDownloads` — has this
+database ever tracked a single download, of any kind, before this tick
+started). On an **established** instance — this feature (or a newly added
+second provider) showing up on something that's already been running a
+while — nothing is adopted: every currently-unmatched item is instead
+recorded into `discovery_baseline` (with `discovery_seeded` as the
+per-provider-per-kind marker that seeding has already happened) and
+permanently ignored, so it doesn't flood the Manual tab with a big
+pre-existing history. On a **genuinely fresh** install, though, there's no
+existing history to protect — the account's current contents are adopted
+immediately instead, and the baseline is seeded empty. Either way, only
+items present at seed time are affected by that one-time branch; everything
+that shows up *afterward* — added to TorBox at any time from then on,
+whether through AcerviNode or directly — is always adopted normally.
+
+Found live: a fresh Proxmox install recognized the configured TorBox
+account but never showed its existing downloads, because this always took
+the established-instance branch regardless of whether the instance was
+actually fresh. `freshInstall` is computed exactly once per
+`refreshStatuses` tick, before any kind's own discovery runs — checking it
+fresh inside each kind's own pass instead would make the answer depend on
+iteration order (torrent adopting its items first would make the database
+non-empty by the time usenet's own check ran, wrongly baselining usenet's
+equally pre-existing items).
 
 A discovered download has no add-request `Source` to capture the normal way
 (there was never a request through AcerviNode's own add endpoints for one),
