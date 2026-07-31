@@ -101,7 +101,7 @@
 }
 
 .settings-card {
-  max-width: 420px;
+  max-width: 640px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
