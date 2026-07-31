@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Every Sonarr/Radarr "Test" against the qBittorrent compat shim failed
+  outright**, regardless of how correctly everything else was configured —
+  found live, reported as "failed test." Root cause: `GET
+  /api/v2/app/preferences` didn't exist in `internal/qbittorrent` at all (a
+  plain 404). Confirmed against Sonarr's actual source
+  (`QBittorrentProxyV2.GetConfig`, called by `TestConnection`) that this is
+  the *first* request a real "Test" makes, before checking categories or
+  anything else — so the whole flow aborted at step one. New
+  `handleGetPreferences` reports `save_path` (AcerviNode's `download_dir`)
+  plus fixed "disabled" values for every seeding/ratio/queueing field
+  AcerviNode has no concept of (TorBox handles seeding, not AcerviNode).
+  `TestSonarrCallSequence` — which already claimed to replicate Sonarr's own
+  Test sequence — didn't include this call at all, which is exactly how it
+  shipped unnoticed; now it does. Verified live: the endpoint 404'd before
+  the fix, returns a real response after.
+
 - **The first-run setup wizard's account-creation step was a dead end if the
   instance turned out to already be set up** — found live: a second tab (or
   a stale reload) still showing the wizard submitted step 0 against an

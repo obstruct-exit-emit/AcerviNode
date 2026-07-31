@@ -42,11 +42,12 @@ func postMultipart(t *testing.T, client *http.Client, targetURL string, fields m
 
 const testMagnet = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=Some.Release.Name"
 
-// staticAPIKey satisfies apiKeySource for tests that don't need a live,
-// changeable key.
+// staticAPIKey satisfies settingsSource for tests that don't need a live,
+// changeable key or download dir.
 type staticAPIKey string
 
-func (k staticAPIKey) APIKey() string { return string(k) }
+func (k staticAPIKey) APIKey() string      { return string(k) }
+func (k staticAPIKey) DownloadDir() string { return "/downloads" }
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
@@ -103,6 +104,26 @@ func TestSonarrCallSequence(t *testing.T) {
 	}
 	if v := readBody(t, verResp); v == "" {
 		t.Error("webapiVersion returned empty body")
+	}
+
+	// app/preferences — Sonarr's QBittorrentProxyV2.GetConfig, called by
+	// TestConnection, the actual first step of "Test." Missing this endpoint
+	// entirely (a 404) was a real bug this exact test failed to catch,
+	// because it wasn't in this sequence at all — found live.
+	prefsResp, err := client.Get(ts.URL + "/api/v2/app/preferences")
+	if err != nil {
+		t.Fatalf("preferences error = %v", err)
+	}
+	if prefsResp.StatusCode != http.StatusOK {
+		t.Fatalf("preferences status = %d, want 200", prefsResp.StatusCode)
+	}
+	var prefs preferencesResponse
+	if err := json.NewDecoder(prefsResp.Body).Decode(&prefs); err != nil {
+		t.Fatalf("decode preferences: %v", err)
+	}
+	prefsResp.Body.Close()
+	if prefs.SavePath != "/downloads" {
+		t.Errorf("preferences save_path = %q, want /downloads", prefs.SavePath)
 	}
 
 	// torrents/add

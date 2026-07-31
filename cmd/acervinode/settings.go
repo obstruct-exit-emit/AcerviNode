@@ -143,6 +143,19 @@ func (s *liveSettings) APIKey() string {
 	return s.cfg.APIKey
 }
 
+// DownloadDir returns AcerviNode's current fallback download directory — see
+// internal/qbittorrent's settingsSource, which reports it as the qBittorrent
+// Web API's own save_path preference (GET /api/v2/app/preferences). Sonarr's
+// download-client Test() reads this first, before any of its other checks
+// (QBittorrentProxyV2.GetConfig) — AcerviNode never implemented this
+// endpoint at all, which is why "Test" failed outright over plain HTTP,
+// found live.
+func (s *liveSettings) DownloadDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.DownloadDir
+}
+
 // RegenerateAPIKey replaces the current API key with a fresh random one,
 // applies it immediately, and persists it to config.yaml — the same
 // live-swap-then-save pattern as SetTorBoxAPIKey.

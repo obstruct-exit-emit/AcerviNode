@@ -11,12 +11,17 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// apiKeySource is the minimal interface needed to check a login attempt's
-// password against the live AcerviNode API key — matching cmd/acervinode's
-// liveSettings, whose APIKey() reflects a key regenerated through the
-// settings API with no restart needed (see internal/api.Settings).
-type apiKeySource interface {
+// settingsSource is the minimal interface needed to check a login attempt's
+// password against the live AcerviNode API key, and to answer
+// GET /api/v2/app/preferences — matching cmd/acervinode's liveSettings,
+// whose APIKey() reflects a key regenerated through the settings API with
+// no restart needed (see internal/api.Settings).
+type settingsSource interface {
 	APIKey() string
+	// DownloadDir backs the preferences response's save_path — Sonarr's own
+	// download-client Test() reads this before any other check (see
+	// handleGetPreferences).
+	DownloadDir() string
 }
 
 // Server is an http.Handler implementing the qBittorrent Web API surface
@@ -26,10 +31,10 @@ type apiKeySource interface {
 type Server struct {
 	provider debrid.TorrentProvider
 	db       *database.DB
-	// apiKey is the password accepted by /api/v2/auth/login — any username is
-	// accepted, matching how the SABnzbd shim treats its own apikey param as
-	// the single shared secret (see docs/configuration.md).
-	apiKey apiKeySource
+	// settings' APIKey is the password accepted by /api/v2/auth/login — any
+	// username is accepted, matching how the SABnzbd shim treats its own
+	// apikey param as the single shared secret (see docs/configuration.md).
+	settings settingsSource
 
 	mux        *http.ServeMux
 	sessions   *sessionStore
@@ -37,11 +42,11 @@ type Server struct {
 }
 
 // NewServer builds a qBittorrent-compat Server backed by provider and db.
-func NewServer(provider debrid.TorrentProvider, db *database.DB, apiKey apiKeySource) *Server {
+func NewServer(provider debrid.TorrentProvider, db *database.DB, settings settingsSource) *Server {
 	s := &Server{
 		provider:   provider,
 		db:         db,
-		apiKey:     apiKey,
+		settings:   settings,
 		sessions:   newSessionStore(),
 		categories: newCategoryStore(),
 	}
@@ -60,6 +65,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/v2/app/version", s.handleAppVersion)
 	s.mux.HandleFunc("GET /api/v2/app/webapiVersion", s.handleWebAPIVersion)
+	s.mux.HandleFunc("GET /api/v2/app/preferences", s.requireAuth(s.handleGetPreferences))
 
 	s.mux.HandleFunc("POST /api/v2/torrents/add", s.requireAuth(s.handleAdd))
 	s.mux.HandleFunc("GET /api/v2/torrents/info", s.requireAuth(s.handleInfo))

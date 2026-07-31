@@ -24,6 +24,7 @@ gives AcerviNode a drop-in integration path with zero changes required on the
 |---|---|
 | `POST /api/v2/auth/login` / `logout` | Cookie-based session, matching qBt's own auth flow |
 | `GET /api/v2/app/version` / `webapiVersion` | Probed by \*arr apps when you click "Test" |
+| `GET /api/v2/app/preferences` | Reports `save_path` (AcerviNode's `download_dir`) plus fixed "disabled" values for every seeding/ratio/queueing field AcerviNode has no concept of. **Not optional** — confirmed against Sonarr's own source (`QBittorrentProxyV2.GetConfig`, called by `TestConnection`), this is the *first* request a real Sonarr/Radarr "Test" makes, before anything else. Missing entirely (a plain 404) until found live — every "Test" failed outright, regardless of how correctly everything else was configured |
 | `POST /api/v2/torrents/add` | Accepts a magnet URL or a multipart `.torrent` file upload, plus a `category` |
 | `GET /api/v2/torrents/info` | Lists tracked torrents, optionally filtered by hash(es) — polled repeatedly while a download is active |
 | `GET /api/v2/torrents/properties` | Per-torrent detail (save path, size, ...) |
