@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { getGeneralSettings, restartServer, setTorBoxApiKey, setupInstance, testTorBoxConnection, updateGeneralSettings } from '../api'
+import { ApiError, getGeneralSettings, restartServer, setTorBoxApiKey, setupInstance, testTorBoxConnection, updateGeneralSettings } from '../api'
 
 // SetupWizard is the first-run experience: a fresh instance is claimed by
 // creating a login account (no API key involved — see api.setupInstance),
@@ -10,7 +10,7 @@ import { getGeneralSettings, restartServer, setTorBoxApiKey, setupInstance, test
 // lives in Settings afterwards.
 const steps = ['Account', 'TorBox', 'HTTPS', 'Done'] as const
 
-export default function SetupWizard({ onDone }: { onDone: () => void }) {
+export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => void; onAlreadySetUp: () => void }) {
   const [step, setStep] = useState(0)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -47,7 +47,17 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
     setNotice('')
     setupInstance(username.trim(), password)
       .then(() => next())
-      .catch((err: unknown) => setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`))
+      .catch((err: unknown) => {
+        // 403 here specifically means the instance already has an account —
+        // stale setupNeeded state in this tab, not a real failure. Routing
+        // straight to the login form beats leaving this a dead end: step 0
+        // has no Back/Skip nav of its own to escape a plain error with.
+        if (err instanceof ApiError && err.status === 403) {
+          onAlreadySetUp()
+          return
+        }
+        setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`)
+      })
       .finally(() => setBusy(false))
   }
 

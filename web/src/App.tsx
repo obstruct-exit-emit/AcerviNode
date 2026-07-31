@@ -372,6 +372,16 @@ export default function App() {
           setSetupNeeded(false)
           refreshAuth()
         }}
+        // A stale setupNeeded=true (e.g. this tab had the wizard open from
+        // before the instance was actually claimed elsewhere, or a second
+        // tab raced the first) means step 0's own create-account call gets
+        // rejected with "already set up" — a dead end otherwise, since the
+        // wizard has no way back to the login form on its own. Re-checking
+        // here instead of just erroring routes straight to it.
+        onAlreadySetUp={() => {
+          setSetupNeeded(false)
+          refreshAuth()
+        }}
       />
     )
   }

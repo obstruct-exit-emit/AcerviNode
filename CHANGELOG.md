@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first-run setup wizard's account-creation step was a dead end if the
+  instance turned out to already be set up** — found live: a second tab (or
+  a stale reload) still showing the wizard submitted step 0 against an
+  instance a first tab had already claimed, got a 403 back, and just sat on
+  a red error with no Back/Skip nav to escape it. `SetupWizard` now takes an
+  `onAlreadySetUp` callback and detects this specific case (`ApiError` with
+  `status === 403`) instead of treating it as a generic failure — `App.tsx`
+  wires it to the same re-check `onDone` already does, landing on the login
+  form instead. Verified live: two tabs racing the real wizard, the second
+  one now correctly ends up at the login form rather than stuck.
+
 ### Added
 
 - **Native, self-signed, auto-generated HTTPS support.** Requested after
