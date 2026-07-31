@@ -22,6 +22,21 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now acervinode
 ```
 
+### Upgrading an existing install
+
+Replacing `/opt/acervinode/acervinode` with a newer binary and restarting the
+service is normally all that's needed. The one exception: a binary update never
+touches an already-installed `/etc/systemd/system/acervinode.service` — if a
+release's own copy of that file changes (as it did to pick up `Restart=always`,
+needed for the settings UI's "Restart now" action to actually work), re-copy it
+and reload systemd once:
+
+```sh
+sudo install -m 644 acervinode-*/acervinode.service /etc/systemd/system/acervinode.service
+sudo systemctl daemon-reload
+sudo systemctl restart acervinode
+```
+
 ## From source
 
 Requirements: Go 1.25+, Node 22+ (for the frontend).

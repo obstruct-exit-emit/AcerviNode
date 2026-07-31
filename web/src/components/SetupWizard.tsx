@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { setTorBoxApiKey, setupInstance, testTorBoxConnection } from '../api'
+import { getGeneralSettings, restartServer, setTorBoxApiKey, setupInstance, testTorBoxConnection, updateGeneralSettings } from '../api'
 
 // SetupWizard is the first-run experience: a fresh instance is claimed by
 // creating a login account (no API key involved — see api.setupInstance),
@@ -8,7 +8,7 @@ import { setTorBoxApiKey, setupInstance, testTorBoxConnection } from '../api'
 // indexers, and download clients) since AcerviNode's whole setup surface is
 // just "one provider" — everything else already has a sensible default and
 // lives in Settings afterwards.
-const steps = ['Account', 'TorBox', 'Done'] as const
+const steps = ['Account', 'TorBox', 'HTTPS', 'Done'] as const
 
 export default function SetupWizard({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0)
@@ -23,6 +23,11 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   // Step 1 — TorBox key.
   const [torboxKey, setTorboxKey] = useState('')
   const [keySaved, setKeySaved] = useState(false)
+
+  // Step 2 — HTTPS.
+  const [tlsPort, setTlsPort] = useState<number | null>(null)
+  const [restarted, setRestarted] = useState(false)
+  const [supervised, setSupervised] = useState(true)
 
   function next() {
     setNotice('')
@@ -65,6 +70,41 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
       .then(() => {
         setKeySaved(true)
         next()
+      })
+      .catch((err: unknown) => setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setBusy(false))
+  }
+
+  // Persists tls_enabled through the same general-settings endpoint Settings
+  // itself uses (round-tripping every other field unchanged, same pattern as
+  // Settings.tsx's own form), then restarts immediately — enabling TLS is
+  // useless until the process actually rebinds with it on.
+  function enableHttps() {
+    setBusy(true)
+    setNotice('')
+    getGeneralSettings('')
+      .then((g) => {
+        setTlsPort(g.tls_port)
+        return updateGeneralSettings('', {
+          port: g.port,
+          data_dir: g.data_dir,
+          download_dir: g.download_dir,
+          log_level: g.log_level,
+          import_interval_seconds: g.import_interval_seconds,
+          import_max_retries: g.import_max_retries,
+          max_concurrent_downloads: g.max_concurrent_downloads,
+          import_fetch_timeout_seconds: g.import_fetch_timeout_seconds,
+          cleanup_after_days: g.cleanup_after_days,
+          tls_enabled: true,
+          tls_port: g.tls_port,
+          tls_cert_file: g.tls_cert_file,
+          tls_key_file: g.tls_key_file,
+        })
+      })
+      .then(() => restartServer(''))
+      .then((r) => {
+        setSupervised(r.supervised)
+        setRestarted(true)
       })
       .catch((err: unknown) => setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setBusy(false))
@@ -155,6 +195,53 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
         {step === 2 && (
           <>
+            <h2>Enable HTTPS?</h2>
+            <p className="muted">
+              Adds a second, encrypted listener alongside the existing plain-HTTP one — nothing already using
+              AcerviNode over plain HTTP is affected either way. Mainly useful for the browser's folder-picker
+              download mode, which needs HTTPS (or <code>localhost</code>) to work at all. Uses a self-signed
+              certificate generated automatically — your browser will show a one-time "not trusted" warning to
+              click through. You can always turn this on later in Settings instead.
+            </p>
+            {!restarted ? (
+              <div className="settings-actions">
+                <button disabled={busy} onClick={enableHttps}>
+                  {busy ? 'Enabling…' : 'Enable HTTPS & restart'}
+                </button>
+                {notice && <span className={notice.startsWith('✗') ? 'notice bad' : 'notice ok'}>{notice}</span>}
+              </div>
+            ) : (
+              <>
+                {supervised ? (
+                  <p className="notice ok">
+                    ✓ Restarting now. Once it's back, visit{' '}
+                    <strong>
+                      https://{window.location.hostname}
+                      {tlsPort ? `:${tlsPort}` : ''}
+                    </strong>{' '}
+                    instead of this http:// address to use HTTPS — this page won't move there for you.
+                  </p>
+                ) : (
+                  <p className="notice bad">
+                    ✗ Saved, but AcerviNode isn't running under a supervisor (e.g. systemd) — it just stopped, and
+                    nothing will automatically start it back up. Start it again yourself, then visit{' '}
+                    <strong>
+                      https://{window.location.hostname}
+                      {tlsPort ? `:${tlsPort}` : ''}
+                    </strong>
+                    .
+                  </p>
+                )}
+                <div className="settings-actions">
+                  <button onClick={next}>Continue</button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {step === 3 && (
+          <>
             <h2>You're all set 🎉</h2>
             <p className="muted">
               {keySaved ? 'TorBox connected.' : 'No TorBox key yet — add one anytime in Settings.'}
@@ -170,7 +257,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
           </>
         )}
 
-        {step > 0 && step < 2 && (
+        {step > 0 && step < 3 && !(step === 2 && restarted) && (
           <div className="wizard-nav">
             <button className="toggle" disabled={busy} onClick={back}>
               ← Back

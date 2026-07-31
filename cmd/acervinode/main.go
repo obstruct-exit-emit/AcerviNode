@@ -22,6 +22,7 @@ import (
 	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
 	"github.com/acervinode/acervinode/internal/sabnzbd"
+	"github.com/acervinode/acervinode/internal/tlscert"
 	"github.com/acervinode/acervinode/web"
 )
 
@@ -71,6 +72,11 @@ func run(ctx context.Context) error {
 
 	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
 	settings.SetLevelVar(levelVar)
+	// stop (from signal.NotifyContext above) marks ctx Done exactly the same
+	// as an actual signal arriving — wiring it in as the restart trigger
+	// means the settings API's restart endpoint needs no shutdown plumbing
+	// of its own; it just reuses the select below.
+	settings.SetRestartTrigger(stop)
 	slog.Info("torbox provider", "configured", torrentDyn.Configured())
 	// Logged so a config.yaml without an explicit api_key is still usable —
 	// otherwise a randomly generated key (see internal/config) would be
@@ -89,29 +95,63 @@ func run(ctx context.Context) error {
 	settings.SetImporter(imp)
 	go imp.Run(ctx)
 
+	// errCh has room for both servers below — either one failing is fatal,
+	// but neither should be able to block on sending its error if the other
+	// already has.
+	errCh := make(chan error, 2)
+	startServer := func(name string, srv *http.Server, listenAndServe func() error) {
+		go func() {
+			if err := listenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("%s server: %w", name, err)
+			}
+		}()
+	}
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: handler,
 	}
+	servers := []*http.Server{srv}
+	slog.Info("acervinode starting", "port", cfg.Port)
+	startServer("http", srv, srv.ListenAndServe)
 
-	errCh := make(chan error, 1)
-	go func() {
-		slog.Info("acervinode starting", "port", cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+	// TLS is additive, never a replacement for the plain-HTTP listener above
+	// — see docs/providers.md's TLS section for why (existing *arr
+	// integrations, scripts, and bookmarks pointed at http://... keep working
+	// unchanged regardless of whether this is enabled). Generation failure is
+	// fatal rather than a silent fall-back to HTTP-only: an operator who
+	// explicitly enabled TLS and got silently downgraded would have no
+	// indication why the browser's folder-picker still doesn't work.
+	if cfg.TLSEnabled {
+		certFile, keyFile, err := tlscert.EnsureCertificate(cfg.DataDir, cfg.TLSCertFile, cfg.TLSKeyFile, tlscert.CollectHosts())
+		if err != nil {
+			return fmt.Errorf("prepare tls certificate: %w", err)
 		}
-	}()
+		tlsSrv := &http.Server{
+			Addr:    fmt.Sprintf(":%d", cfg.TLSPort),
+			Handler: handler,
+		}
+		servers = append(servers, tlsSrv)
+		slog.Info("acervinode starting (tls)", "port", cfg.TLSPort)
+		startServer("https", tlsSrv, func() error { return tlsSrv.ListenAndServeTLS(certFile, keyFile) })
+	}
 
 	select {
 	case err := <-errCh:
-		return fmt.Errorf("http server: %w", err)
+		return err
 	case <-ctx.Done():
 	}
 
 	slog.Info("acervinode shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	var shutdownErr error
+	for _, s := range servers {
+		if err := s.Shutdown(shutdownCtx); err != nil && shutdownErr == nil {
+			shutdownErr = err
+		}
+	}
+	return shutdownErr
 }
 
 // buildHandler assembles the native API and both compat shims, all under one

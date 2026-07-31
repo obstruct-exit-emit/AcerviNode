@@ -301,6 +301,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
 		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
 		CleanupAfterDays: 14,
+		TLSPort:          cfg.TLSPort, // unchanged — no restart needed
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -389,6 +390,173 @@ func TestLiveSettings_UpdateGeneral_RejectsInvalidValues(t *testing.T) {
 	}
 	if settings.General().LogLevel != originalLogLevel {
 		t.Errorf("General().LogLevel = %q after a rejected update, want unchanged %q", settings.General().LogLevel, originalLogLevel)
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_RestartRequiredForTLSChanges proves
+// enabling TLS (or changing tls_port) is reported back as needing a
+// restart, the same as port/data_dir — the running listener isn't rebound
+// live.
+func TestLiveSettings_UpdateGeneral_RestartRequiredForTLSChanges(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
+		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
+		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
+		TLSEnabled: true, TLSPort: cfg.TLSPort,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGeneral() error = %v", err)
+	}
+	if !restartRequired {
+		t.Error("restartRequired = false, want true (tls_enabled changed)")
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if !reloaded.TLSEnabled {
+		t.Error("reloaded TLSEnabled = false, want true (persisted)")
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_RejectsTLSPortCollidingWithPort proves the
+// same tls_port != port rule config.Validate enforces at load time also
+// applies through the settings API, not just config.yaml.
+func TestLiveSettings_UpdateGeneral_RejectsTLSPortCollidingWithPort(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
+		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
+		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
+		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
+		TLSEnabled: true, TLSPort: cfg.Port,
+	})
+	if err == nil {
+		t.Error("UpdateGeneral() with tls_port == port: expected an error, got nil")
+	}
+}
+
+func TestLiveSettings_SupervisedBySystemd_ReflectsInvocationID(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	t.Setenv("INVOCATION_ID", "")
+	os.Unsetenv("INVOCATION_ID")
+	if settings.SupervisedBySystemd() {
+		t.Error("SupervisedBySystemd() = true with no INVOCATION_ID set, want false")
+	}
+
+	t.Setenv("INVOCATION_ID", "some-id")
+	if !settings.SupervisedBySystemd() {
+		t.Error("SupervisedBySystemd() = false with INVOCATION_ID set, want true")
+	}
+}
+
+// TestLiveSettings_RequestRestart_ErrorsWhenNoTriggerWired proves calling
+// RequestRestart before SetRestartTrigger has ever been called (e.g. in a
+// test, or a settings call arriving mid-startup) fails loudly rather than
+// panicking on a nil function call.
+func TestLiveSettings_RequestRestart_ErrorsWhenNoTriggerWired(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	if err := settings.RequestRestart(context.Background()); err == nil {
+		t.Error("RequestRestart() with no trigger wired: expected an error, got nil")
+	}
+}
+
+func TestLiveSettings_RequestRestart_CallsWiredTrigger(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	called := false
+	settings.SetRestartTrigger(func() { called = true })
+
+	if err := settings.RequestRestart(context.Background()); err != nil {
+		t.Fatalf("RequestRestart() error = %v", err)
+	}
+	if !called {
+		t.Error("RequestRestart() didn't call the wired trigger")
+	}
+}
+
+func TestLiveSettings_RegenerateCertificate_GeneratesFreshCert(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.DataDir = t.TempDir()
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	certPath := filepath.Join(cfg.DataDir, "tls", "cert.pem")
+	if _, err := os.Stat(certPath); err == nil {
+		t.Fatal("cert already exists before RegenerateCertificate(), test setup is wrong")
+	}
+
+	if err := settings.RegenerateCertificate(context.Background()); err != nil {
+		t.Fatalf("RegenerateCertificate() error = %v", err)
+	}
+	if _, err := os.Stat(certPath); err != nil {
+		t.Errorf("cert not created by RegenerateCertificate(): %v", err)
+	}
+
+	first, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read cert: %v", err)
+	}
+	if err := settings.RegenerateCertificate(context.Background()); err != nil {
+		t.Fatalf("second RegenerateCertificate() error = %v", err)
+	}
+	second, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read cert (second time): %v", err)
+	}
+	if string(first) == string(second) {
+		t.Error("cert unchanged after a second RegenerateCertificate() call, want a genuinely fresh one each time")
+	}
+}
+
+// TestLiveSettings_RegenerateCertificate_RefusesWhenBYOConfigured proves a
+// custom tls_cert_file/tls_key_file override is left alone — regenerating
+// something the operator supplied themselves isn't this method's place.
+func TestLiveSettings_RegenerateCertificate_RefusesWhenBYOConfigured(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.TLSCertFile = "/somewhere/cert.pem"
+	cfg.TLSKeyFile = "/somewhere/key.pem"
+	_, _, _, settings := setupProviders(cfg, configPath)
+
+	if err := settings.RegenerateCertificate(context.Background()); err == nil {
+		t.Error("RegenerateCertificate() with a BYO override configured: expected an error, got nil")
 	}
 }
 

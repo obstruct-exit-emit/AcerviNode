@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
 	"github.com/acervinode/acervinode/internal/sabnzbd"
+	"github.com/acervinode/acervinode/internal/tlscert"
 )
 
 // liveSettings implements api.Settings: it's what lets a TorBox API key, or
@@ -40,6 +42,7 @@ type liveSettings struct {
 	imp            *importer.Importer
 	qbt            *qbittorrent.Server
 	sab            *sabnzbd.Server
+	restartTrigger func()
 }
 
 // SetLevelVar wires in the live log-level control built in run() — see
@@ -47,6 +50,16 @@ type liveSettings struct {
 func (s *liveSettings) SetLevelVar(levelVar *slog.LevelVar) {
 	s.mu.Lock()
 	s.levelVar = levelVar
+	s.mu.Unlock()
+}
+
+// SetRestartTrigger wires in run()'s signal.NotifyContext stop function —
+// calling it marks the same context Done that an actual SIGTERM/SIGINT
+// would, so RequestRestart needs no shutdown logic of its own; it reuses
+// run()'s existing select/Shutdown path.
+func (s *liveSettings) SetRestartTrigger(trigger func()) {
+	s.mu.Lock()
+	s.restartTrigger = trigger
 	s.mu.Unlock()
 }
 
@@ -164,6 +177,10 @@ func (s *liveSettings) General() api.GeneralInfo {
 		MaxConcurrentDownloads:    s.cfg.MaxConcurrentDownloads,
 		ImportFetchTimeoutSeconds: s.cfg.ImportFetchTimeoutSeconds,
 		CleanupAfterDays:          s.cfg.CleanupAfterDays,
+		TLSEnabled:                s.cfg.TLSEnabled,
+		TLSPort:                   s.cfg.TLSPort,
+		TLSCertFile:               s.cfg.TLSCertFile,
+		TLSKeyFile:                s.cfg.TLSKeyFile,
 	}
 }
 
@@ -190,11 +207,17 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.MaxConcurrentDownloads = update.MaxConcurrentDownloads
 	candidate.ImportFetchTimeoutSeconds = update.ImportFetchTimeoutSeconds
 	candidate.CleanupAfterDays = update.CleanupAfterDays
+	candidate.TLSEnabled = update.TLSEnabled
+	candidate.TLSPort = update.TLSPort
+	candidate.TLSCertFile = update.TLSCertFile
+	candidate.TLSKeyFile = update.TLSKeyFile
 	if err := candidate.Validate(); err != nil {
 		return false, err
 	}
 
-	restartRequired := candidate.Port != s.cfg.Port || candidate.DataDir != s.cfg.DataDir
+	restartRequired := candidate.Port != s.cfg.Port || candidate.DataDir != s.cfg.DataDir ||
+		candidate.TLSEnabled != s.cfg.TLSEnabled || candidate.TLSPort != s.cfg.TLSPort ||
+		candidate.TLSCertFile != s.cfg.TLSCertFile || candidate.TLSKeyFile != s.cfg.TLSKeyFile
 
 	*s.cfg = candidate
 	if err := s.cfg.Save(s.configPath); err != nil {
@@ -212,6 +235,52 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	}
 
 	return restartRequired, nil
+}
+
+// SupervisedBySystemd reports whether this process is running under systemd
+// unit supervision — systemd sets INVOCATION_ID for every unit it starts.
+// RequestRestart still restarts either way (this isn't a permission check),
+// but the caller uses this to tell an admin the truth: without a supervisor
+// actually watching this process, a clean exit is just a stop, not a
+// restart — nothing brings it back.
+func (s *liveSettings) SupervisedBySystemd() bool {
+	return os.Getenv("INVOCATION_ID") != ""
+}
+
+// RequestRestart triggers the same graceful shutdown run()'s signal handling
+// already does — see SetRestartTrigger. Config changes that need a restart
+// (port, tls_enabled/tls_port, ...) are already persisted to config.yaml by
+// the time this is ever called, so the next process start picks them up
+// automatically; this method's only job is ending the current one.
+func (s *liveSettings) RequestRestart(_ context.Context) error {
+	s.mu.Lock()
+	trigger := s.restartTrigger
+	s.mu.Unlock()
+	if trigger == nil {
+		return fmt.Errorf("restart trigger not wired up")
+	}
+	trigger()
+	return nil
+}
+
+// RegenerateCertificate forces a fresh self-signed TLS certificate — the fix
+// for a cert whose baked-in SANs (IPs/hostname captured at generation time)
+// no longer match how the instance is actually reached, e.g. after a DHCP
+// lease change. Requires a restart to take effect: the running HTTPS
+// listener already has the old cert loaded in memory. Refused when a BYO
+// tls_cert_file/tls_key_file override is configured — regenerating something
+// the operator supplied themselves isn't this method's place.
+func (s *liveSettings) RegenerateCertificate(_ context.Context) error {
+	s.mu.Lock()
+	dataDir := s.cfg.DataDir
+	hasOverride := s.cfg.TLSCertFile != "" || s.cfg.TLSKeyFile != ""
+	s.mu.Unlock()
+
+	if hasOverride {
+		return fmt.Errorf("a custom tls_cert_file/tls_key_file is configured — remove it to use an auto-generated certificate")
+	}
+	_, _, err := tlscert.RegenerateCertificate(dataDir, tlscert.CollectHosts())
+	return err
 }
 
 // Categories lists every category name each compat shim currently knows

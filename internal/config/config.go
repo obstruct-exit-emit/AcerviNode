@@ -82,6 +82,28 @@ type Config struct {
 	// means authentication is disabled entirely, the same API-key-only
 	// model AcerviNode always used before this existed.
 	Auth AuthSettings `yaml:"auth,omitempty"`
+
+	// TLSEnabled starts a second HTTP server on TLSPort, serving HTTPS with a
+	// self-signed certificate (auto-generated on first need — see
+	// internal/tlscert) alongside the existing plain-HTTP one on Port, which
+	// keeps running completely unchanged either way. Exists so the browser's
+	// File System Access API (secure-context-only, HTTPS or localhost) is
+	// reachable on an instance only ever visited over a plain LAN IP — see
+	// docs/providers.md's TLS section. Requires a restart to take effect.
+	TLSEnabled bool `yaml:"tls_enabled"`
+	// TLSPort is where the HTTPS listener binds when TLSEnabled — deliberately
+	// not Port+1 (that silently collides with whatever else is running the
+	// moment Port is changed to something nonstandard); 8443 is a
+	// recognizable, Portainer-adjacent convention instead.
+	TLSPort int `yaml:"tls_port"`
+	// TLSCertFile/TLSKeyFile let an operator supply a real certificate (e.g.
+	// from Tailscale's own cert tooling) instead of the auto-generated
+	// self-signed one — both or neither, enforced by Validate. Config/env
+	// only, deliberately not exposed in the Settings UI's quick-edit form,
+	// the same treatment DataDir already gets for the same reason: an
+	// advanced, rarely-touched path setting.
+	TLSCertFile string `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile  string `yaml:"tls_key_file,omitempty"`
 }
 
 var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
@@ -99,6 +121,7 @@ func defaults() *Config {
 		ImportFetchTimeoutSeconds: 600,
 		CleanupAfterDays:          0,
 		CategoryPaths:             map[string]string{},
+		TLSPort:                   8443,
 	}
 }
 
@@ -189,6 +212,22 @@ func applyEnv(cfg *Config) {
 			cfg.CleanupAfterDays = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_TLS_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.TLSEnabled = b
+		}
+	}
+	if v := os.Getenv("ACERVINODE_TLS_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.TLSPort = port
+		}
+	}
+	if v := os.Getenv("ACERVINODE_TLS_CERT_FILE"); v != "" {
+		cfg.TLSCertFile = v
+	}
+	if v := os.Getenv("ACERVINODE_TLS_KEY_FILE"); v != "" {
+		cfg.TLSKeyFile = v
+	}
 
 	// ACERVINODE_PROVIDERS_<NAME>_API_KEY=... overrides/creates a provider entry.
 	const prefix = "ACERVINODE_PROVIDERS_"
@@ -239,6 +278,17 @@ func (c *Config) Validate() error {
 	}
 	if c.CleanupAfterDays < 0 {
 		return fmt.Errorf("cleanup_after_days must not be negative")
+	}
+	if c.TLSEnabled {
+		if c.TLSPort < 1 || c.TLSPort > 65535 {
+			return fmt.Errorf("invalid tls_port %d: must be between 1 and 65535", c.TLSPort)
+		}
+		if c.TLSPort == c.Port {
+			return fmt.Errorf("tls_port must differ from port (both %d)", c.Port)
+		}
+	}
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return fmt.Errorf("tls_cert_file and tls_key_file must be set together, or not at all")
 	}
 	return nil
 }

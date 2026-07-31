@@ -301,6 +301,51 @@
   margin: 10px 0 0;
 }
 
+/* Overrides .general-form label's column layout (right for a text input's
+   label-above-field shape, wrong for a checkbox, which reads left-to-right). */
+.general-form label.toggle-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+/* .general-form input's padding/border/background is meant for text fields
+   — applied unmodified to a checkbox it inflates it into an oversized box
+   with the native checkmark rendered off to one side instead of a normal
+   small checkbox. */
+.general-form label.toggle-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  flex: none;
+}
+
+.restart-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.restart-notice .settings-warning {
+  margin: 0;
+}
+
+.restart-notice button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font: inherit;
+}
+
 .test-connection-btn {
   margin-top: 10px;
   padding: 6px 12px;

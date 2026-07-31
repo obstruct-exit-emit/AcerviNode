@@ -20,12 +20,15 @@ units without a mounted config file.
 | `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings). `POST /api/v1/settings/providers/torbox/test` makes one real, live call to confirm the key actually works |
 | `category_paths.<category>` | *(none — set via API/UI, not env)* | *(none)* | Per-category override for `download_dir`, e.g. to route one category to a different disk/mount — see [Categories and save paths](#categories-and-save-paths) below. Editable live (no restart) via `PUT /api/v1/settings/categories/path` or the web UI's Settings tab |
 | `auth.users` | *(none — set via API/UI, not env)* | *(none — first run triggers the setup wizard)* | Login accounts for the web UI, on top of the API key (which keeps working unaffected — Sonarr/Radarr and scripts always use it, never a login session). Login is mandatory for the web UI: an instance with no accounts yet shows the first-run setup wizard instead of the dashboard, not an API-key prompt. Managed via the web UI's Settings → Security, the first-run setup wizard, or `/api/v1/settings/users`/`/api/v1/setup` directly — see [Providers](providers.md#auth-login-accounts-and-roles) for the full design (roles, the protected Default account, session mechanics). Never hand-edit a password hash into this file — there's no supported way to generate one outside the app |
+| `tls_enabled` | `ACERVINODE_TLS_ENABLED` | `false` | Starts a second HTTP server on `tls_port`, serving HTTPS with a self-signed certificate auto-generated on first need — the plain-HTTP listener on `port` keeps running completely unchanged either way (dual-listen, never a replacement). Mainly exists so the browser's File System Access API (folder-picker downloads) works when AcerviNode is only reachable over a plain LAN IP, not `localhost` — that API requires a secure context. Editable via the web UI's Settings tab or the first-run wizard, but **requires a restart** — see [Providers](providers.md#tls-self-signed-https) |
+| `tls_port` | `ACERVINODE_TLS_PORT` | `8443` | Where the HTTPS listener binds when `tls_enabled`. Must differ from `port`. Requires a restart to take effect, same as `tls_enabled` |
+| `tls_cert_file` / `tls_key_file` | `ACERVINODE_TLS_CERT_FILE` / `ACERVINODE_TLS_KEY_FILE` | *(none — auto-generated)* | Optional: point at a real certificate/key pair instead of the auto-generated self-signed one (e.g. one obtained through Tailscale's own cert tooling). Both or neither — set only one and AcerviNode refuses to start. Config/env only, deliberately not an editable Settings UI field, the same treatment `data_dir` gets |
 
 `download_dir`, `log_level`, `import_interval_seconds`, `import_max_retries`,
 `max_concurrent_downloads`, `import_fetch_timeout_seconds`, and
 `cleanup_after_days` can all be changed together in one call via
-`PUT /api/v1/settings/general` (alongside `port`/`data_dir`, which persist
-but need a restart) — see [API](api.md).
+`PUT /api/v1/settings/general` (alongside `port`/`data_dir`/`tls_enabled`/
+`tls_port`, which persist but need a restart) — see [API](api.md).
 `api_key`, `providers.torbox.api_key`, and `category_paths` each have their
 own dedicated endpoint instead (regenerate, provider settings, and category
 paths respectively).

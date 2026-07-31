@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -179,6 +181,118 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 	resp.Body.Close()
 	if got := strings.TrimSpace(string(body)); got != "[]" {
 		t.Errorf("/api/v1/providers body = %q, want [] (nothing configured yet)", got)
+	}
+}
+
+// waitForOK polls url until it returns 200 or the deadline passes — run()
+// starts its listener(s) in a goroutine, so a fresh test has no other signal
+// for "the server is actually up yet."
+func waitForOK(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("GET %s never returned 200: %v", url, lastErr)
+}
+
+// TestRun_TLSListensAlongsideHTTP proves tls_enabled adds a second HTTPS
+// listener without disturbing the existing plain-HTTP one — dual-listen,
+// never a replacement, is the whole point of this design (see
+// docs/providers.md's TLS section): existing *arr integrations pointed at
+// http://... keep working completely unchanged regardless of whether this
+// is turned on.
+func TestRun_TLSListensAlongsideHTTP(t *testing.T) {
+	t.Setenv("ACERVINODE_DATA_DIR", t.TempDir())
+	t.Setenv("ACERVINODE_DOWNLOAD_DIR", t.TempDir())
+	httpPort := freePort(t)
+	tlsPort := freePort(t)
+	t.Setenv("ACERVINODE_PORT", httpPort)
+	t.Setenv("ACERVINODE_TLS_ENABLED", "true")
+	t.Setenv("ACERVINODE_TLS_PORT", tlsPort)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx)
+	}()
+
+	waitForOK(t, http.DefaultClient, "http://127.0.0.1:"+httpPort+"/api/v1/health")
+
+	// Self-signed — a plain client would reject it, same as a browser would
+	// before the user clicks through the warning; this test only cares that
+	// the second listener actually serves the same handler over TLS.
+	insecureClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	waitForOK(t, insecureClient, "https://127.0.0.1:"+tlsPort+"/api/v1/health")
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() did not return after context cancellation")
+	}
+}
+
+// TestRun_RestartEndpointShutsDownProcess proves POST
+// /api/v1/settings/system/restart ends run() the same way an actual
+// SIGTERM/SIGINT or a cancelled context already does — see
+// liveSettings.SetRestartTrigger, which wires signal.NotifyContext's own
+// stop function in as this endpoint's trigger.
+func TestRun_RestartEndpointShutsDownProcess(t *testing.T) {
+	t.Setenv("ACERVINODE_DATA_DIR", t.TempDir())
+	t.Setenv("ACERVINODE_DOWNLOAD_DIR", t.TempDir())
+	httpPort := freePort(t)
+	t.Setenv("ACERVINODE_PORT", httpPort)
+	t.Setenv("ACERVINODE_API_KEY", "test-restart-endpoint-key")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx)
+	}()
+
+	baseURL := "http://127.0.0.1:" + httpPort
+	waitForOK(t, http.DefaultClient, baseURL+"/api/v1/health")
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/settings/system/restart", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-restart-endpoint-key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST restart: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("restart status = %d, want 200", resp.StatusCode)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() did not return after the restart endpoint was called")
 	}
 }
 

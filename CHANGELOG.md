@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Native, self-signed, auto-generated HTTPS support.** Requested after
+  live-testing on a Proxmox VM reachable only over a plain LAN IP: the web
+  UI's folder-picker download mode (the browser's File System Access API)
+  requires a secure context (HTTPS or `localhost`) and simply doesn't exist
+  otherwise — no client-side workaround exists, confirmed against MDN/Chrome
+  docs, and confirmed the HTML `download` attribute can't fake folder nesting
+  either (browsers sanitize `/` to `_` in it, deliberately). Considered and
+  dropped a reverse proxy: a real, warning-free certificate needs a public
+  domain to validate against, which a private LAN IP doesn't have, so
+  self-signed is unavoidable either way.
+
+  **Dual-listen, always** — the existing plain-HTTP listener on `port` keeps
+  running completely unchanged; when `tls_enabled`, a second listener on
+  `tls_port` (default `8443`) serves the exact same handler over HTTPS.
+  Nothing already pointed at `http://...` (Sonarr/Radarr, scripts,
+  bookmarks) is ever affected by turning this on or off. New
+  `internal/tlscert` package generates an ECDSA P-256 self-signed
+  certificate (10-year validity, no rotation logic) covering every local
+  interface IP, loopback, `localhost`, and the machine's hostname — same
+  auto-generate-on-first-need precedent as the existing API key. An operator
+  can supply a real certificate instead via `tls_cert_file`/`tls_key_file`
+  (config/env only, same treatment `data_dir` already gets).
+
+  **One-click restart.** Settings changes needing a restart (`port`,
+  `tls_enabled`/`tls_port`, ...) already persisted before this — now a
+  **Restart now** button (`POST /api/v1/settings/system/restart`) actually
+  does it too, reusing `run()`'s existing shutdown path (`signal.NotifyContext`'s
+  own `stop` function, wired in as the trigger — zero new shutdown plumbing).
+  `packaging/acervinode.service` changed `Restart=on-failure` to
+  `Restart=always`, since the endpoint's clean exit is exactly what
+  `on-failure` doesn't restart. The UI is honest when nothing's actually
+  supervising the process (checks systemd's `INVOCATION_ID`) rather than
+  showing a confident "restarting…" that never comes back — found live,
+  testing against a plain `nohup`'d instance, which is exactly that case.
+
+  **Regenerate certificate** button (Settings → General, mirrors "Regenerate
+  API key") for when the cert's baked-in SANs no longer match how the
+  instance is reached (e.g. its LAN IP changed after a DHCP renewal).
+
+  **First-run setup wizard** gained an HTTPS step between TorBox and Done,
+  showing the literal `https://<host>:<port>` URL to visit afterward as
+  text — the restart doesn't move the current browser tab there on its own.
+
+  **Verified live** on a scratch instance (never the real ones): confirmed
+  `showDirectoryPicker` is genuinely unavailable over `http://<lan-ip>` and
+  available over `https://<lan-ip>` with the same self-signed cert (SANs
+  correctly covering the real interface IP, not just `localhost`); confirmed
+  the regenerate-certificate button actually changes the cert on disk;
+  confirmed an unsupervised restart correctly stops the process and says so
+  rather than claiming success. A real layout bug this surfaced: the HTTPS
+  checkbox inherited `.general-form input`'s text-field padding, rendering
+  as an oversized box — fixed. See
+  [Providers](docs/providers.md#tls-self-signed-https).
+
 ### Changed
 
 - **Settings reorganized into grouped tabs, *arr-style** — requested

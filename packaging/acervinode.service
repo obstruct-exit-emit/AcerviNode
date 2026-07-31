@@ -10,7 +10,10 @@ User=acervinode
 Group=acervinode
 ExecStart=/opt/acervinode/acervinode
 Environment=ACERVINODE_CONFIG=/etc/acervinode/config.yaml
-Restart=on-failure
+# always, not on-failure: the settings UI's "Restart now" action (used after
+# a port/data_dir/TLS change) exits cleanly (code 0), which on-failure would
+# treat as "done," not "restart me" — see docs/configuration.md's TLS section.
+Restart=always
 RestartSec=5
 
 # Hardening — AcerviNode only needs to read its config under /etc/acervinode

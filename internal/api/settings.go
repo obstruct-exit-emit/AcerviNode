@@ -83,6 +83,35 @@ func (s *Server) handleUpdateGeneralSettings(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, map[string]any{"restart_required": restartRequired})
 }
 
+// handleRestartServer implements POST /api/v1/settings/system/restart —
+// gracefully shuts down and exits so a restart-required setting (port,
+// tls_enabled/tls_port, ...) already saved to config.yaml takes effect on
+// the next start. supervised reflects whether a process supervisor is
+// actually watching this process (see Settings.SupervisedBySystemd) — the
+// UI uses it to say something truthful instead of a confident "restarting…"
+// when nothing will actually bring the process back.
+func (s *Server) handleRestartServer(w http.ResponseWriter, r *http.Request) {
+	supervised := s.settings.SupervisedBySystemd()
+	if err := s.settings.RequestRestart(r.Context()); err != nil {
+		http.Error(w, "failed to restart: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"restarting": true, "supervised": supervised})
+}
+
+// handleRegenerateCertificate implements POST /api/v1/settings/tls/regenerate
+// — forces a fresh self-signed certificate (see Settings.RegenerateCertificate)
+// when the existing one's SANs no longer match how the instance is reached.
+// Always requires a restart afterward: the running HTTPS listener already
+// has the old cert loaded in memory.
+func (s *Server) handleRegenerateCertificate(w http.ResponseWriter, r *http.Request) {
+	if err := s.settings.RegenerateCertificate(r.Context()); err != nil {
+		http.Error(w, "failed to regenerate certificate: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"restart_required": true})
+}
+
 type categoriesResponse struct {
 	Torrent []string          `json:"torrent"`
 	Usenet  []string          `json:"usenet"`

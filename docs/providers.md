@@ -801,6 +801,99 @@ both removed in favor of the simpler, permanent design described above.
 Verified by redeploying straight to the real instance (already past setup,
 already logged in as `dan`) and confirming it came back up unaffected.
 
+## TLS: self-signed HTTPS
+
+The web UI's "stream every file straight into a folder you pick" download mode
+(`web/src/fsAccess.ts`'s `supportsDirectoryPicker`) depends on the browser's File
+System Access API, which only exists in a *secure context* — HTTPS, or
+`http://localhost` — confirmed against MDN and Chrome for Developers' own docs.
+An instance reached over a plain LAN IP (`http://192.168.x.x:7846`, say — the
+common case for a home server or a Proxmox VM) never satisfies that, and no
+client-side trick works around it: the HTML `download` attribute's filename
+sanitizes any `/` to `_` in every browser, specifically to prevent exactly this
+kind of folder-path faking.
+
+**Native, self-signed, auto-generated TLS**, not a reverse proxy. Real precedent
+for this being a normal pattern, not a workaround: Portainer auto-generates a
+self-signed cert and serves HTTPS by default on port 9443 (confirmed against
+its own docs); Synology DSM, Unraid, and pfSense/OPNsense's admin UIs do the
+same. It's the standard shape for *appliance-style* self-hosted software — a
+local control surface, not assuming the operator already runs a reverse proxy
+— a different convention than the *arr ecosystem's "always proxy it yourself,"
+and a better fit here since the actual trigger (a secure-context-gated browser
+API) is a fairly modern need most older self-hosted software never had to
+solve. A reverse proxy (Caddy) was considered and dropped: a real,
+warning-free certificate (Let's Encrypt) needs a public domain to validate
+against, which a private LAN IP doesn't have, so self-signed is unavoidable
+either way — a proxy would just add a second service to run for no gain over
+doing it natively.
+
+**Dual-listen, always** (`cmd/acervinode/main.go`'s `run`) — the existing
+plain-HTTP listener on `port` keeps running completely unchanged; when
+`tls_enabled`, a *second* `*http.Server` listens on `tls_port`, serving the
+exact same handler — same routes, same auth model, nothing security-relevant
+differs between the two. Nothing already pointed at `http://...` (Sonarr/
+Radarr, scripts, bookmarks) is ever affected by turning this on or off.
+
+**The certificate** (`internal/tlscert`) is ECDSA P-256, self-signed, valid
+10 years — deliberately no rotation/renewal logic, matching this project's
+"acceptable to keep simple" stance elsewhere (e.g. the database itself).
+SANs cover loopback (both families), `localhost`, the machine's own hostname,
+and every IP `net.InterfaceAddrs()` reports — generated once and reused as-is
+on every subsequent start (`EnsureCertificate` never silently regenerates: a
+device that already clicked through the browser's trust warning shouldn't
+have to do it again for no reason). Stored under `<data_dir>/tls/{cert,key}.pem`
+— already inside the systemd unit's `ReadWritePaths=/var/lib/acervinode`, so
+no hardening changes were needed. An operator can supply a real certificate
+instead via `tls_cert_file`/`tls_key_file` (e.g. one obtained through
+Tailscale's own cert tooling) — config/env only, deliberately not an editable
+Settings UI field, the same treatment `data_dir` already gets.
+
+Cert generation failing when `tls_enabled` is true is **fatal** — `run()`
+refuses to start rather than silently falling back to HTTP-only. An operator
+who explicitly turned TLS on and got quietly downgraded would have no
+indication why the folder-picker still doesn't work.
+
+**The SAN-drift caveat.** A cert's SANs are only as good as what AcerviNode
+could detect about itself at generation time — if the machine's LAN IP later
+changes (a DHCP lease renewal, a different network), the existing cert stops
+matching and the browser hard-rejects it, not a soft warning. Settings → General
+has a **Regenerate certificate** button for exactly this (mirrors "Regenerate
+API key"), which forces a fresh cert and requires a restart to load it — refused
+if a `tls_cert_file`/`tls_key_file` override is configured, since regenerating
+something the operator supplied themselves isn't this feature's place.
+
+**Restarting.** Settings changes that need a restart to apply (`port`,
+`tls_enabled`/`tls_port`, ...) already persist to `config.yaml` the moment
+they're saved — same as before this feature — but actually restarting is now
+a one-click **Restart now** action (`POST /api/v1/settings/system/restart`)
+instead of an SSH session, reusing `run()`'s existing shutdown path:
+`signal.NotifyContext`'s own `stop` function is wired in as the restart
+trigger, so calling it marks the same context Done an actual SIGTERM would,
+with zero new shutdown plumbing. This is deliberately never automatic-on-save
+— restarting the instant a field is saved would drop the admin's own session
+mid-edit with no chance to reconsider.
+
+This only actually brings the process back, though, where a supervisor is
+watching it. `packaging/acervinode.service` changed `Restart=on-failure` to
+`Restart=always`, since the endpoint's clean exit (code 0) is exactly what
+`on-failure` is defined to *not* restart — but an already-installed unit file
+doesn't pick that up from a binary update alone (see
+[Installation](installation.md#upgrading-an-existing-install)), and a raw
+`nohup`'d dev instance was never supervised at all. `Settings.SupervisedBySystemd`
+checks for `INVOCATION_ID` (set by systemd for every unit it runs) so the UI can
+tell the difference — a confident "Restarting…" when something's actually
+watching, an honest "nothing will bring this back" when nothing is.
+
+**The first-run setup wizard** gained an HTTPS step (between TorBox and Done)
+offering the same toggle, for the same reason every other wizard step exists:
+so a fresh install doesn't require a trip to Settings for something most
+people will want immediately. Enabling it here calls the general-settings
+endpoint and the restart endpoint back to back, then — critically — displays
+the literal `https://<host>:<port>` URL to visit afterward as text, not just a
+toggle: the restart doesn't move the current browser tab anywhere on its own,
+so without an explicit URL the admin would have no obvious next step.
+
 ## Adding a new provider
 
 1. New subpackage under `internal/debrid/<name>/`.

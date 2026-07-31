@@ -211,6 +211,13 @@ export interface GeneralSettings {
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
   cleanup_after_days: number
+  // tls_cert_file/tls_key_file are config/env-only (no editable UI field —
+  // same treatment data_dir already gets) but still reported here for
+  // transparency, the same way data_dir is.
+  tls_enabled: boolean
+  tls_port: number
+  tls_cert_file: string
+  tls_key_file: string
 }
 
 export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
@@ -234,18 +241,40 @@ export interface GeneralUpdateInput {
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
   cleanup_after_days: number
+  tls_enabled: boolean
+  tls_port: number
+  tls_cert_file: string
+  tls_key_file: string
 }
 
-// updateGeneralSettings applies everything except port/data_dir immediately,
-// no restart needed. port/data_dir are saved too, but only take effect after
-// a restart — restart_required in the response reflects whether either of
-// those changed.
+// updateGeneralSettings applies everything except port/data_dir/tls_*
+// immediately, no restart needed. Those are saved too, but only take effect
+// after a restart — restart_required in the response reflects whether any
+// of them changed.
 export function updateGeneralSettings(apiKey: string, update: GeneralUpdateInput): Promise<{ restart_required: boolean }> {
   return request('/api/v1/settings/general', apiKey, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(update),
   })
+}
+
+// restartServer gracefully restarts AcerviNode so a restart-required
+// setting just saved (port, tls_enabled/tls_port, ...) takes effect —
+// already persisted to config.yaml by the time this is called, so the next
+// start picks it up automatically. supervised reflects whether a process
+// supervisor (systemd) is actually watching this process — false means the
+// restart will stop AcerviNode with nothing bringing it back.
+export function restartServer(apiKey: string): Promise<{ restarting: boolean; supervised: boolean }> {
+  return request('/api/v1/settings/system/restart', apiKey, { method: 'POST' })
+}
+
+// regenerateCertificate forces a fresh self-signed TLS certificate — the
+// fix when the current one's baked-in SANs no longer match how the instance
+// is reached (e.g. its LAN IP changed). Requires a restart afterward to
+// actually load the new cert.
+export function regenerateCertificate(apiKey: string): Promise<{ restart_required: boolean }> {
+  return request('/api/v1/settings/tls/regenerate', apiKey, { method: 'POST' })
 }
 
 // testTorBoxConnection makes one real, live call to TorBox with the

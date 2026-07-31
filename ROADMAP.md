@@ -1,6 +1,6 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 and 5–9 are
+Where the project has been and where it's going. Phases 0–3 and 5–10 are
 complete; Phase 4 (more debrid providers) is blocked for now. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
@@ -20,6 +20,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [7 — Managed vs. Manual downloads](#phase-7--managed-vs-manual-downloads-) | Split the web UI into two tabs by how a download was added, plus discovering items added directly through TorBox | ✅ |
 | [8 — Web Downloads & account status](#phase-8--web-downloads--account-status-) | TorBox's generic hoster-debrid service (Mega, 1Fichier, and ~160 others), plus a TorBox account status display | ✅ |
 | [9 — Login, users & roles](#phase-9--login-users--roles-) | Optional login accounts on top of the API key, admin/member roles, first-run setup wizard | ✅ |
+| [10 — Native HTTPS](#phase-10--native-https-) | Self-signed, auto-generated TLS alongside the existing plain-HTTP listener; one-click restart | ✅ |
 
 ---
 
@@ -982,3 +983,68 @@ requires a signed-in session, and the API key's role is purely programmatic
 (Sonarr/Radarr/scripts) from here on. Verified by redeploying straight to
 the real instance (already past setup, already signed in as its own
 account) and confirming it came back up unaffected.
+
+## Phase 10 — Native HTTPS ✅
+
+Triggered by live-testing on a Proxmox VM reachable only over a plain LAN
+IP: the web UI's folder-picker download mode (the browser's File System
+Access API) requires a secure context — HTTPS, or `http://localhost` — and
+that's a hard browser-vendor restriction with no client-side workaround.
+Confirmed, not assumed: MDN and Chrome for Developers' own docs on the
+secure-context requirement; the HTML `download` attribute sanitizing `/` to
+`_` in every browser, specifically to prevent faking folder nesting that
+way; `chrome://flags/#unsafely-treat-insecure-origin-as-secure` genuinely
+works but is a manual per-browser/per-device flag, not something the server
+side can provide.
+
+- **Native, self-signed, auto-generated TLS**, not a reverse proxy — a real
+  no-warning certificate (Let's Encrypt) needs a public domain to validate
+  against, which a private LAN IP doesn't have, so self-signed is
+  unavoidable either way; a proxy would just add a second service to run for
+  no gain over doing it natively. Real precedent for this being a normal
+  pattern: confirmed Portainer auto-generates a self-signed cert and serves
+  HTTPS by default on port 9443; Synology DSM, Unraid, and pfSense/OPNsense's
+  admin UIs do the same — the standard shape for *appliance-style*
+  self-hosted software, a different convention than the *arr ecosystem's
+  "always proxy it yourself."
+- **Dual-listen, always** (`cmd/acervinode/main.go`) — the existing
+  plain-HTTP listener on `port` keeps running completely unchanged; when
+  `tls_enabled`, a second `*http.Server` on `tls_port` (default `8443`)
+  serves the exact same handler. Nothing already pointed at `http://...`
+  (Sonarr/Radarr, scripts, bookmarks) is ever affected either way.
+- New `internal/tlscert` package: ECDSA P-256, self-signed, 10-year
+  validity (deliberately no rotation logic), SANs covering loopback, every
+  local interface IP, `localhost`, and the hostname. Generated once and
+  reused as-is on every later start — never silently regenerated, so a
+  device that already trusted it doesn't have to re-trust for no reason.
+  `tls_cert_file`/`tls_key_file` let an operator supply a real certificate
+  instead (config/env only, same treatment `data_dir` gets). Cert
+  generation failing when `tls_enabled` is fatal, not a silent HTTP-only
+  fallback.
+- **One-click restart**: `POST /api/v1/settings/system/restart` reuses
+  `run()`'s existing shutdown path — `signal.NotifyContext`'s own `stop`
+  function, wired in as the trigger, needs zero new shutdown plumbing.
+  Deliberately never automatic-on-save (would drop the admin's own session
+  mid-edit). `packaging/acervinode.service` changed `Restart=on-failure` to
+  `Restart=always`, since the endpoint's clean exit is exactly what
+  `on-failure` doesn't restart — existing installs need the unit file
+  re-copied once, a binary update alone won't touch it. `SupervisedBySystemd`
+  (checks `INVOCATION_ID`) lets the UI say the truth instead of a confident
+  "restarting…" when nothing will actually bring the process back.
+- **Regenerate certificate** button (Settings → General, mirrors
+  "Regenerate API key") for when the cert's SANs no longer match how the
+  instance is reached (a DHCP IP change, say).
+- **First-run setup wizard** gained an HTTPS step between TorBox and Done,
+  showing the literal `https://<host>:<port>` URL to visit afterward — the
+  restart doesn't move the current browser tab there on its own.
+- **Verified live** on a scratch instance (never the real ones, same
+  discipline as every other feature here): confirmed `showDirectoryPicker`
+  is genuinely unavailable over `http://<real-lan-ip>` and available over
+  `https://<real-lan-ip>` with the auto-generated cert (SANs correctly
+  covering the actual interface IP, not just `localhost` — the easy way to
+  get a false positive here); confirmed the regenerate-certificate button
+  changes the cert on disk and an unsupervised restart correctly stops the
+  process while saying so rather than claiming success. A real layout bug
+  this surfaced: the HTTPS checkbox inherited a text-field's padding rule
+  and rendered as an oversized box — fixed. See
+  [Providers](docs/providers.md#tls-self-signed-https).

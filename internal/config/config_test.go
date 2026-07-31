@@ -196,6 +196,86 @@ func TestLoad_InvalidNegativeCleanupAfterDays(t *testing.T) {
 	}
 }
 
+// TestLoad_TLSPortDefaultsTo8443 proves TLSPort gets a real default even
+// though tls_enabled defaults to false — so simply flipping tls_enabled on
+// later (without also having to set tls_port) lands on a sane port instead
+// of 0.
+func TestLoad_TLSPortDefaultsTo8443(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TLSEnabled {
+		t.Error("TLSEnabled default = true, want false")
+	}
+	if cfg.TLSPort != 8443 {
+		t.Errorf("TLSPort default = %d, want 8443", cfg.TLSPort)
+	}
+}
+
+func TestLoad_TLSEnvOverrides(t *testing.T) {
+	t.Setenv("ACERVINODE_TLS_ENABLED", "true")
+	t.Setenv("ACERVINODE_TLS_PORT", "9443")
+	t.Setenv("ACERVINODE_TLS_CERT_FILE", "/etc/acervinode/cert.pem")
+	t.Setenv("ACERVINODE_TLS_KEY_FILE", "/etc/acervinode/key.pem")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.TLSEnabled {
+		t.Error("TLSEnabled = false, want true (env override)")
+	}
+	if cfg.TLSPort != 9443 {
+		t.Errorf("TLSPort = %d, want 9443", cfg.TLSPort)
+	}
+	if cfg.TLSCertFile != "/etc/acervinode/cert.pem" {
+		t.Errorf("TLSCertFile = %q, want /etc/acervinode/cert.pem", cfg.TLSCertFile)
+	}
+	if cfg.TLSKeyFile != "/etc/acervinode/key.pem" {
+		t.Errorf("TLSKeyFile = %q, want /etc/acervinode/key.pem", cfg.TLSKeyFile)
+	}
+}
+
+func TestLoad_InvalidTLSPortWhenEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "tls_enabled: true\ntls_port: 0\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid tls_port when tls_enabled, got nil")
+	}
+}
+
+// TestLoad_TLSPortIgnoredWhenDisabled proves an out-of-range tls_port
+// doesn't block startup while tls_enabled is false — nothing binds to it,
+// so it's not worth validating until it would actually matter.
+func TestLoad_TLSPortIgnoredWhenDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "tls_enabled: false\ntls_port: 0\n")
+
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load() error = %v, want nil (tls_port unchecked while disabled)", err)
+	}
+}
+
+func TestLoad_TLSPortMustDifferFromPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "port: 7846\ntls_enabled: true\ntls_port: 7846\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error when tls_port equals port, got nil")
+	}
+}
+
+func TestLoad_TLSCertAndKeyMustBeSetTogether(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "tls_cert_file: /etc/acervinode/cert.pem\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for tls_cert_file without tls_key_file, got nil")
+	}
+}
+
 func TestSave_RoundTripsThroughLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 

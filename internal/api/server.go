@@ -91,6 +91,15 @@ type GeneralInfo struct {
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 	CleanupAfterDays          int    `json:"cleanup_after_days"`
+	// TLSEnabled/TLSPort/TLSCertFile/TLSKeyFile mirror config.Config's own
+	// TLS fields exactly — see docs/providers.md's TLS section. Cert/key
+	// file overrides are config/env-only (no editable UI field), the same
+	// treatment DataDir already gets, but are still reported here for
+	// transparency/scripting, the same way DataDir is.
+	TLSEnabled  bool   `json:"tls_enabled"`
+	TLSPort     int    `json:"tls_port"`
+	TLSCertFile string `json:"tls_cert_file"`
+	TLSKeyFile  string `json:"tls_key_file"`
 }
 
 // GeneralUpdate is a candidate change to AcerviNode's general configuration
@@ -109,6 +118,10 @@ type GeneralUpdate struct {
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 	CleanupAfterDays          int    `json:"cleanup_after_days"`
+	TLSEnabled                bool   `json:"tls_enabled"`
+	TLSPort                   int    `json:"tls_port"`
+	TLSCertFile               string `json:"tls_cert_file"`
+	TLSKeyFile                string `json:"tls_key_file"`
 }
 
 // Settings lets the API read and change configuration live, without a
@@ -194,6 +207,25 @@ type Settings interface {
 	// SetDefaultUser promotes an account to the protected default (and
 	// admin in the same step).
 	SetDefaultUser(ctx context.Context, username string) error
+
+	// --- System: restarting and TLS certificate management, both admin-only
+	// (see docs/providers.md's TLS section) ------------------------------
+
+	// SupervisedBySystemd reports whether a process supervisor (systemd) is
+	// actually watching this process — RequestRestart works either way, but
+	// a caller with no supervisor watching won't come back on its own, so
+	// the UI needs to say something different than "restarting…".
+	SupervisedBySystemd() bool
+	// RequestRestart gracefully shuts down and exits — config changes that
+	// need a restart to apply (port, tls_enabled/tls_port, ...) are already
+	// persisted by the time this is called, so the next start picks them up
+	// automatically. Errors if no restart trigger has been wired up.
+	RequestRestart(ctx context.Context) error
+	// RegenerateCertificate forces a fresh self-signed TLS certificate,
+	// discarding the current one — the fix when its SANs no longer match how
+	// the instance is reached. Requires a restart to load the new cert.
+	// Refused when a custom tls_cert_file/tls_key_file is configured.
+	RegenerateCertificate(ctx context.Context) error
 }
 
 // Server is AcerviNode's native API.
@@ -282,6 +314,8 @@ func (s *Server) routes() {
 	// signed-in account, admin or not — see handleSetUserPassword's own
 	// admin-or-self check.
 	s.mux.HandleFunc("PUT /api/v1/settings/users/{username}/password", s.requireAuth(s.handleSetUserPassword))
+	s.mux.HandleFunc("POST /api/v1/settings/system/restart", s.requireAdmin(s.handleRestartServer))
+	s.mux.HandleFunc("POST /api/v1/settings/tls/regenerate", s.requireAdmin(s.handleRegenerateCertificate))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,8 @@ import {
   getProviderSettings,
   getTorBoxAccount,
   regenerateApiKey,
+  regenerateCertificate,
+  restartServer,
   setCategoryPath,
   setTorBoxApiKey,
   testTorBoxConnection,
@@ -124,6 +126,10 @@ export function Settings({ apiKey }: Props) {
   const [newOverrideStatus, setNewOverrideStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   const [defaultFolderName, setDefaultFolderName] = useState<string | null>(null)
   const [folderStatus, setFolderStatus] = useState<{ kind: 'idle' | 'error'; message?: string }>({ kind: 'idle' })
+  const [restartStatus, setRestartStatus] = useState<{ kind: 'idle' | 'restarting' | 'error'; message?: string; supervised?: boolean }>({
+    kind: 'idle',
+  })
+  const [regenCertStatus, setRegenCertStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   async function load() {
     try {
@@ -150,6 +156,12 @@ export function Settings({ apiKey }: Props) {
         max_concurrent_downloads: generalSettings.max_concurrent_downloads,
         import_fetch_timeout_seconds: generalSettings.import_fetch_timeout_seconds,
         cleanup_after_days: generalSettings.cleanup_after_days,
+        tls_enabled: generalSettings.tls_enabled,
+        tls_port: generalSettings.tls_port,
+        // Round-tripped unchanged, same as data_dir — neither has an
+        // editable field in this form (config/env-only, see GeneralSettings).
+        tls_cert_file: generalSettings.tls_cert_file,
+        tls_key_file: generalSettings.tls_key_file,
       })
       setCategories(cats)
     } catch {
@@ -208,6 +220,37 @@ export function Settings({ apiKey }: Props) {
       setGeneral((g) => (g ? { ...g, api_key } : g))
     } catch (err) {
       setRegenStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  async function handleRestartNow() {
+    if (!confirm('Restart AcerviNode now? The web UI and any in-progress requests will briefly disconnect while it comes back up.')) {
+      return
+    }
+    setRestartStatus({ kind: 'restarting' })
+    try {
+      const { supervised } = await restartServer(apiKey)
+      setRestartStatus({ kind: 'restarting', supervised })
+    } catch (err) {
+      setRestartStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  async function handleRegenerateCert() {
+    if (
+      !confirm(
+        "Regenerate the TLS certificate? Every device that already trusted the current one will need to click through the browser warning again after this. Use this only if the certificate no longer matches how you reach AcerviNode (e.g. its IP changed) — a restart is required afterward either way.",
+      )
+    ) {
+      return
+    }
+    setRegenCertStatus({ kind: 'saving' })
+    try {
+      await regenerateCertificate(apiKey)
+      setRegenCertStatus({ kind: 'idle' })
+      setGeneralStatus({ kind: 'restart' })
+    } catch (err) {
+      setRegenCertStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -419,13 +462,76 @@ export function Settings({ apiKey }: Props) {
                 </p>
               </Section>
 
+              <Section
+                title="HTTPS"
+                help="Adds a second, encrypted listener alongside the existing plain-HTTP one — nothing already
+                pointed at http://... (Sonarr/Radarr, scripts, bookmarks) is affected either way. Mainly useful for
+                the browser's folder-picker download mode, which only works over HTTPS or localhost. Uses a
+                self-signed certificate generated automatically on first start — your browser will show a one-time
+                'not trusted' warning to click through, the same as any self-signed cert. Requires a restart to
+                apply."
+              >
+                <div className="general-form">
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={form.tls_enabled}
+                      onChange={(e) => setForm({ ...form, tls_enabled: e.target.checked })}
+                    />
+                    Enable HTTPS
+                  </label>
+                  <label>
+                    HTTPS port
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={form.tls_port}
+                      onChange={(e) => setForm({ ...form, tls_port: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                {general?.tls_enabled && (
+                  <>
+                    <button type="button" onClick={handleRegenerateCert} disabled={regenCertStatus.kind === 'saving'}>
+                      {regenCertStatus.kind === 'saving' ? 'Regenerating…' : 'Regenerate certificate'}
+                    </button>
+                    <p className="settings-help">
+                      Only needed if the certificate no longer matches how you reach AcerviNode (e.g. its IP
+                      changed) — every device that already trusted the old one will need to click through the
+                      browser warning again afterward.
+                    </p>
+                    {regenCertStatus.kind === 'error' && (
+                      <p className="settings-error">Failed to regenerate: {regenCertStatus.message}</p>
+                    )}
+                  </>
+                )}
+              </Section>
+
               <div className="general-form">
                 <button type="submit" disabled={generalStatus.kind === 'saving'}>
                   {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
                 </button>
                 {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
-                {generalStatus.kind === 'restart' && <p className="settings-warning">Saved — port changed, restart AcerviNode to apply.</p>}
+                {generalStatus.kind === 'restart' && (
+                  <div className="restart-notice">
+                    <p className="settings-warning">Saved — restart AcerviNode to apply.</p>
+                    <button type="button" onClick={handleRestartNow} disabled={restartStatus.kind === 'restarting'}>
+                      Restart now
+                    </button>
+                  </div>
+                )}
                 {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+                {restartStatus.kind === 'restarting' && restartStatus.supervised === false && (
+                  <p className="settings-warning">
+                    AcerviNode isn't running under a supervisor (e.g. systemd) — it will stop now, but nothing will
+                    automatically start it back up.
+                  </p>
+                )}
+                {restartStatus.kind === 'restarting' && restartStatus.supervised !== false && (
+                  <p className="settings-success">Restarting — this page will recover automatically in a few seconds.</p>
+                )}
+                {restartStatus.kind === 'error' && <p className="settings-error">Failed to restart: {restartStatus.message}</p>}
               </div>
             </form>
           )}

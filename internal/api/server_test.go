@@ -179,6 +179,12 @@ type fakeSettings struct {
 	setPasswordErr error
 	setRoleErr     error
 	setDefaultErr  error
+
+	supervisedBySystemd bool
+	restartCalls        int
+	restartErr          error
+	regenCertCalls      int
+	regenCertErr        error
 }
 
 func (f *fakeSettings) AuthEnabled() bool { return len(f.users) > 0 }
@@ -271,6 +277,18 @@ func (f *fakeSettings) SetDefaultUser(_ context.Context, username string) error 
 		}
 	}
 	return nil
+}
+
+func (f *fakeSettings) SupervisedBySystemd() bool { return f.supervisedBySystemd }
+
+func (f *fakeSettings) RequestRestart(_ context.Context) error {
+	f.restartCalls++
+	return f.restartErr
+}
+
+func (f *fakeSettings) RegenerateCertificate(_ context.Context) error {
+	f.regenCertCalls++
+	return f.regenCertErr
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -578,6 +596,129 @@ func TestHandleRegenerateAPIKey_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/api-key/regenerate", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleRestartServer(t *testing.T) {
+	settings := &fakeSettings{supervisedBySystemd: true}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/system/restart"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if settings.restartCalls != 1 {
+		t.Errorf("RequestRestart calls = %d, want 1", settings.restartCalls)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["restarting"] != true {
+		t.Errorf("restarting = %v, want true", got["restarting"])
+	}
+	if got["supervised"] != true {
+		t.Errorf("supervised = %v, want true", got["supervised"])
+	}
+}
+
+// TestHandleRestartServer_ReportsUnsupervised proves the response tells the
+// caller the truth when nothing will actually bring the process back — see
+// Settings.SupervisedBySystemd's own doc comment on why this matters.
+func TestHandleRestartServer_ReportsUnsupervised(t *testing.T) {
+	settings := &fakeSettings{supervisedBySystemd: false}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/system/restart"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["supervised"] != false {
+		t.Errorf("supervised = %v, want false", got["supervised"])
+	}
+}
+
+func TestHandleRestartServer_ErrorPropagates(t *testing.T) {
+	settings := &fakeSettings{restartErr: fmt.Errorf("no trigger wired")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/system/restart"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRestartServer_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/system/restart", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleRestartServer_MemberForbidden(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/system/restart", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (member must not be able to restart)", rec.Code)
+	}
+	if settings.restartCalls != 0 {
+		t.Error("RequestRestart was called despite the member being forbidden")
+	}
+}
+
+func TestHandleRegenerateCertificate(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/tls/regenerate"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if settings.regenCertCalls != 1 {
+		t.Errorf("RegenerateCertificate calls = %d, want 1", settings.regenCertCalls)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["restart_required"] != true {
+		t.Errorf("restart_required = %v, want true", got["restart_required"])
+	}
+}
+
+func TestHandleRegenerateCertificate_ErrorPropagates(t *testing.T) {
+	settings := &fakeSettings{regenCertErr: fmt.Errorf("a custom tls_cert_file/tls_key_file is configured")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/tls/regenerate"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRegenerateCertificate_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/tls/regenerate", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
