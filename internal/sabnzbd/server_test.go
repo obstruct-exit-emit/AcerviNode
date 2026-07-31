@@ -74,12 +74,36 @@ func TestSonarrCallSequence(t *testing.T) {
 		t.Error("version response missing version field")
 	}
 
-	// mode=get_config — populates the category dropdown
+	// mode=get_config — populates the category dropdown, and is also what
+	// Sonarr/Radarr's own TestCategory() reads on every "Test": it calls
+	// category.Dir.TrimEnd('*') unconditionally on every category returned,
+	// with no null check (confirmed against Sonarr's real source) — a
+	// missing "dir" key crashed every single Test with an unhandled
+	// NullReferenceException ("Object reference not set to an instance of
+	// an object"), found live. Decoded generically here (not into a Go
+	// struct) specifically so a missing key is actually caught — a struct
+	// decode would silently accept it as the zero value.
 	resp, err = http.Get(ts.URL + "/api?mode=get_config&apikey=" + testAPIKey)
 	if err != nil {
 		t.Fatalf("get_config error = %v", err)
 	}
+	var config struct {
+		Config struct {
+			Categories []map[string]any `json:"categories"`
+		} `json:"config"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		t.Fatalf("decode get_config: %v", err)
+	}
 	resp.Body.Close()
+	if len(config.Config.Categories) == 0 {
+		t.Fatal("get_config categories is empty, want at least the built-in \"*\"")
+	}
+	for _, cat := range config.Config.Categories {
+		if _, ok := cat["dir"]; !ok {
+			t.Errorf("category %v missing \"dir\" key", cat)
+		}
+	}
 
 	// mode=addurl
 	addResp, err := http.PostForm(ts.URL+"/api", url.Values{

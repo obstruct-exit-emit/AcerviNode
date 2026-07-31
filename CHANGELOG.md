@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Every Sonarr/Radarr "Test" against the SABnzbd compat shim crashed
+  outright** — reported live as "Test was aborted due to an error: Object
+  reference not set to an instance of an object." Root cause: `GET
+  /api?mode=get_config`'s category objects never included a `dir` field.
+  Confirmed against Sonarr's actual source (`SabnzbdProxy.GetCategories`,
+  called unconditionally by `TestCategory` on every Test) that it runs
+  `category.Dir.TrimEnd('*')` on *every* category returned — including the
+  built-in `"*"` one — with no null check; a missing key deserializes to a
+  null C# string, and `.TrimEnd` on that throws the exact unhandled
+  exception reported. New `dir` field (empty string — AcerviNode doesn't
+  manage per-category directories the way real SABnzbd does) fixes it.
+  `TestSonarrCallSequence`'s `get_config` check only asserted the request
+  succeeded, never decoded the response shape — exactly how this shipped
+  unnoticed; it now decodes generically and asserts every category has a
+  `dir` key, so a missing field can't silently pass again.
+
 - **Every Sonarr/Radarr "Test" against the qBittorrent compat shim failed
   outright**, regardless of how correctly everything else was configured —
   found live, reported as "failed test." Root cause: `GET

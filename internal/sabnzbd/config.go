@@ -76,8 +76,20 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"version": fakeVersion})
 }
 
+// Dir must always be present and non-null — confirmed against Sonarr's
+// actual source (GetCategories, called unconditionally by TestCategory on
+// every "Test") that it runs `category.Dir.TrimEnd('*')` on every category
+// in the list with no null check, including the built-in "*" one. A missing
+// "dir" key deserializes to a null C# string, and .TrimEnd on that throws
+// an unhandled NullReferenceException — "Test was aborted due to an error:
+// Object reference not set to an instance of an object," found live. Real
+// SABnzbd always reports a (possibly empty) dir per category; AcerviNode
+// doesn't manage per-category directories the way real SABnzbd does (see
+// complete_dir below), so an empty string is the honest equivalent — it's
+// only ever read as a path fragment, never nil-checked.
 type sabCategory struct {
 	Name string `json:"name"`
+	Dir  string `json:"dir"`
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
