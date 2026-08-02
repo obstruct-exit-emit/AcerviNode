@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A usenet download actively being verified/repaired/unpacked by TorBox
+  could show up as `Failed` while it was still legitimately in progress.**
+  TorBox's usenet service runs its own SABnzbd-style post-processing
+  server-side before a download is retrievable, surfaced through a
+  `"Direct Unpack: <phase>"` family of `download_state` strings (confirmed
+  against TorBox's own help center, plus a real production bug hit by a
+  comparable project, Viren070/AIOStreams #903) that AcerviNode's shared
+  torrent/usenet state mapping — ported from decypharr, which doesn't route
+  usenet through TorBox at all — never recognized, so any unmatched state
+  fell through to its "treat as error" default. Fixed with a usenet-specific
+  `mapUsenetState` that uses `download_present`/`download_finished`/`active`/
+  `progress` as the authoritative signals instead of an exact-string
+  whitelist, so an as-yet-unseen phase name can't trip this again. Also adds
+  real SABnzbd's own `Verifying`/`Repairing`/`Extracting`/`Moving` status
+  strings to `/queue` (Sonarr/Radarr's own `SabnzbdDownloadStatus` enum
+  already supports all four, confirmed against their real source) instead of
+  a flat `Downloading` for the whole post-processing sequence. See
+  docs/providers.md#usenet-post-processing-states.
+
 - **No completed Managed torrent could ever actually be imported through the
   qBittorrent shim.** Found while auditing what information AcerviNode
   should be passing through to the qBittorrent/SABnzbd compat APIs, then

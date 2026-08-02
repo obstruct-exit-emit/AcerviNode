@@ -14,24 +14,26 @@ import (
 // against one provider List() call. See database.RefreshFromProvider, which
 // this and internal/importer's own proactive background refresh both share,
 // so an *arr app polling here still gets the freshest possible view even
-// between importer ticks. Also returns each row's current ETA keyed by
-// provider download ID — a fast-moving, purely informational value the
-// provider recomputes on every call, so unlike state/progress/size it's never
-// persisted to the database, just read fresh and attached to the response
-// here (see toQueueSlot).
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]int64 {
+// between importer ticks. Also returns each row's current ETA and sub-phase
+// (see debrid.DownloadStatus.Phase), both keyed by provider download ID —
+// fast-moving, purely informational values the provider recomputes on every
+// call, so unlike state/progress/size neither is persisted to the database,
+// just read fresh and attached to the response here (see toQueueSlot).
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string) {
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
-		return nil
+		return nil, nil
 	}
 	s.db.RefreshFromProvider(ctx, rows, statuses)
 
-	eta := make(map[string]int64, len(statuses))
+	eta = make(map[string]int64, len(statuses))
+	phase = make(map[string]string, len(statuses))
 	for _, st := range statuses {
 		eta[string(st.ID)] = st.ETASeconds
+		phase[string(st.ID)] = st.Phase
 	}
-	return eta
+	return eta, phase
 }
 
 type queueSlot struct {
@@ -64,22 +66,37 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return
 	}
-	etaByProviderID := s.refreshFromProvider(ctx, rows)
+	etaByProviderID, phaseByProviderID := s.refreshFromProvider(ctx, rows)
 
 	slots := make([]queueSlot, 0, len(rows))
 	for _, d := range rows {
 		switch d.State {
 		case database.StateQueued, database.StateDownloading, database.StateProviderCompleted:
-			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID]))
+			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID], phaseByProviderID[d.ProviderDownloadID]))
 		}
 	}
 	writeJSON(w, map[string]any{"queue": map[string]any{"slots": slots}})
 }
 
-func toQueueSlot(d *database.Download, etaSeconds int64) queueSlot {
+func toQueueSlot(d *database.Download, etaSeconds int64, phase string) queueSlot {
 	status := "Queued"
-	if d.State == database.StateDownloading || d.State == database.StateProviderCompleted {
-		status = "Downloading"
+	switch d.State {
+	case database.StateProviderCompleted:
+		// The provider itself is done; internal/importer's own fetch-to-
+		// local-disk step (Completed Download Handling) hasn't finished yet
+		// — the closest real-SABnzbd equivalent is its own "Moving" phase
+		// (post-processing already done, now placing the finished files
+		// into their final location), which happens locally there the same
+		// way this fetch does here. Confirmed safe against Sonarr's real
+		// source (Sabnzbd.cs's GetQueue): "Moving," like every other
+		// in-progress SabnzbdDownloadStatus, falls to its catch-all
+		// DownloadItemStatus.Downloading — never treated as ready to
+		// import, so this can't trigger Sonarr looking for files before
+		// they're actually placed, same as reporting "Downloading" always
+		// safely did.
+		status = "Moving"
+	case database.StateDownloading:
+		status = sabnzbdPhaseStatus(phase)
 	}
 	mb := float64(d.SizeBytes) / 1_000_000
 	return queueSlot{
@@ -91,6 +108,27 @@ func toQueueSlot(d *database.Download, etaSeconds int64) queueSlot {
 		MB:         fmt.Sprintf("%.2f", mb),
 		MBLeft:     fmt.Sprintf("%.2f", mb*(1-d.Progress)),
 		TimeLeft:   formatTimeLeft(etaSeconds),
+	}
+}
+
+// sabnzbdPhaseStatus maps a usenet-specific sub-phase (see
+// debrid.DownloadStatus.Phase) to the matching real-SABnzbd status string
+// Sonarr/Radarr's own SabnzbdDownloadStatus enum already recognizes
+// (confirmed against Sonarr's real source — Verifying/Repairing/Extracting
+// are first-class enum members there, not something this risks Sonarr
+// choking on). "" — no specific phase known, or a torrent download's own
+// provider status (which has no such concept) — falls back to the generic
+// "Downloading" this endpoint has always reported.
+func sabnzbdPhaseStatus(phase string) string {
+	switch phase {
+	case "verifying":
+		return "Verifying"
+	case "repairing":
+		return "Repairing"
+	case "extracting":
+		return "Extracting"
+	default:
+		return "Downloading"
 	}
 }
 

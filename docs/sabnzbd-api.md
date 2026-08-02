@@ -48,14 +48,30 @@ protocol-bridging trick here, TorBox genuinely does usenet downloads.
 Same approach as the [qBittorrent shim](qbittorrent-api.md): the internal
 `downloads.state` machine is translated to SABnzbd's queue/history vocabulary only
 at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`. `queued`,
-`downloading`, and `provider_completed` all stay in `/queue` (the latter as
-`Downloading`, since [Completed Download Handling](providers.md#completed-download-handling-internalimporter)
-hasn't fetched the files to local disk yet, and Sonarr's import step needs them
-there first). Only `ready_for_import` moves to `/history` as `Completed`; `error`
-moves there as `Failed` — either because the provider itself reported a failure
-(e.g. TorBox's own "Error" state, or a stalled/no-seeds download — see
+`downloading`, and `provider_completed` all stay in `/queue`. Only
+`ready_for_import` moves to `/history` as `Completed`; `error` moves there as
+`Failed` — either because the provider itself reported a failure (e.g.
+TorBox's own "Error" state, or a stalled/no-seeds download — see
 [Providers](providers.md#state-mapping)) or because Completed Download Handling
 gave up after exhausting its own fetch retries.
+
+`/queue`'s `status` field reports real SABnzbd's actual sub-phase strings, not
+just a flat `Downloading` for everything still in progress — TorBox's usenet
+service runs its own SABnzbd-style post-processing (par2 verify/repair,
+archive extraction) server-side before a download is retrievable, and
+Sonarr/Radarr's own `SabnzbdDownloadStatus` enum already has first-class
+support for reporting it (see
+[Usenet post-processing states](providers.md#usenet-post-processing-states)
+for the full story, including a real bug in a comparable project this was
+modeled on avoiding):
+
+| Local state | `status` | Why |
+|---|---|---|
+| `queued` | `Queued` | Not yet accepted by the provider |
+| `downloading` | `Downloading` / `Verifying` / `Repairing` / `Extracting` | Plain transfer, or one of TorBox's own post-processing sub-phases, if currently known |
+| `provider_completed` | `Moving` | The provider itself is done; [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — Sonarr's import step needs them there first, so this deliberately still isn't reported as done |
+| `ready_for_import` (moves to `/history`) | `Completed` | Files are actually on disk |
+| `error` (moves to `/history`) | `Failed` | See above |
 
 `mode=queue`'s `timeleft` field (`H:MM:SS`, matching real SABnzbd) reports the
 provider's live ETA for the download — read fresh from the same provider call

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/acervinode/acervinode/internal/debrid"
 )
@@ -136,9 +137,83 @@ func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 		Name:        d.Name,
 		SizeBytes:   int64(d.Size),
 		Progress:    d.Progress,
-		State:       mapDownloadState(d.DownloadState), // TorBox shares one state vocabulary across both services
+		State:       mapUsenetState(d),
 		ETASeconds:  int64(d.Eta),
 		RawState:    d.DownloadState,
 		OriginalURL: d.OriginalURL,
+		Phase:       usenetPhase(d.DownloadState),
+	}
+}
+
+// usenetPhase derives a coarse, provider-agnostic sub-phase from TorBox's
+// raw usenet state — see debrid.DownloadStatus.Phase. Substring-matched
+// rather than exact: TorBox's precise phrasing for each "Direct Unpack:
+// <phase>" isn't documented anywhere exactly (see mapUsenetState's doc
+// comment for how this was sourced), so this degrades gracefully if the
+// real wording turns out to differ slightly from what's guessed here — a
+// state matching none of these just reports no specific phase, the same as
+// it would have before this existed, rather than a wrong one. Matched
+// against the suffix after the last colon, not the whole string: every
+// state in this family shares the literal "Direct Unpack:" prefix, which
+// itself contains "unpack" — matching the whole string would wrongly tag
+// every one of them (including "Direct Unpack: Completed") as "extracting".
+func usenetPhase(raw string) string {
+	normalized := strings.ToLower(raw)
+	if idx := strings.LastIndex(normalized, ":"); idx != -1 {
+		normalized = normalized[idx+1:]
+	}
+	switch {
+	case strings.Contains(normalized, "repair"):
+		return "repairing"
+	case strings.Contains(normalized, "verif"):
+		return "verifying"
+	case strings.Contains(normalized, "extract"), strings.Contains(normalized, "unpack"):
+		return "extracting"
+	default:
+		return ""
+	}
+}
+
+// mapUsenetState translates a usenet download's raw fields into AcerviNode's
+// provider-agnostic DownloadState — deliberately not mapDownloadState's
+// exact-string whitelist (shared by the torrent and webdl services, ported
+// from decypharr's own qBittorrent-vocabulary mapping — see
+// docs/providers.md#state-mapping). TorBox's usenet service does its own
+// SABnzbd-style post-processing server-side (par2 verify/repair, archive
+// extraction) before a download is actually retrievable, surfaced through a
+// family of download_state strings TorBox's own help center calls "Direct
+// Unpack" (e.g. "Direct Unpack: Verifying", "Direct Unpack: Repairing",
+// "Direct Unpack: Completed") that aren't documented exhaustively anywhere —
+// and decypharr's mapping was never exercised against them in the first
+// place, since decypharr runs its own separate NNTP/par2/unpack engine for
+// usenet rather than routing it through TorBox at all. Whitelisting every
+// "Direct Unpack: X" phase by exact string would just break again the next
+// time TorBox adds or renames one (found without ever seeing that happen
+// live — see docs/providers.md#usenet-post-processing-states for how this
+// was sourced instead: TorBox's own help center's state descriptions, plus
+// a production-proven fix for this exact gap in a comparable open-source
+// project, Viren070/AIOStreams issue #903 and its torbox.ts). Following that
+// same shape: DownloadPresent/DownloadFinished/Active/Progress are the
+// authoritative signals, and the raw string is only consulted for the two
+// outcomes that genuinely need it — a failure, and TorBox's own "Direct
+// Unpack: Completed", confirmed (in that issue's own logs) to sometimes
+// arrive with download_present still false, i.e. slightly ahead of the
+// field TorBox itself otherwise uses to mean "ready."
+func mapUsenetState(d UsenetDownload) debrid.DownloadState {
+	normalized := strings.ToLower(d.DownloadState)
+	switch {
+	case d.DownloadFinished && (d.DownloadPresent || strings.HasPrefix(normalized, "direct unpack: completed")):
+		return debrid.StateCompleted
+	case strings.Contains(normalized, "fail") || strings.Contains(normalized, "invalid"):
+		return debrid.StateError
+	case d.Active && d.Progress > 0:
+		// Covers every in-progress phase uniformly — plain "downloading" and
+		// every "Direct Unpack: <phase>" TorBox might report — without
+		// needing to know each one's exact spelling.
+		return debrid.StateDownloading
+	case d.DownloadState == "":
+		return debrid.StateUnknown
+	default:
+		return debrid.StateQueued
 	}
 }

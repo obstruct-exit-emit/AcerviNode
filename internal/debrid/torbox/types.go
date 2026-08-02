@@ -315,6 +315,17 @@ type UsenetDownload struct {
 	// when added via an uploaded .nzb file (nothing to record in that case).
 	// Not in any published TorBox docs; found by inspecting a real response.
 	OriginalURL string `json:"original_url"`
+	// DownloadPresent and Active are documented in TorBox's official SDK
+	// field lists (torbox-sdk-js's UsenetService) but weren't modeled here
+	// until mapUsenetState needed them — see usenet_provider.go.
+	// DownloadPresent is TorBox's own authoritative "the files are actually
+	// retrievable now" signal, more reliable than download_finished alone:
+	// a usenet download can be download_finished (every article fetched)
+	// while TorBox is still running its own SABnzbd-style post-processing
+	// (par2 verify/repair, archive extraction) server-side, well before the
+	// result is actually servable.
+	DownloadPresent bool `json:"download_present"`
+	Active          bool `json:"active"`
 }
 
 // ListUsenetDownloads returns every usenet download on the account. Same

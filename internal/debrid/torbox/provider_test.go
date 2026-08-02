@@ -80,6 +80,117 @@ func TestMapDownloadState(t *testing.T) {
 	}
 }
 
+// TestMapUsenetState proves usenet's own state mapping doesn't need to
+// whitelist every "Direct Unpack: <phase>" TorBox's real usenet
+// post-processing might report — any state with active=true and
+// progress>0 is treated as still downloading, so a phase this test has
+// never heard of (verifying/repairing/extracting/anything else) is still
+// correctly bucketed as in-progress rather than falling through to
+// StateError the way mapDownloadState's exact-string whitelist would. See
+// mapUsenetState's own doc comment for the real bug (Viren070/AIOStreams
+// #903) this design avoids repeating.
+func TestMapUsenetState(t *testing.T) {
+	cases := []struct {
+		name string
+		d    UsenetDownload
+		want debrid.DownloadState
+	}{
+		{
+			name: "plain downloading",
+			d:    UsenetDownload{DownloadState: "downloading", Active: true, Progress: 0.4},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "verifying — a phase never explicitly listed anywhere in this code",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Verifying", Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "repairing — same, never explicitly listed",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Repairing", Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "extracting — same, never explicitly listed",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Extracting", Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "a hypothetical future phase this code has truly never seen",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Something Brand New", Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "finished and present — the ordinary completion signal",
+			d:    UsenetDownload{DownloadState: "cached", DownloadFinished: true, DownloadPresent: true, Progress: 1.0},
+			want: debrid.StateCompleted,
+		},
+		{
+			name: "Direct Unpack: Completed arriving ahead of download_present — the real AIOStreams #903 case",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Completed", DownloadFinished: true, DownloadPresent: false, Active: true, Progress: 1.0},
+			want: debrid.StateCompleted,
+		},
+		{
+			name: "download_finished alone, without download_present or the Direct Unpack completion string, is not done yet",
+			d:    UsenetDownload{DownloadState: "Direct Unpack: Verifying", DownloadFinished: true, DownloadPresent: false, Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
+			name: "a failure state",
+			d:    UsenetDownload{DownloadState: "Failed", Active: false},
+			want: debrid.StateError,
+		},
+		{
+			name: "an invalid state",
+			d:    UsenetDownload{DownloadState: "Invalid NZB", Active: false},
+			want: debrid.StateError,
+		},
+		{
+			name: "empty state",
+			d:    UsenetDownload{DownloadState: ""},
+			want: debrid.StateUnknown,
+		},
+		{
+			name: "genuinely queued: not active, no progress, no recognized keyword",
+			d:    UsenetDownload{DownloadState: "queued", Active: false, Progress: 0},
+			want: debrid.StateQueued,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := mapUsenetState(c.d); got != c.want {
+				t.Errorf("mapUsenetState(%+v) = %q, want %q", c.d, got, c.want)
+			}
+		})
+	}
+}
+
+// TestUsenetPhase proves the substring match is robust to guessed wording —
+// see usenetPhase's own doc comment for why this isn't an exact-string
+// match — and that a state with no recognizable phase reports "" rather
+// than guessing wrong.
+func TestUsenetPhase(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"Direct Unpack: Verifying", "verifying"},
+		{"Direct Unpack: Repairing", "repairing"},
+		{"Direct Unpack: Extracting", "extracting"},
+		{"Direct Unpack: Unpacking", "extracting"}, // guessed wording, same bucket
+		{"Direct Unpack: Completed", ""},
+		{"downloading", ""},
+		{"cached", ""},
+		{"Failed", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := usenetPhase(c.raw); got != c.want {
+			t.Errorf("usenetPhase(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+}
+
 func TestProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	torrents := []map[string]any{}
 
@@ -327,6 +438,7 @@ func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			downloads = append(downloads, map[string]any{
 				"id": 99.0, "name": "Some.NZB.Release", "size": 4096.0,
 				"download_state": "cached", "progress": 1.0,
+				"download_finished": true, "download_present": true, "active": true,
 				"files": []map[string]any{{"id": 1.0, "name": "episode.mkv", "size": 4096.0}},
 			})
 			// usenetdownload_id is a JSON number in the real API, matching

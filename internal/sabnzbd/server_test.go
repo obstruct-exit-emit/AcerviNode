@@ -164,13 +164,17 @@ func TestSonarrCallSequence(t *testing.T) {
 		t.Errorf("cat = %q, want tv-sonarr", slot.Cat)
 	}
 
-	// Second /queue poll: fake provider now reports completed. That's still
-	// "Downloading" from Sonarr's perspective — internal/importer (not
-	// wired into this shim-only test, see internal/importer's own tests)
-	// is what would fetch the files to disk and move it to history.
+	// Second /queue poll: fake provider now reports completed. That's
+	// reported as "Moving" — real SABnzbd's own "post-processing done, now
+	// placing files into their final location" phase, still just
+	// DownloadItemStatus.Downloading from Sonarr's perspective (confirmed
+	// against Sonarr's real source), not ready to import yet — internal/
+	// importer (not wired into this shim-only test, see internal/importer's
+	// own tests) is what actually fetches the files to disk and moves it to
+	// history.
 	queue = getQueue(t, ts.URL)
-	if len(queue.Queue.Slots) != 1 || queue.Queue.Slots[0].Status != "Downloading" {
-		t.Fatalf("queue after provider-completion = %+v, want one Downloading slot (provider_completed, not yet imported)", queue.Queue.Slots)
+	if len(queue.Queue.Slots) != 1 || queue.Queue.Slots[0].Status != "Moving" {
+		t.Fatalf("queue after provider-completion = %+v, want one Moving slot (provider_completed, not yet imported)", queue.Queue.Slots)
 	}
 
 	// history stays empty — nothing has reached ready_for_import yet.
@@ -461,5 +465,61 @@ func TestFormatTimeLeft(t *testing.T) {
 		if got := formatTimeLeft(c.seconds); got != c.want {
 			t.Errorf("formatTimeLeft(%d) = %q, want %q", c.seconds, got, c.want)
 		}
+	}
+}
+
+// TestSabnzbdPhaseStatus proves the three real SABnzbd post-processing
+// phases TorBox's usenet service also goes through (see
+// torbox.mapUsenetState's own doc comment) are reported as the same status
+// strings a real SABnzbd instance would use — Sonarr/Radarr's own
+// SabnzbdDownloadStatus enum already recognizes all three, confirmed
+// against Sonarr's real source — rather than staying stuck at a generic
+// "Downloading" for the whole verify/repair/extract sequence.
+func TestSabnzbdPhaseStatus(t *testing.T) {
+	cases := []struct {
+		phase string
+		want  string
+	}{
+		{"verifying", "Verifying"},
+		{"repairing", "Repairing"},
+		{"extracting", "Extracting"},
+		{"", "Downloading"},
+		{"something-unrecognized", "Downloading"},
+	}
+	for _, c := range cases {
+		if got := sabnzbdPhaseStatus(c.phase); got != c.want {
+			t.Errorf("sabnzbdPhaseStatus(%q) = %q, want %q", c.phase, got, c.want)
+		}
+	}
+}
+
+// TestToQueueSlot_UsesPhaseSpecificStatus proves a queue slot's status
+// string reflects the actual sub-phase when one's known, and still falls
+// back to "Downloading" when it isn't (a torrent-only concept has none, an
+// ordinary "downloading" phase is "", etc.) — and that a StateQueued row
+// never gets phase-status treatment, matching real SABnzbd's own "Queued"
+// meaning nothing has started yet.
+func TestToQueueSlot_UsesPhaseSpecificStatus(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+		phase string
+		want  string
+	}{
+		{"plain downloading, no known phase", database.StateDownloading, "", "Downloading"},
+		{"verifying", database.StateDownloading, "verifying", "Verifying"},
+		{"repairing", database.StateDownloading, "repairing", "Repairing"},
+		{"extracting", database.StateDownloading, "extracting", "Extracting"},
+		{"provider_completed always reports Moving regardless of a stray phase value — the provider's own work is already done", database.StateProviderCompleted, "verifying", "Moving"},
+		{"queued stays queued regardless of a stray phase value", database.StateQueued, "verifying", "Queued"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &database.Download{ID: "dl-1", Name: "Test", State: c.state}
+			slot := toQueueSlot(d, 0, c.phase)
+			if slot.Status != c.want {
+				t.Errorf("status = %q, want %q", slot.Status, c.want)
+			}
+		})
 	}
 }

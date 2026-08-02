@@ -782,6 +782,106 @@ wasn't independently confirmed — by the time it was written, every usenet
 download on the test account had expired from `mylist` (0 items), leaving
 nothing live to test `zip_link` against on that side specifically.
 
+### Usenet post-processing states
+
+TorBox's usenet service doesn't just fetch NZB articles — it also runs its
+own SABnzbd-style post-processing server-side (par2 verification, par2
+repair if verification fails, archive extraction) before a download is
+actually retrievable, the same steps a real, self-hosted SABnzbd instance
+runs locally. TorBox's own [help
+center](https://support.torbox.app/en/articles/9928977-download-statuses)
+describes this and calls the surfaced `download_state` family **"Direct
+Unpack"** (e.g. `"Direct Unpack: Verifying"`, `"Direct Unpack: Repairing"`,
+`"Direct Unpack: Completed"`) — not documented as an exhaustive list, and
+not reachable to scrape directly (the help center article 403s a plain
+fetch). This family is entirely absent from `mapDownloadState`'s own
+vocabulary (see [State mapping](#state-mapping) above): that mapping was
+ported from decypharr, which doesn't route usenet through TorBox at all — it
+runs its own separate NNTP/par2/unpack engine — so it was never exercised
+against these states in the first place. Reported live: a usenet download
+mid-verify/repair/extract would fall through `mapDownloadState`'s "anything
+unmatched is an error" default and show as failed while TorBox was still
+legitimately working on it.
+
+Confirmed as a real, independently-hit bug in a comparable open-source
+project, not just inferred from the help center's prose:
+[Viren070/AIOStreams issue #903](https://github.com/Viren070/AIOStreams/issues/903)
+documents a real production failure from exactly this family —
+`download_state = "Direct Unpack: Completed"` arriving with
+`download_present` still `false`, `download_finished` already `true` — and
+its fix (`packages/core/src/debrid/torbox.ts`) is what
+`internal/debrid/torbox/usenet_provider.go`'s `mapUsenetState` is modeled
+on, rather than independently reproducing the live sequence (no safe test
+NZB was available to add to the real account and observe it directly — see
+[Managed vs. Manual](#managed-vs-manual) above for what "safe to add live"
+has meant elsewhere in this project, a Creative Commons torrent; there's no
+equivalent for usenet without an actual indexer/API key).
+
+The design deliberately isn't another exact-string whitelist — that would
+just break again the next time TorBox adds or renames a phase. Instead,
+`mapUsenetState` treats `download_present`/`download_finished`/`active`/
+`progress` as authoritative, and only consults the raw string for the two
+outcomes that genuinely need it:
+
+- **Completed**: `download_finished && (download_present || state starts
+  with "direct unpack: completed")` — the `download_present` check is the
+  ordinary path; the string check is the AIOStreams-confirmed exception,
+  for the narrow window where TorBox's own "ready" field hasn't caught up
+  with the state string yet.
+- **Error**: the raw state contains `"fail"` or `"invalid"` (case-insensitive
+  substring, not exact match — real SABnzbd-style failures come in more than
+  one exact phrasing, e.g. `"Failed"` vs. a more specific par2-repair
+  failure message).
+- **Downloading**: `active && progress > 0` — covers plain `"downloading"`
+  *and* every `"Direct Unpack: <phase>"` sub-state uniformly, without
+  needing to know each one's exact spelling.
+- Otherwise: `queued` (or `unknown` for an empty string) — the same safe
+  defaults as before.
+
+`DownloadPresent`/`Active` are real, documented fields on TorBox's own SDK
+response schema (`torbox-sdk-js`'s `GetUsenetListOkResponseData`) that
+weren't modeled in `UsenetDownload` until this needed them — torrent/webdl
+don't get the same treatment here, since "Direct Unpack" is explicitly
+usenet/SABnzbd-specific terminology and no equivalent gap was found on
+either of those services.
+
+**Surfacing the phase, not just avoiding the bug.** Knowing a download is
+merely "still active" isn't the same as showing *which* step it's on — real
+SABnzbd reports distinct `Verifying`/`Repairing`/`Extracting`/`Moving`
+statuses, and Sonarr/Radarr's own `SabnzbdDownloadStatus` enum already has
+first-class members for all four (confirmed against Sonarr's real source),
+so there was no reason to collapse them into one generic `"Downloading"`
+once the underlying state was being read correctly anyway.
+`debrid.DownloadStatus` gained a `Phase` field (never persisted — read
+fresh on every poll, the same treatment as `ETASeconds`) that
+`usenetPhase` derives from the raw state via the same kind of
+substring match as `mapUsenetState`'s own failure detection — matched
+against the text *after* the last colon specifically, since every state in
+this family shares the literal `"Direct Unpack:"` prefix, which itself
+contains `"unpack"` (matching the whole string would wrongly tag `"Direct
+Unpack: Completed"` as extracting). `internal/sabnzbd/queue.go`'s
+`sabnzbdPhaseStatus` maps that phase to the matching real status string.
+
+One further real distinction, not TorBox-reported but genuinely
+AcerviNode's own: once a usenet download reaches local `provider_completed`
+(TorBox is done; [Completed Download Handling](#completed-download-handling-internalimporter)
+hasn't fetched the files to local disk yet), the queue now reports
+`"Moving"` instead of a generic `"Downloading"` — real SABnzbd's own
+"post-processing done, now placing files into their final location" phase,
+which is exactly what AcerviNode's own fetch-to-local-disk step is.
+Confirmed safe against Sonarr's real source (`Sabnzbd.cs`'s `GetQueue`):
+`Moving`, like every other in-progress `SabnzbdDownloadStatus`, falls to a
+catch-all `DownloadItemStatus.Downloading` — never treated as ready to
+import, so this can't trigger Sonarr looking for files before
+`internal/importer` has actually placed them, the exact same safety
+property plain `"Downloading"` always had.
+
+**What doesn't apply:** real SABnzbd's "organizing" concept (renaming/
+sorting completed files, or a category-based post-processing script) has no
+TorBox-side equivalent to surface — TorBox just serves whatever it
+extracted, as-is, via its own file listing. There's no separate
+"organizing" phase for AcerviNode to pass through.
+
 ### Web Downloads
 
 TorBox's third service, alongside torrents and usenet: debrids direct links from

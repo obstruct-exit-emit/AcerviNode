@@ -63,6 +63,18 @@ type DownloadStatus struct {
 	// download (one AcerviNode never received an add request for) still
 	// support Re-add if the provider happens to know its original link.
 	OriginalURL string
+	// Phase is an optional, provider-agnostic hint about *what kind* of
+	// in-progress work State == StateDownloading actually represents right
+	// now — "verifying", "repairing", "extracting", or "" for plain
+	// transfer (or when a provider/kind has no such concept, e.g. torrents).
+	// Never persisted (see database.RefreshFromProvider, which doesn't
+	// touch it) — like ETASeconds, it's fast-moving/informational, read
+	// fresh on every poll rather than stored. internal/sabnzbd's queue
+	// handler uses this to report real SABnzbd's actual "Verifying"/
+	// "Repairing"/"Extracting" status strings instead of a generic
+	// "Downloading" for a usenet download going through TorBox's own
+	// SABnzbd-style post-processing (see torbox.usenetPhase).
+	Phase string
 }
 
 // DownloadFile is one file within a download.
