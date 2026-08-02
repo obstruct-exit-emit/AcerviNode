@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -302,6 +303,7 @@ type torrentInfo struct {
 	Name         string  `json:"name"`
 	Category     string  `json:"category"`
 	SavePath     string  `json:"save_path"`
+	ContentPath  string  `json:"content_path"`
 	Size         int64   `json:"size"`
 	Progress     float64 `json:"progress"`
 	State        string  `json:"state"`
@@ -324,16 +326,39 @@ type torrentFileInfo struct {
 	Priority int     `json:"priority"`
 }
 
+// toTorrentInfo splits d.SavePath into real qBittorrent's two distinct
+// fields, rather than reporting it as save_path alone (the only field this
+// response had until this was found live). Real qBittorrent's save_path is
+// the shared per-category base directory; content_path is one torrent's own
+// content root beneath it. Sonarr/Radarr's own source (QBittorrent.cs's
+// GetItems, confirmed directly) only ever sets a completed download's
+// OutputPath from content_path — and first checks content_path != save_path
+// as a sanity guard, warning instead of importing when they match, since for
+// a real qBittorrent that only happens when something's misconfigured.
+// AcerviNode's own d.SavePath is already the per-download content root (see
+// internal/importer.resolveDestDir) — i.e. exactly what real qBittorrent
+// calls content_path — so that's reported as content_path here, with
+// save_path synthesized as its parent directory purely so the two are never
+// equal. Before this, content_path was never sent at all: Sonarr's own
+// ContentPath property simply decoded to null, which isn't equal to
+// save_path either, so GetItems took the "use content_path" branch
+// anyway — using an empty path no completed Managed torrent could ever
+// actually import from.
 func toTorrentInfo(d *database.Download, etaSeconds int64) torrentInfo {
 	completionOn := int64(-1)
 	if d.CompletedAt != nil {
 		completionOn = d.CompletedAt.Unix()
 	}
+	savePath := d.SavePath
+	if d.SavePath != "" {
+		savePath = filepath.Dir(d.SavePath)
+	}
 	return torrentInfo{
 		Hash:         d.Hash,
 		Name:         d.Name,
 		Category:     d.Category,
-		SavePath:     d.SavePath,
+		SavePath:     savePath,
+		ContentPath:  d.SavePath,
 		Size:         d.SizeBytes,
 		Progress:     d.Progress,
 		State:        qbtState(d.State),

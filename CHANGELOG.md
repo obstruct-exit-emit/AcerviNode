@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **No completed Managed torrent could ever actually be imported through the
+  qBittorrent shim.** Found while auditing what information AcerviNode
+  should be passing through to the qBittorrent/SABnzbd compat APIs, then
+  confirmed directly against Sonarr's and Radarr's real source (identical in
+  both): `GET /api/v2/torrents/info` never sent a `content_path` field —
+  only `save_path` — but Sonarr/Radarr's own `GetItems` exclusively resolves
+  a completed download's import location from `content_path`, and a missing
+  field decodes to `null` in their model, which read as "not equal to
+  `save_path`" (the sanity check meant to catch a real misconfiguration) —
+  so it used that `null` to build the import path regardless. The SABnzbd
+  shim already reported the equivalent field (`storage`) correctly; this was
+  qBittorrent-only. Fixed by reporting AcerviNode's own `save_path` (already
+  the real per-download content root) as `content_path`, with the response's
+  `save_path` synthesized as its parent directory so the two are never equal.
+  See docs/qbittorrent-api.md.
+
 - **`deleteFiles=true`/`del_files=1` never actually deleted local files, on
   any of the three delete surfaces (native API, qBittorrent shim, SABnzbd
   shim).** Every delete handler passed the flag straight to `provider.Delete`,

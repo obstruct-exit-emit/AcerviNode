@@ -55,6 +55,26 @@ refreshes state/progress on every poll, not persisted to the database (it's a
 fast-moving, purely informational value; see `internal/qbittorrent`'s
 `refreshFromProvider`).
 
+`GET /api/v2/torrents/info`'s `save_path` and `content_path` are deliberately
+different values, not a typo — this is real qBittorrent's own split (`save_path`
+is the shared per-category base directory, `content_path` is one torrent's own
+content root beneath it), and Sonarr/Radarr's own source (`QBittorrent.cs`'s
+`GetItems`, confirmed directly, identical in both apps) only ever resolves a
+completed download's import location from `content_path`, first checking it's
+*not equal* to `save_path` as a sanity guard — for a real qBittorrent, a match
+there means something's misconfigured, and Sonarr/Radarr refuse to import
+rather than risk the wrong directory. AcerviNode's own `save_path` (the
+per-download database column) is already the real content root a completed
+download's files live in, i.e. exactly what real qBittorrent calls
+`content_path` — reported as such, with the API response's own `save_path`
+synthesized as its parent directory purely so the two are never equal. Found
+live: `content_path` wasn't sent at all before this, which doesn't trigger the
+"paths match" warning either — Sonarr/Radarr's own `ContentPath` property
+just decodes to `null`, which isn't equal to `save_path`, so `GetItems` used
+that `null` to resolve the import path anyway, meaning **no completed Managed
+torrent could ever actually be imported through this shim** until this was
+fixed (`toTorrentInfo`).
+
 ## What's not emulated
 
 Anything not needed for add/track/resolve/delete and the \*arr "Test" flow — RSS,

@@ -309,6 +309,45 @@ func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
 	}
 }
 
+// TestToTorrentInfo_SplitsContentPathFromSavePath proves save_path and
+// content_path are never reported as equal — Sonarr/Radarr's own GetItems
+// (confirmed against their real source) refuses to import a completed
+// torrent whenever the two match, treating that as a misconfiguration
+// signal. AcerviNode's own d.SavePath is the real per-download content
+// root (what real qBittorrent calls content_path); content_path here must
+// carry that real value, with save_path synthesized as its parent purely
+// so the comparison never accidentally matches.
+func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
+	d := &database.Download{SavePath: "/downloads/tv-sonarr/Some.Release.Name"}
+	info := toTorrentInfo(d, 0)
+
+	if info.ContentPath != "/downloads/tv-sonarr/Some.Release.Name" {
+		t.Errorf("content_path = %q, want the real save path unchanged", info.ContentPath)
+	}
+	if info.SavePath != "/downloads/tv-sonarr" {
+		t.Errorf("save_path = %q, want the parent directory", info.SavePath)
+	}
+	if info.SavePath == info.ContentPath {
+		t.Error("save_path and content_path must never be equal — Sonarr/Radarr treat that as a path error and refuse to import")
+	}
+}
+
+// TestToTorrentInfo_EmptySavePathStaysEmpty proves a download with no
+// resolved save path yet (still downloading, nothing fetched) reports both
+// fields empty rather than filepath.Dir("")'s "." — a nonsensical value that
+// only matters here because Sonarr's own path check is gated on the
+// download already being Completed, a state a row with no SavePath should
+// never actually reach (see internal/importer.processDownload, which always
+// persists SavePath before marking ready_for_import).
+func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
+	d := &database.Download{SavePath: ""}
+	info := toTorrentInfo(d, 0)
+
+	if info.SavePath != "" || info.ContentPath != "" {
+		t.Errorf("save_path = %q, content_path = %q, want both empty", info.SavePath, info.ContentPath)
+	}
+}
+
 func TestLogin_WrongPassword(t *testing.T) {
 	ts, client := newTestServer(t)
 	resp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
