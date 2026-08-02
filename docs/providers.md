@@ -619,6 +619,18 @@ and `ListUsenetDownloads` always set it, since AcerviNode's whole polling model
 depends on this endpoint reflecting current state promptly, not on a 10-minute
 delay.
 
+**Also confirmed live:** every `mylist`/`getqueued` call now sends `limit=1000`
+alongside `bypass_cache`, matching what
+[rdt-client's own TorBox client](https://github.com/rogerfar/rdt-client) (via
+`TorBox.NET` v2.1.0) always sends — AcerviNode previously sent `bypass_cache`
+alone. Verified directly against a real account with three alternating
+back-to-back requests: response bytes were identical either way (the account
+is well under the 1000-row cap), but omitting `limit` was consistently 2–4x
+slower per call (e.g. 5.29s vs 1.51s) — TorBox's server evidently does more
+work per request without a `LIMIT` clause, not a payload-transfer effect.
+Requested directly, comparing AcerviNode's perceived responsiveness against
+rdt-client running the same real-world setup.
+
 Exact field names and error envelope are cross-checked against the official
 [`torbox-sdk-go`](https://github.com/TorBox-App/torbox-sdk-go) rather than
 guessed — see `internal/debrid/torbox/types.go` for the structs actually in use.

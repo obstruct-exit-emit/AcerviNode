@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Every TorBox `mylist`/`getqueued` poll was measurably slower than
+  necessary.** Reported directly: "rdt-client communicates with TorBox so
+  much faster." `ListTorrents`/`ListUsenetDownloads`/`ListWebDownloads`/
+  `ListQueued` always set `bypass_cache=true` (correctly — otherwise a
+  freshly added item is simply absent from the response for up to 600
+  seconds) but never sent a `limit` param at all. rdt-client's own TorBox
+  client always sends `limit=1000` alongside `bypass_cache`. Verified live
+  against a real account: response bytes were identical either way (well
+  under the cap), but omitting `limit` was consistently 2–4x slower per
+  call across repeated back-to-back requests — genuinely more server-side
+  work without a `LIMIT` clause, not a transfer-size effect. All four calls
+  now send `limit=1000` to match.
+
+  Along the way, a much bigger-looking lead (AcerviNode's usenet `List()`
+  apparently seeing only 1 of "590" real items per poll) turned out to be a
+  false alarm from a flawed manual `grep -o '"id":' | wc -l` item count,
+  which counts every nested `id` field in the JSON (e.g. inside each
+  download's own file list), not top-level array length — re-parsed
+  properly, the real count matched what AcerviNode itself reported all
+  along. No parsing bug exists; the mass-vanish warnings seen while
+  investigating were the safety mechanism correctly doing its job on
+  genuinely-removed leftover test data. Documented as a lesson in the
+  project's own notes, not just quietly dropped.
+
 - **A Managed download whose adding *arr app never supplied an explicit
   save_path never actually got imported, with no visible error** — reported
   live via LibriNode + AcerviNode on shared storage ("worked fine with

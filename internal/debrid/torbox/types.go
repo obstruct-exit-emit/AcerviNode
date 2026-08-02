@@ -121,6 +121,16 @@ type Torrent struct {
 	Files            []TorrentFile `json:"files"`
 }
 
+// listLimit caps how many rows mylist/getqueued return per call, matching
+// rdt-client's own TorBox client (TorBox.NET v2.1.0's Torrents.GetCurrentAsync,
+// which always sends limit=1000 alongside bypass_cache — this project doesn't
+// send one at all otherwise). Confirmed live against a real account,
+// byte-identical response either way (a small account, well under this cap),
+// but omitting it was consistently 2-4x slower across repeated back-to-back
+// calls — TorBox's server evidently does more work per request without a
+// LIMIT clause, not a payload-size effect.
+const listLimit = "1000"
+
 // ListTorrents returns every torrent on the account. TorBox's own docs note
 // mylist "only gets updated every 600 seconds" server-side unless asked to
 // bypass that cache — confirmed live (a freshly added torrent was simply
@@ -129,7 +139,7 @@ type Torrent struct {
 // endpoint reflecting current state promptly.
 func (c *Client) ListTorrents(ctx context.Context) ([]Torrent, error) {
 	var env envelope[[]Torrent]
-	if err := c.doGet(ctx, "/torrents/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
+	if err := c.doGet(ctx, "/torrents/mylist", url.Values{"bypass_cache": {"true"}, "limit": {listLimit}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
@@ -292,7 +302,7 @@ type UsenetDownload struct {
 // bypass_cache reasoning as ListTorrents.
 func (c *Client) ListUsenetDownloads(ctx context.Context) ([]UsenetDownload, error) {
 	var env envelope[[]UsenetDownload]
-	if err := c.doGet(ctx, "/usenet/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
+	if err := c.doGet(ctx, "/usenet/mylist", url.Values{"bypass_cache": {"true"}, "limit": {listLimit}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
@@ -324,7 +334,7 @@ type QueuedDownload struct {
 // the bypass_cache reasoning of ListTorrents/ListUsenetDownloads.
 func (c *Client) ListQueued(ctx context.Context, kind string) ([]QueuedDownload, error) {
 	var env envelope[[]QueuedDownload]
-	if err := c.doGet(ctx, "/queued/getqueued", url.Values{"type": {kind}, "bypass_cache": {"true"}}, &env); err != nil {
+	if err := c.doGet(ctx, "/queued/getqueued", url.Values{"type": {kind}, "bypass_cache": {"true"}, "limit": {listLimit}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
@@ -467,7 +477,7 @@ type WebDownload struct {
 // bypass_cache reasoning as ListTorrents/ListUsenetDownloads.
 func (c *Client) ListWebDownloads(ctx context.Context) ([]WebDownload, error) {
 	var env envelope[[]WebDownload]
-	if err := c.doGet(ctx, "/webdl/mylist", url.Values{"bypass_cache": {"true"}}, &env); err != nil {
+	if err := c.doGet(ctx, "/webdl/mylist", url.Values{"bypass_cache": {"true"}, "limit": {listLimit}}, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
