@@ -292,6 +292,38 @@ below) — both paths share one provider-side budget, so either one backing off
 backs off the other too, rather than each tracking (and potentially fighting
 over) an independent one.
 
+### Refresh ordering guard
+
+Once both the bulk path and the fast per-download poll above exist, a real
+race becomes possible: multiple independent pollers (either compat shim's
+own reactive refresh on every `/info`/`mode=queue` request, `Tick`'s bulk
+pass, and `runFastPoll`'s targeted one) can all be mid-flight against the
+provider for the *same* download at once. `database.DB`'s connection pool is
+a single connection (`SetMaxOpenConns(1)`), so the resulting `UPDATE`s can't
+corrupt each other — but serialization only guarantees they don't collide,
+not that they land in the order their underlying provider data was actually
+fetched in. A slower request that started earlier can finish (and write)
+after a faster one that started later, silently regressing progress/state
+back to stale data with nothing to ever correct it, since whichever poller
+already landed the fresher result has no reason to run again immediately.
+
+Found live, not hypothetically: watching a real, genuinely uncached torrent
+download (added specifically to exercise this, since TorBox's normal
+instant-cache path never shows real transfer progress at all), `GET
+/api/v2/torrents/info` stayed frozen reporting 13.9% long after the same
+download's own database row — and TorBox's own API, queried directly —
+had already reached 50%+.
+
+`database.RefreshFromProvider` now takes a `fetchedAt time.Time` — captured
+by every call site the moment *before* it calls the provider (`List`/
+`Status`), not when the call returns — and gates each row's actual write on
+it via `refreshGuardAllows`: an in-memory, per-download-ID map (guarded by
+its own mutex, deliberately not the database itself — this is a
+same-process ordering decision, not something that needs to survive a
+restart) recording the `fetchedAt` of the most recently *applied* update.
+A write whose `fetchedAt` is older than what's already recorded is silently
+skipped — the row keeps its fresher value instead of regressing.
+
 ### Provider rate-limit backoff
 
 `refreshKind`'s own `List` call, before this, retried on every single tick

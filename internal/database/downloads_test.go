@@ -740,7 +740,7 @@ func TestRefreshFromProvider_UpdatesChangedRows(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1, SizeBytes: 999},
 	}
-	db.RefreshFromProvider(ctx, rows, statuses)
+	db.RefreshFromProvider(ctx, rows, statuses, time.Now())
 
 	// The in-memory row is updated in place...
 	if d.State != StateProviderCompleted || d.Progress != 1 || d.SizeBytes != 999 {
@@ -786,7 +786,7 @@ func TestRefreshFromProvider_BackfillsEmptyHash(t *testing.T) {
 			SizeBytes: d.SizeBytes,
 		},
 	}
-	db.RefreshFromProvider(ctx, rows, statuses)
+	db.RefreshFromProvider(ctx, rows, statuses, time.Now())
 
 	wantHash := "5a5c00cdb722f210453928ee5b789fa727306236"
 	if d.Hash != wantHash || d.Name != "2020-2022 - Riven Worlds seires (5)" {
@@ -821,7 +821,7 @@ func TestRefreshFromProvider_NeverOverwritesExistingHash(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: "differenthash", Name: "Different Name", State: debrid.StateDownloading, Progress: 0.5},
 	}
-	db.RefreshFromProvider(ctx, rows, statuses)
+	db.RefreshFromProvider(ctx, rows, statuses, time.Now())
 
 	if d.Hash != "originalhash" || d.Name != "Original Name" {
 		t.Errorf("hash/name = %q/%q, want left untouched since Hash was already non-empty", d.Hash, d.Name)
@@ -846,7 +846,7 @@ func TestRefreshFromProvider_BackfillsEmptySource(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: d.Hash, State: debrid.StateDownloading, Progress: 0.5, OriginalURL: "magnet:?xt=urn:btih:abc123"},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.Source != "magnet:?xt=urn:btih:abc123" {
 		t.Errorf("Source = %q, want the backfilled magnet", d.Source)
@@ -878,7 +878,7 @@ func TestRefreshFromProvider_NeverOverwritesExistingSource(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), Hash: d.Hash, State: debrid.StateDownloading, Progress: 0.5, OriginalURL: "magnet:?xt=urn:btih:different"},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.Source != "magnet:?xt=urn:btih:original&dn=Original" {
 		t.Errorf("Source = %q, want left untouched since it was already non-empty", d.Source)
@@ -907,7 +907,7 @@ func TestRefreshFromProvider_ManagedDownloadMissingFromStatuses_NeverFlaggedByTh
 	// well past missingDetectionThreshold — to prove this really is never
 	// applied to a Managed row, not just debounced longer.
 	for i := 0; i < missingDetectionThreshold+2; i++ {
-		db.RefreshFromProvider(ctx, []*Download{d}, nil)
+		db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 	}
 
 	if d.State != StateQueued {
@@ -932,7 +932,7 @@ func TestRefreshFromProvider_ManualDownloadMissing_SingleMissDoesNotFlag(t *test
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 
 	if d.State != StateProviderCompleted {
 		t.Errorf("state = %q, want it left unchanged after one miss", d.State)
@@ -958,13 +958,13 @@ func TestRefreshFromProvider_ManualDownloadVanishes_FlaggedAfterThreshold(t *tes
 	}
 
 	for i := 1; i < missingDetectionThreshold; i++ {
-		db.RefreshFromProvider(ctx, []*Download{d}, nil)
+		db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 		if d.State == StateError {
 			t.Fatalf("state = error after miss %d, want it to stay provider_completed until threshold %d", i, missingDetectionThreshold)
 		}
 	}
 
-	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 
 	if d.State != StateError {
 		t.Fatalf("state = %q after %d misses, want error", d.State, missingDetectionThreshold)
@@ -997,7 +997,7 @@ func TestRefreshFromProvider_ManualDownloadReappears_ResetsMissingCount(t *testi
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 	if d.MissingCount != 1 {
 		t.Fatalf("MissingCount after one miss = %d, want 1", d.MissingCount)
 	}
@@ -1005,7 +1005,7 @@ func TestRefreshFromProvider_ManualDownloadReappears_ResetsMissingCount(t *testi
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.MissingCount != 0 {
 		t.Errorf("MissingCount after reappearing = %d, want 0", d.MissingCount)
@@ -1044,7 +1044,7 @@ func TestRefreshFromProvider_VanishedManualDownload_SelfHealsIfProviderReportsIt
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.State != StateProviderCompleted {
 		t.Errorf("state = %q, want provider_completed (self-healed once the provider reported it again)", d.State)
@@ -1068,7 +1068,7 @@ func TestRefreshFromProvider_AlreadyErroredManualDownload_NotDoubleFlagged(t *te
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	db.RefreshFromProvider(ctx, []*Download{d}, nil)
+	db.RefreshFromProvider(ctx, []*Download{d}, nil, time.Now())
 
 	if d.MissingCount != 0 {
 		t.Errorf("MissingCount = %d, want 0 (not incremented for an already-errored row)", d.MissingCount)
@@ -1114,7 +1114,7 @@ func TestRefreshFromProvider_MassVanish_CircuitBreakerSkipsDetection(t *testing.
 	// Run well past missingDetectionThreshold — if the circuit breaker
 	// weren't working, every row would be StateError by now.
 	for i := 0; i < missingDetectionThreshold+2; i++ {
-		db.RefreshFromProvider(ctx, downloads, nil)
+		db.RefreshFromProvider(ctx, downloads, nil, time.Now())
 	}
 
 	for _, d := range downloads {
@@ -1139,7 +1139,7 @@ func TestRefreshFromProvider_BelowMinTracked_CircuitBreakerDoesNotApply(t *testi
 	downloads := seedManualDownloads(t, db, massVanishMinTracked-1)
 
 	for i := 0; i < missingDetectionThreshold; i++ {
-		db.RefreshFromProvider(ctx, downloads, nil)
+		db.RefreshFromProvider(ctx, downloads, nil, time.Now())
 	}
 
 	for _, d := range downloads {
@@ -1168,7 +1168,7 @@ func TestRefreshFromProvider_PartialVanish_BelowFraction_CircuitBreakerDoesNotAp
 	}
 
 	for i := 0; i < missingDetectionThreshold; i++ {
-		db.RefreshFromProvider(ctx, downloads, statuses)
+		db.RefreshFromProvider(ctx, downloads, statuses, time.Now())
 	}
 
 	if vanished.State != StateError {
@@ -1197,7 +1197,7 @@ func TestRefreshFromProvider_MassVanish_FoundRowsStillUpdateNormally(t *testing.
 		{ID: debrid.ProviderDownloadID(found.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.75},
 	}
 
-	db.RefreshFromProvider(ctx, downloads, statuses)
+	db.RefreshFromProvider(ctx, downloads, statuses, time.Now())
 
 	if found.State != StateDownloading || found.Progress != 0.75 {
 		t.Errorf("found download = state:%q progress:%v, want it updated normally despite the suspicious pass", found.State, found.Progress)
@@ -1227,7 +1227,7 @@ func TestRefreshFromProvider_NeverRegressesReadyForImport(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.3},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.State != StateReadyForImport {
 		t.Errorf("state = %q, want it to stay ready_for_import", d.State)
@@ -1254,7 +1254,7 @@ func TestRefreshFromProvider_SurfacesProviderErrorState(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateError, RawState: "stalled (no seeds)"},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.State != StateError {
 		t.Errorf("state = %q, want error", d.State)
@@ -1292,7 +1292,7 @@ func TestRefreshFromProvider_ProviderErrorCanRecover(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.6},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.State != StateDownloading {
 		t.Errorf("state = %q, want downloading (provider-side error recovered)", d.State)
@@ -1322,7 +1322,7 @@ func TestRefreshFromProvider_DoesNotResurrectImporterGaveUp(t *testing.T) {
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1, SizeBytes: d.SizeBytes},
 	}
-	db.RefreshFromProvider(ctx, []*Download{d}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
 	if d.State != StateError {
 		t.Errorf("state = %q, want it to stay error (importer's give-up is sticky)", d.State)
@@ -1361,7 +1361,7 @@ func TestRefreshFromProvider_ToleratesUpdateFailure(t *testing.T) {
 		{ID: "good", State: debrid.StateCompleted, Progress: 1},
 		{ID: "missing", State: debrid.StateCompleted, Progress: 1},
 	}
-	db.RefreshFromProvider(ctx, []*Download{missing, good}, statuses)
+	db.RefreshFromProvider(ctx, []*Download{missing, good}, statuses, time.Now())
 
 	if good.State != StateProviderCompleted {
 		t.Errorf("good row's state = %q, want provider_completed despite missing row's update failing", good.State)
@@ -1373,5 +1373,91 @@ func TestRefreshFromProvider_ToleratesUpdateFailure(t *testing.T) {
 	}
 	if got.State != StateProviderCompleted {
 		t.Errorf("good row not persisted: state = %q", got.State)
+	}
+}
+
+// TestRefreshFromProvider_StaleFetchDoesNotOvewriteFresherUpdate proves the
+// real, live-observed race this guards against: multiple independent
+// pollers (a compat shim's own reactive refresh, internal/importer's bulk
+// tick, its fast per-download poll) can all be mid-flight against the
+// provider for the same download at once, and a slower request that
+// started earlier can finish — and try to write — after a faster one that
+// started later. Found live: a real torrent's progress reported via
+// GET /api/v2/torrents/info stuck at 13.9% while the same download's own
+// database row (and TorBox's own API, queried directly) had already
+// reached 50%+. Simulated here by calling RefreshFromProvider twice out of
+// chronological order: a "fresher" 90% update with a later fetchedAt first,
+// then a "stale" 50% update with an earlier fetchedAt second — the second
+// call must not regress progress backward.
+func TestRefreshFromProvider_StaleFetchDoesNotOvewriteFresherUpdate(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	d.Progress = 0.1
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	now := time.Now()
+	fresherFetchedAt := now
+	staleFetchedAt := now.Add(-5 * time.Second)
+
+	fresh := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.9},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, fresh, fresherFetchedAt)
+	if d.Progress != 0.9 {
+		t.Fatalf("progress after fresh update = %v, want 0.9", d.Progress)
+	}
+
+	stale := []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5},
+	}
+	db.RefreshFromProvider(ctx, []*Download{d}, stale, staleFetchedAt)
+	if d.Progress != 0.9 {
+		t.Errorf("progress after stale update = %v, want unchanged at 0.9 (stale write must be rejected)", d.Progress)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.Progress != 0.9 {
+		t.Errorf("persisted progress = %v, want 0.9 (stale write must not have reached the database either)", got.Progress)
+	}
+}
+
+// TestRefreshFromProvider_LaterFetchAfterStaleStillApplies proves the guard
+// only blocks genuinely out-of-order writes — a normal, chronologically
+// later update still applies fine even after an earlier one was rejected
+// for being stale, so a real download's progress keeps moving forward once
+// pollers catch back up.
+func TestRefreshFromProvider_LaterFetchAfterStaleStillApplies(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	d.Progress = 0.1
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	now := time.Now()
+	db.RefreshFromProvider(ctx, []*Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.9},
+	}, now)
+	db.RefreshFromProvider(ctx, []*Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5},
+	}, now.Add(-5*time.Second)) // stale, rejected
+
+	db.RefreshFromProvider(ctx, []*Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateCompleted, Progress: 1.0},
+	}, now.Add(10*time.Second)) // genuinely later, must apply
+
+	if d.Progress != 1.0 || d.State != StateProviderCompleted {
+		t.Errorf("state = %q progress = %v, want provider_completed/1.0 (a genuinely later update must still apply)", d.State, d.Progress)
 	}
 }

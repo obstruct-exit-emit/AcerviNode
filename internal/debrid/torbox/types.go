@@ -119,6 +119,16 @@ type Torrent struct {
 	DownloadFinished bool          `json:"download_finished"`
 	Eta              float64       `json:"eta"`
 	Files            []TorrentFile `json:"files"`
+	// Seeds/Peers/DownloadSpeed are real, documented fields on TorBox's own
+	// SDK response schema (torbox-sdk-js's GetTorrentListOkResponseData)
+	// that weren't modeled here until the qBittorrent shim needed something
+	// to report for real qBittorrent's own num_seeds/num_leechs/dlspeed —
+	// found live: watching a real, genuinely uncached torrent download (not
+	// TorBox's own instant-cache path) made it obvious this swarm
+	// visibility was simply never being passed through anywhere.
+	Seeds         float64 `json:"seeds"`
+	Peers         float64 `json:"peers"`
+	DownloadSpeed float64 `json:"download_speed"`
 }
 
 // listLimit caps how many rows mylist/getqueued return per call, matching

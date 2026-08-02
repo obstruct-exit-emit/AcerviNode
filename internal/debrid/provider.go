@@ -75,6 +75,15 @@ type DownloadStatus struct {
 	// "Downloading" for a usenet download going through TorBox's own
 	// SABnzbd-style post-processing (see torbox.usenetPhase).
 	Phase string
+	// Seeders/Leechers/DownloadSpeedBytes are swarm visibility for a
+	// torrent — 0 for usenet/webdl, which have no such concept. Never
+	// persisted, same treatment as ETASeconds/Phase: fast-moving,
+	// informational, read fresh on every poll. internal/qbittorrent's own
+	// torrentInfo surfaces these as real qBittorrent's actual
+	// num_seeds/num_leechs/dlspeed fields.
+	Seeders            int64
+	Leechers           int64
+	DownloadSpeedBytes int64
 }
 
 // DownloadFile is one file within a download.

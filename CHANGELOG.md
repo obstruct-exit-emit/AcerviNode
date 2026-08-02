@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A download's reported progress/state/size could freeze on stale data,
+  even though the database and TorBox itself had already moved on.** Found
+  live watching a real, genuinely uncached torrent download: `GET
+  /api/v2/torrents/info` stayed stuck reporting 13.9% while the same
+  download's own database row (and TorBox's own API, queried directly) had
+  already reached 50%+. Root cause: `database.RefreshFromProvider` had no
+  ordering guard — with multiple independent pollers now hitting the same
+  download (each compat shim's own reactive refresh, `internal/importer`'s
+  bulk tick, and its fast per-download poll), a slower provider request that
+  started earlier could finish — and write — after a faster one that
+  started later, silently regressing the row back to stale data with
+  nothing to ever correct it. The connection pool's single connection
+  serializes the resulting `UPDATE`s so they can't corrupt each other, but
+  serialization alone doesn't preserve the order the underlying data was
+  actually fetched in. Fixed by threading a `fetchedAt` timestamp (captured
+  when each poller *starts* its provider call, not when it returns) through
+  every `RefreshFromProvider` call site, and rejecting a write whose
+  `fetchedAt` is older than the last one already applied for that specific
+  download.
+
+### Added
+
+- **Real qBittorrent's own swarm visibility — `num_seeds`/`num_leechs`/
+  `dlspeed` — now appears in `GET /api/v2/torrents/info`.** Found live
+  while watching a real, genuinely uncached torrent download (TorBox's own
+  instant-cache path never exercises this): TorBox reports `seeds`/`peers`/
+  `download_speed` on every torrent (confirmed against its official SDK
+  schema), but neither `internal/debrid/torbox`'s own `Torrent` model nor
+  anywhere downstream of it ever captured or surfaced these at all. Sonarr/
+  Radarr's own `QBittorrentTorrent` model doesn't read these fields, so this
+  doesn't change *arr behavior — it's for anyone else inspecting the API
+  directly, or a real qBittorrent-compatible client pointed at AcerviNode.
+
 - **A usenet download actively being verified/repaired/unpacked by TorBox
   could show up as `Failed` while it was still legitimately in progress.**
   TorBox's usenet service runs its own SABnzbd-style post-processing

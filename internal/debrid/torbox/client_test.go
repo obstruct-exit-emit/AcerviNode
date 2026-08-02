@@ -227,6 +227,7 @@ func TestGetTorrent(t *testing.T) {
 			"data": map[string]any{
 				"id": 42, "hash": "abc123", "name": "Some.Release",
 				"size": 1024.0, "download_state": "downloading", "progress": 0.5,
+				"seeds": 3.0, "peers": 1.0, "download_speed": 191117.0,
 				"files": []map[string]any{{"id": 1, "name": "movie.mkv", "size": 1024.0}},
 			},
 		})
@@ -238,6 +239,9 @@ func TestGetTorrent(t *testing.T) {
 	}
 	if torrent.Hash != "abc123" || torrent.Progress != 0.5 {
 		t.Errorf("torrent = %+v", torrent)
+	}
+	if torrent.Seeds != 3 || torrent.Peers != 1 || torrent.DownloadSpeed != 191117 {
+		t.Errorf("swarm info = %+v, want seeds=3 peers=1 download_speed=191117", torrent)
 	}
 }
 

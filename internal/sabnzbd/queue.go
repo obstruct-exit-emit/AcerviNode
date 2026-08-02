@@ -20,12 +20,13 @@ import (
 // call, so unlike state/progress/size neither is persisted to the database,
 // just read fresh and attached to the response here (see toQueueSlot).
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string) {
+	fetchedAt := time.Now()
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
 		return nil, nil
 	}
-	s.db.RefreshFromProvider(ctx, rows, statuses)
+	s.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 
 	eta = make(map[string]int64, len(statuses))
 	phase = make(map[string]string, len(statuses))

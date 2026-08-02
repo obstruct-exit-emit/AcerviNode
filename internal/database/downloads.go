@@ -649,13 +649,22 @@ func LocalStateFromProvider(s debrid.DownloadState) string {
 //
 // Shared by both compat shims (called reactively on every /info or
 // mode=queue poll from an *arr app) and internal/importer (called
-// proactively on its own background tick) — see
+// proactively on both its bulk tick and its fast per-download poll) — see
 // docs/providers.md#completed-download-handling for why a single proactive
 // poller was added: without it, a download only ever progressed when
 // something external happened to poll, which could leave it looking stuck
 // for a long time with nothing polling at all (e.g. only the web UI open,
 // which never triggers a provider refresh on its own).
-func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus) {
+//
+// fetchedAt is when the caller *started* the provider call that produced
+// statuses — not now, not when the call returned — and every actual write
+// this call makes is gated on it via refreshGuardAllows. See
+// refreshFetchedAt's own doc comment for the real, live-observed race this
+// closes: with multiple independent pollers now hitting the same download,
+// a slower request that started earlier can finish (and try to write) after
+// a faster one that started later, and without this guard it would silently
+// regress progress/state back to stale data.
+func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus, fetchedAt time.Time) {
 	byID := make(map[string]debrid.DownloadStatus, len(statuses))
 	for _, st := range statuses {
 		byID[string(st.ID)] = st
@@ -768,6 +777,10 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes && errorMessage == d.ErrorMessage {
 			continue
 		}
+		if !db.refreshGuardAllows(d.ID, fetchedAt) {
+			slog.Debug("database: skipping stale refresh, a fresher update already landed", "id", d.ID)
+			continue
+		}
 		// completed_at is set once files are actually on disk
 		// (internal/importer), not merely when the provider reports done —
 		// so it isn't touched here.
@@ -780,6 +793,28 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		d.SizeBytes = st.SizeBytes
 		d.ErrorMessage = errorMessage
 	}
+}
+
+// refreshGuardAllows reports whether an update whose underlying provider
+// data was fetched at fetchedAt should actually be written for id — false
+// if a fresher update (a later fetchedAt) has already been applied. The
+// check and the record are done under the same lock so two concurrent
+// callers can't both pass the check before either has recorded — the
+// connection pool's own single-connection serialization (see Open's
+// SetMaxOpenConns(1)) only protects the SQL writes themselves from
+// corrupting each other, not this in-memory ordering decision. See
+// refreshFetchedAt's own doc comment for the race this exists to close.
+func (db *DB) refreshGuardAllows(id string, fetchedAt time.Time) bool {
+	db.refreshFetchedAtMu.Lock()
+	defer db.refreshFetchedAtMu.Unlock()
+	if db.refreshFetchedAt == nil {
+		db.refreshFetchedAt = map[string]time.Time{}
+	}
+	if last, ok := db.refreshFetchedAt[id]; ok && fetchedAt.Before(last) {
+		return false
+	}
+	db.refreshFetchedAt[id] = fetchedAt
+	return true
 }
 
 // DeleteDownload removes a download and its files (files cascade via FK).

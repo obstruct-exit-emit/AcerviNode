@@ -479,6 +479,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	// Unlike the old version of this check, rows being empty doesn't skip
 	// the List() call below — discoverManual still needs it to catch a
 	// first-ever manually-added download for a kind nothing's tracked yet.
+	fetchedAt := time.Now()
 	statuses, err := p.List(ctx)
 	if err != nil {
 		if errors.Is(err, debrid.ErrRateLimited) {
@@ -495,7 +496,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		return
 	}
 	im.clearRateLimitHit(kind)
-	im.db.RefreshFromProvider(ctx, rows, statuses)
+	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }
 
@@ -531,6 +532,7 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p
 		return
 	}
 	for _, d := range rows {
+		fetchedAt := time.Now()
 		st, err := p.Status(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID))
 		if err != nil {
 			if errors.Is(err, debrid.ErrRateLimited) {
@@ -547,7 +549,7 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p
 			continue
 		}
 		im.clearRateLimitHit(kind)
-		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st})
+		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st}, fetchedAt)
 	}
 }
 

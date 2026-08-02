@@ -55,6 +55,17 @@ refreshes state/progress on every poll, not persisted to the database (it's a
 fast-moving, purely informational value; see `internal/qbittorrent`'s
 `refreshFromProvider`).
 
+`GET /api/v2/torrents/info` also reports `num_seeds`/`num_leechs`/`dlspeed`
+— real qBittorrent's own field names for swarm visibility — the same fresh,
+never-persisted treatment as `eta`. Found missing live: TorBox reports
+`seeds`/`peers`/`download_speed` on every torrent, but nothing anywhere in
+AcerviNode ever captured or surfaced them before, which only became obvious
+watching a real, genuinely uncached torrent download (TorBox's own
+instant-cache path never shows meaningful swarm data at all). Sonarr/
+Radarr's own `QBittorrentTorrent` model doesn't read these fields, so this
+is for direct API inspection or a real qBittorrent-compatible client, not
+something that changes *arr behavior.
+
 `GET /api/v2/torrents/info`'s `save_path` and `content_path` are deliberately
 different values, not a typo — this is real qBittorrent's own split (`save_path`
 is the shared per-category base directory, `content_path` is one torrent's own

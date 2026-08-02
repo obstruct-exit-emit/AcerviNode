@@ -319,7 +319,7 @@ func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
 // so the comparison never accidentally matches.
 func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 	d := &database.Download{SavePath: "/downloads/tv-sonarr/Some.Release.Name"}
-	info := toTorrentInfo(d, 0)
+	info := toTorrentInfo(d, liveTorrentInfo{})
 
 	if info.ContentPath != "/downloads/tv-sonarr/Some.Release.Name" {
 		t.Errorf("content_path = %q, want the real save path unchanged", info.ContentPath)
@@ -341,10 +341,28 @@ func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 // persists SavePath before marking ready_for_import).
 func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
 	d := &database.Download{SavePath: ""}
-	info := toTorrentInfo(d, 0)
+	info := toTorrentInfo(d, liveTorrentInfo{})
 
 	if info.SavePath != "" || info.ContentPath != "" {
 		t.Errorf("save_path = %q, content_path = %q, want both empty", info.SavePath, info.ContentPath)
+	}
+}
+
+// TestToTorrentInfo_ReportsSwarmInfo proves num_seeds/num_leechs/dlspeed —
+// real qBittorrent's own field names — pass through from the provider's
+// live status, found live to be entirely missing before this.
+func TestToTorrentInfo_ReportsSwarmInfo(t *testing.T) {
+	d := &database.Download{}
+	info := toTorrentInfo(d, liveTorrentInfo{Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117})
+
+	if info.NumSeeds != 3 {
+		t.Errorf("num_seeds = %d, want 3", info.NumSeeds)
+	}
+	if info.NumLeechs != 1 {
+		t.Errorf("num_leechs = %d, want 1", info.NumLeechs)
+	}
+	if info.DlSpeed != 191117 {
+		t.Errorf("dlspeed = %d, want 191117", info.DlSpeed)
 	}
 }
 

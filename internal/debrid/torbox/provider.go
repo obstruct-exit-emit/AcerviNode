@@ -181,15 +181,18 @@ func planName(plan float64) string {
 
 func torrentToStatus(t Torrent) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
-		ID:          debrid.ProviderDownloadID(formatID(t.ID)),
-		Name:        t.Name,
-		Hash:        t.Hash,
-		SizeBytes:   int64(t.Size),
-		Progress:    t.Progress,
-		State:       mapDownloadState(t.DownloadState),
-		ETASeconds:  int64(t.Eta),
-		RawState:    t.DownloadState,
-		OriginalURL: magnetFromHash(t.Hash),
+		ID:                 debrid.ProviderDownloadID(formatID(t.ID)),
+		Name:               t.Name,
+		Hash:               t.Hash,
+		SizeBytes:          int64(t.Size),
+		Progress:           t.Progress,
+		State:              mapDownloadState(t.DownloadState),
+		ETASeconds:         int64(t.Eta),
+		RawState:           t.DownloadState,
+		OriginalURL:        magnetFromHash(t.Hash),
+		Seeders:            int64(t.Seeds),
+		Leechers:           int64(t.Peers),
+		DownloadSpeedBytes: int64(t.DownloadSpeed),
 	}
 }
 

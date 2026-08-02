@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,6 +24,28 @@ var migrationsFS embed.FS
 // migrations already applied.
 type DB struct {
 	*sql.DB
+
+	// refreshFetchedAt guards RefreshFromProvider against a real, observed
+	// race: multiple independent pollers (each compat shim's own reactive
+	// refresh, internal/importer's bulk tick, internal/importer's fast
+	// per-download poll) can all be mid-flight against the provider for the
+	// same download at once. The connection pool serializes the resulting
+	// UPDATEs (see SetMaxOpenConns(1) below), but serialization only
+	// guarantees they don't corrupt each other — not that they land in the
+	// same order their underlying provider data was actually fetched in. A
+	// slower request started earlier can finish (and write) after a faster
+	// one started later, silently regressing progress/state back to stale
+	// data with nothing to ever correct it, since the poll that already
+	// landed fresher data has no reason to run again immediately. Found
+	// live: a real torrent's reported progress in /api/v2/torrents/info
+	// stuck at 13.9% while the same download's own database row (and
+	// TorBox's own API, queried directly) had already reached 50%+.
+	//
+	// Keyed by database.Download.ID, valued by when each row's most
+	// recently *applied* update was fetched (not when it was written) —
+	// see refreshGuardAllows, the only thing that reads or writes this map.
+	refreshFetchedAtMu sync.Mutex
+	refreshFetchedAt   map[string]time.Time
 }
 
 // Open opens (creating if necessary) the SQLite database at dsn and applies
@@ -44,7 +67,7 @@ func Open(dsn string) (*DB, error) {
 		return nil, fmt.Errorf("enable foreign_keys: %w", err)
 	}
 
-	db := &DB{DB: sqlDB}
+	db := &DB{DB: sqlDB, refreshFetchedAt: map[string]time.Time{}}
 	if err := db.migrate(context.Background()); err != nil {
 		sqlDB.Close()
 		return nil, err

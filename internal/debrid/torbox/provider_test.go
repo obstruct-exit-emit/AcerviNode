@@ -52,6 +52,23 @@ func TestTorrentToStatus_PopulatesOriginalURL(t *testing.T) {
 	}
 }
 
+// TestTorrentToStatus_PopulatesSwarmInfo proves seeds/peers/download_speed
+// pass through — found live to be entirely missing anywhere in AcerviNode's
+// own data model while watching a real, genuinely uncached torrent download
+// (TorBox's own instant-cache path never exercises this at all).
+func TestTorrentToStatus_PopulatesSwarmInfo(t *testing.T) {
+	status := torrentToStatus(Torrent{ID: 1, Seeds: 3, Peers: 1, DownloadSpeed: 191117})
+	if status.Seeders != 3 {
+		t.Errorf("Seeders = %d, want 3", status.Seeders)
+	}
+	if status.Leechers != 1 {
+		t.Errorf("Leechers = %d, want 1", status.Leechers)
+	}
+	if status.DownloadSpeedBytes != 191117 {
+		t.Errorf("DownloadSpeedBytes = %d, want 191117", status.DownloadSpeedBytes)
+	}
+}
+
 func TestMapDownloadState(t *testing.T) {
 	cases := []struct {
 		raw  string

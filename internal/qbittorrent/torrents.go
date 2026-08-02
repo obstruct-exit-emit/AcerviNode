@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -159,7 +160,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	etaByProviderID := s.refreshFromProvider(ctx, rows)
+	liveByProviderID := s.refreshFromProvider(ctx, rows)
 
 	wantHashes := splitFilter(r.URL.Query().Get("hashes"))
 	wantCategory := r.URL.Query().Get("category")
@@ -172,10 +173,23 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		if wantCategory != "" && d.Category != wantCategory {
 			continue
 		}
-		items = append(items, toTorrentInfo(d, etaByProviderID[d.ProviderDownloadID]))
+		items = append(items, toTorrentInfo(d, liveByProviderID[d.ProviderDownloadID]))
 	}
 
 	writeJSON(w, items)
+}
+
+// liveTorrentInfo is the fast-moving, purely informational subset of a
+// provider's status that's never persisted to the database — read fresh on
+// every poll and attached to the response by toTorrentInfo, the same
+// treatment ETA always had, now shared with real qBittorrent's own swarm
+// visibility (num_seeds/num_leechs/dlspeed) once that was found to be
+// missing entirely (see debrid.DownloadStatus.Seeders's own doc comment).
+type liveTorrentInfo struct {
+	ETASeconds         int64
+	Seeders            int64
+	Leechers           int64
+	DownloadSpeedBytes int64
 }
 
 // refreshFromProvider syncs every row's local state against one provider
@@ -183,23 +197,26 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 // See database.RefreshFromProvider, which this and internal/importer's own
 // proactive background refresh both share, so an *arr app polling here still
 // gets the freshest possible view even between importer ticks. Also returns
-// each row's current ETA keyed by provider download ID — ETA is a fast-moving,
-// purely informational value the provider recomputes on every call, so unlike
-// state/progress/size it's never persisted to the database, just read fresh
-// and attached to the response here (see toTorrentInfo).
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]int64 {
+// each row's current liveTorrentInfo keyed by provider download ID.
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]liveTorrentInfo {
+	fetchedAt := time.Now()
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("qbittorrent: provider list failed", "error", err)
 		return nil
 	}
-	s.db.RefreshFromProvider(ctx, rows, statuses)
+	s.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 
-	eta := make(map[string]int64, len(statuses))
+	live := make(map[string]liveTorrentInfo, len(statuses))
 	for _, st := range statuses {
-		eta[string(st.ID)] = st.ETASeconds
+		live[string(st.ID)] = liveTorrentInfo{
+			ETASeconds:         st.ETASeconds,
+			Seeders:            st.Seeders,
+			Leechers:           st.Leechers,
+			DownloadSpeedBytes: st.DownloadSpeedBytes,
+		}
 	}
-	return eta
+	return live
 }
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
@@ -310,6 +327,14 @@ type torrentInfo struct {
 	Eta          int64   `json:"eta"`
 	AddedOn      int64   `json:"added_on"`
 	CompletionOn int64   `json:"completion_on"`
+	// NumSeeds/NumLeechs/DlSpeed are real qBittorrent field names (Web API
+	// v2's own documented convention) — swarm visibility that was simply
+	// never being passed through anywhere before, found live while
+	// watching a real, genuinely uncached torrent download. 0 for a
+	// download whose provider doesn't report this (or hasn't yet).
+	NumSeeds  int64 `json:"num_seeds"`
+	NumLeechs int64 `json:"num_leechs"`
+	DlSpeed   int64 `json:"dlspeed"`
 }
 
 type torrentProperties struct {
@@ -344,7 +369,7 @@ type torrentFileInfo struct {
 // save_path either, so GetItems took the "use content_path" branch
 // anyway — using an empty path no completed Managed torrent could ever
 // actually import from.
-func toTorrentInfo(d *database.Download, etaSeconds int64) torrentInfo {
+func toTorrentInfo(d *database.Download, live liveTorrentInfo) torrentInfo {
 	completionOn := int64(-1)
 	if d.CompletedAt != nil {
 		completionOn = d.CompletedAt.Unix()
@@ -362,9 +387,12 @@ func toTorrentInfo(d *database.Download, etaSeconds int64) torrentInfo {
 		Size:         d.SizeBytes,
 		Progress:     d.Progress,
 		State:        qbtState(d.State),
-		Eta:          etaSeconds,
+		Eta:          live.ETASeconds,
 		AddedOn:      d.AddedAt.Unix(),
 		CompletionOn: completionOn,
+		NumSeeds:     live.Seeders,
+		NumLeechs:    live.Leechers,
+		DlSpeed:      live.DownloadSpeedBytes,
 	}
 }
 
