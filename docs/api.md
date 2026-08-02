@@ -91,7 +91,12 @@ necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
   "updated_at": "2026-07-27T05:16:17Z",
   "completed_at": "2026-07-27T05:16:17Z",
   "added_via": "arr",
-  "has_source": true
+  "has_source": true,
+  "eta_seconds": 754,
+  "seeders": 3,
+  "leechers": 1,
+  "download_speed_bytes": 191117,
+  "phase": ""
 }
 ```
 
@@ -129,6 +134,21 @@ exactly this — see
 False for a discovered download with nothing known, or a torrent/webdl added
 via an uploaded `.torrent` file. The web UI's Re-add button is gated on this
 rather than `added_via`, since it works for Managed and Manual alike.
+`eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/`phase` are
+fast-moving, provider-reported fields deliberately never persisted to the
+database — read from an in-memory cache (`database.DB.LiveStatus`) populated
+as a side effect of whichever poller last refreshed this download (either
+compat shim's own reactive refresh, or `internal/importer`'s bulk/fast
+polls), not a synchronous provider call this endpoint makes itself. Zero
+(and `phase` empty) whenever nothing's polled this download yet, or for a
+provider/kind with no such concept — `seeders`/`leechers`/
+`download_speed_bytes` are torrent-only; `phase` is usenet-only
+(`"verifying"`/`"repairing"`/`"extracting"`/`"processing"`, or `""` for
+plain transfer — see
+[Providers](providers.md#usenet-post-processing-states)). Same "0 might
+mean unknown, not necessarily zero" tradeoff both compat shims already
+accept for their own equivalent fields.
+
 `GET /api/v1/downloads/{id}` additionally embeds a `files` array
 (`[{"path": "...", "size_bytes": ..., "provider_file_id": "..."}]`), which the
 list endpoint omits since it would mean an extra provider query per row for

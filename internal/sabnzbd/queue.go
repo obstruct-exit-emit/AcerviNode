@@ -15,16 +15,21 @@ import (
 // this and internal/importer's own proactive background refresh both share,
 // so an *arr app polling here still gets the freshest possible view even
 // between importer ticks. Also returns each row's current ETA and sub-phase
-// (see debrid.DownloadStatus.Phase), both keyed by provider download ID —
-// fast-moving, purely informational values the provider recomputes on every
-// call, so unlike state/progress/size neither is persisted to the database,
-// just read fresh and attached to the response here (see toQueueSlot).
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string) {
+// (see debrid.DownloadStatus.Phase), both keyed by provider download ID, and
+// totalSpeedBytes — the sum of every download's current speed, matching
+// real SABnzbd's own mode=queue shape: an aggregate speed across the whole
+// queue, not a per-item field (confirmed against SABnzbd's real API docs —
+// there is no per-slot speed in the real API to match even if AcerviNode
+// wanted one). All three are fast-moving, purely informational values the
+// provider recomputes on every call, so unlike state/progress/size none of
+// them are persisted to the database, just read fresh and attached to the
+// response here (see toQueueSlot/handleQueue).
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string, totalSpeedBytes int64) {
 	fetchedAt := time.Now()
 	statuses, err := s.provider.List(ctx)
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
-		return nil, nil
+		return nil, nil, 0
 	}
 	s.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 
@@ -33,8 +38,9 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 	for _, st := range statuses {
 		eta[string(st.ID)] = st.ETASeconds
 		phase[string(st.ID)] = st.Phase
+		totalSpeedBytes += st.DownloadSpeedBytes
 	}
-	return eta, phase
+	return eta, phase, totalSpeedBytes
 }
 
 type queueSlot struct {
@@ -67,7 +73,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return
 	}
-	etaByProviderID, phaseByProviderID := s.refreshFromProvider(ctx, rows)
+	etaByProviderID, phaseByProviderID, totalSpeedBytes := s.refreshFromProvider(ctx, rows)
 
 	slots := make([]queueSlot, 0, len(rows))
 	for _, d := range rows {
@@ -76,7 +82,15 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID], phaseByProviderID[d.ProviderDownloadID]))
 		}
 	}
-	writeJSON(w, map[string]any{"queue": map[string]any{"slots": slots}})
+	// kbpersec is real SABnzbd's own aggregate-speed field, at the top of
+	// the queue object (not per-slot — see refreshFromProvider's own doc
+	// comment), formatted as a decimal string the same way real SABnzbd
+	// does (e.g. "1296.02").
+	kbPerSec := float64(totalSpeedBytes) / 1024
+	writeJSON(w, map[string]any{"queue": map[string]any{
+		"slots":    slots,
+		"kbpersec": fmt.Sprintf("%.2f", kbPerSec),
+	}})
 }
 
 func toQueueSlot(d *database.Download, etaSeconds int64, phase string) queueSlot {

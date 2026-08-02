@@ -78,6 +78,14 @@ provider's live ETA for the download — read fresh from the same provider call
 that refreshes state/progress on every poll, not persisted to the database
 (see `internal/sabnzbd`'s `refreshFromProvider`/`formatTimeLeft`).
 
+`mode=queue` also reports a top-level `kbpersec` — real SABnzbd's own
+aggregate download speed, summed across every active download (confirmed
+against SABnzbd's real API docs: there's no per-slot speed field to match
+even if AcerviNode wanted one — speed is queue-wide there). Found missing
+entirely while auditing what information AcerviNode passes through: TorBox
+reports `download_speed` on every usenet download too, but nothing captured
+or summed it before.
+
 ## What's not emulated
 
 RSS, server switching/priorities, speed limits, and the rest of SABnzbd's full

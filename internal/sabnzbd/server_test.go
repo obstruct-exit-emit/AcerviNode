@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 const testAPIKey = "test-api-key"
@@ -446,6 +447,57 @@ func TestHandleQueue_ReportsTimeLeftFromProvider(t *testing.T) {
 	}
 	if got := q.Queue.Slots[0].TimeLeft; got != "0:12:34" {
 		t.Errorf("TimeLeft = %q, want 0:12:34 (from provider's 754s ETA)", got)
+	}
+}
+
+// TestHandleQueue_ReportsAggregateSpeed proves mode=queue's top-level
+// kbpersec — real SABnzbd's own aggregate-speed field, not a per-slot one
+// (confirmed against SABnzbd's real API docs: no per-slot speed field
+// exists there to match even if AcerviNode wanted one) — sums every active
+// download's current speed.
+func TestHandleQueue_ReportsAggregateSpeed(t *testing.T) {
+	ctx := t.Context()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	provider := newFakeProvider()
+	for i, id := range []string{"fake-usenet-speed-1", "fake-usenet-speed-2"} {
+		d := &database.Download{
+			ID: id, Provider: "faketorbox", ProviderDownloadID: id, Kind: database.KindUsenet,
+			Name: id, State: database.StateDownloading, Progress: 0.5,
+		}
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload(%s) error = %v", id, err)
+		}
+		speed := int64(100 * 1024) // 100 KB/s
+		if i == 1 {
+			speed = 924 * 1024 // 924 KB/s -> combined 1024.00 KB/s
+		}
+		provider.entries[debrid.ProviderDownloadID(id)] = &fakeEntry{name: id, size: 1024, calls: 1, speed: speed}
+	}
+
+	srv := &Server{provider: provider, db: db, categories: newCategoryStore()}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil)
+	srv.handleQueue(rec, req)
+
+	var q struct {
+		Queue struct {
+			Slots    []queueSlot `json:"slots"`
+			KBPerSec string      `json:"kbpersec"`
+		} `json:"queue"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&q); err != nil {
+		t.Fatalf("decode queue response: %v", err)
+	}
+	if len(q.Queue.Slots) != 2 {
+		t.Fatalf("slots = %d, want 2", len(q.Queue.Slots))
+	}
+	if q.Queue.KBPerSec != "1024.00" {
+		t.Errorf("kbpersec = %q, want 1024.00 (100KB/s + 924KB/s summed)", q.Queue.KBPerSec)
 	}
 }
 

@@ -30,6 +30,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The native API and web UI now show the same live data the compat
+  shims do — ETA, torrent seeds/peers/speed, usenet post-processing
+  phase — instead of none of it at all.** `GET /api/v1/downloads` gained
+  `eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/`phase`; the
+  downloads table shows live speed inline while actively downloading; the
+  detail view adds ETA, speed, swarm info (torrent), and phase (usenet)
+  rows, all only while a download is actually in progress. Backed by a new
+  in-memory `database.DB.LiveStatus` cache — populated as a side effect of
+  whichever poller (either compat shim's own refresh, `internal/importer`'s
+  bulk tick or fast per-download poll) already fetches this data — rather
+  than adding yet another synchronous provider call per API request, which
+  right after fixing a real concurrent-poller race (see Fixed below) would
+  have been exactly the wrong direction. Also adds real SABnzbd's own
+  aggregate `kbpersec` field to `mode=queue` (confirmed against SABnzbd's
+  real API docs: speed is queue-wide there, not per-slot — there's no
+  per-item field to match even if AcerviNode wanted one), and models
+  usenet's own `download_speed` on `internal/debrid/torbox`'s
+  `UsenetDownload` (present on TorBox's real SDK schema but unmodeled until
+  now, the same gap the torrent side had).
+
 - **Real qBittorrent's own swarm visibility — `num_seeds`/`num_leechs`/
   `dlspeed` — now appears in `GET /api/v2/torrents/info`.** Found live
   while watching a real, genuinely uncached torrent download (TorBox's own

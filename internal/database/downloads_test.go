@@ -1461,3 +1461,68 @@ func TestRefreshFromProvider_LaterFetchAfterStaleStillApplies(t *testing.T) {
 		t.Errorf("state = %q progress = %v, want provider_completed/1.0 (a genuinely later update must still apply)", d.State, d.Progress)
 	}
 }
+
+// TestRefreshFromProvider_CachesLiveStatus proves the fast-moving fields
+// (ETA, torrent swarm info, usenet phase) that are deliberately never
+// persisted to the downloads table are still readable afterward via
+// LiveStatus — internal/api's own native API/UI reads exactly this cache
+// rather than making its own synchronous provider call per request.
+func TestRefreshFromProvider_CachesLiveStatus(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	if _, ok := db.LiveStatus(d.ID); ok {
+		t.Error("LiveStatus() ok = true before any refresh, want false")
+	}
+
+	statuses := []debrid.DownloadStatus{{
+		ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5,
+		ETASeconds: 754, Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117,
+	}}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
+
+	live, ok := db.LiveStatus(d.ID)
+	if !ok {
+		t.Fatal("LiveStatus() ok = false after a refresh, want true")
+	}
+	if live.ETASeconds != 754 || live.Seeders != 3 || live.Leechers != 1 || live.DownloadSpeedBytes != 191117 {
+		t.Errorf("LiveStatus() = %+v, want ETASeconds=754 Seeders=3 Leechers=1 DownloadSpeedBytes=191117", live)
+	}
+}
+
+// TestRefreshFromProvider_StaleFetchDoesNotCacheStaleLiveStatus proves the
+// same ordering guard that protects persisted writes also protects the
+// LiveStatus cache — a stale response must not overwrite a fresher one's
+// live snapshot either, even though LiveStatus itself is never persisted.
+func TestRefreshFromProvider_StaleFetchDoesNotCacheStaleLiveStatus(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	now := time.Now()
+	db.RefreshFromProvider(ctx, []*Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5, DownloadSpeedBytes: 900000},
+	}, now)
+	db.RefreshFromProvider(ctx, []*Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5, DownloadSpeedBytes: 100},
+	}, now.Add(-5*time.Second)) // stale, rejected
+
+	live, ok := db.LiveStatus(d.ID)
+	if !ok {
+		t.Fatal("LiveStatus() ok = false, want true")
+	}
+	if live.DownloadSpeedBytes != 900000 {
+		t.Errorf("DownloadSpeedBytes = %d, want unchanged at 900000 (stale live snapshot must be rejected)", live.DownloadSpeedBytes)
+	}
+}

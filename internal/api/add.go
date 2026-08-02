@@ -98,7 +98,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeAddResponse(w, d, existed)
+	s.writeAddResponse(w, d, existed)
 }
 
 // handleAddUsenet implements POST /api/v1/downloads/usenet — adds an NZB
@@ -186,7 +186,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeAddResponse(w, d, existed)
+	s.writeAddResponse(w, d, existed)
 }
 
 // handleAddWebDownload implements POST /api/v1/downloads/webdl — adds a
@@ -252,7 +252,7 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeAddResponse(w, d, existed)
+	s.writeAddResponse(w, d, existed)
 }
 
 // handleReAddDownload implements POST /api/v1/downloads/{id}/retry's
@@ -359,7 +359,8 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, toDownloadResponse(updated))
+	live, _ := s.db.LiveStatus(updated.ID)
+	writeJSON(w, toDownloadResponse(updated, live))
 }
 
 // deleterForKind returns the deleter for a download's kind, mirroring
@@ -398,13 +399,14 @@ func (s *Server) existingOrInsert(ctx context.Context, providerName, providerDow
 	return d, false, nil
 }
 
-func writeAddResponse(w http.ResponseWriter, d *database.Download, existed bool) {
+func (s *Server) writeAddResponse(w http.ResponseWriter, d *database.Download, existed bool) {
 	status := http.StatusCreated
 	if existed {
 		status = http.StatusOK
 	}
 	w.WriteHeader(status)
-	writeJSON(w, toDownloadResponse(d))
+	live, _ := s.db.LiveStatus(d.ID)
+	writeJSON(w, toDownloadResponse(d, live))
 }
 
 // writeProviderError maps a provider Add* failure to an HTTP response —

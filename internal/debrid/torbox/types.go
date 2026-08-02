@@ -336,6 +336,13 @@ type UsenetDownload struct {
 	// result is actually servable.
 	DownloadPresent bool `json:"download_present"`
 	Active          bool `json:"active"`
+	// DownloadSpeed is another real, documented SDK field (bytes/sec) that
+	// went unmodeled the same way DownloadPresent/Active did — SABnzbd's own
+	// mode=queue reports an aggregate speed across every active download,
+	// not a per-item one (confirmed against SABnzbd's real API docs), so
+	// this feeds a sum rather than a per-row field — see
+	// internal/sabnzbd/queue.go's handleQueue.
+	DownloadSpeed float64 `json:"download_speed"`
 }
 
 // ListUsenetDownloads returns every usenet download on the account. Same

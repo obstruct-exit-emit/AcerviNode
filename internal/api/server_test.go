@@ -1021,6 +1021,38 @@ func TestHandleListDownloads(t *testing.T) {
 	}
 }
 
+// TestHandleListDownloads_IncludesLiveStatus proves the native API surfaces
+// the same fast-moving fields (ETA, torrent swarm info, usenet phase) the
+// compat shims already did — read from database.DB's own in-memory
+// LiveStatus cache, not a new synchronous provider call this handler makes
+// itself (see toDownloadResponse's own doc comment for why).
+func TestHandleListDownloads_IncludesLiveStatus(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	db.RefreshFromProvider(context.Background(), []*database.Download{d}, []debrid.DownloadStatus{
+		{ID: debrid.ProviderDownloadID("p1"), State: debrid.StateDownloading, Progress: 0.5,
+			ETASeconds: 754, Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117},
+	}, time.Now())
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got []downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	item := got[0]
+	if item.ETASeconds != 754 || item.Seeders != 3 || item.Leechers != 1 || item.DownloadSpeedBytes != 191117 {
+		t.Errorf("live fields = %+v, want ETASeconds=754 Seeders=3 Leechers=1 DownloadSpeedBytes=191117", item)
+	}
+}
+
 // TestHandleListDownloads_FiltersByAddedVia proves ?added_via=arr|manual
 // scopes the response to just the web UI's Managed or Manual tab, and that
 // an unrecognized/omitted value returns everything unfiltered.

@@ -9,8 +9,19 @@ import {
   type DownloadDetail as DownloadDetailData,
 } from '../api'
 import { forceDownload } from '../fsAccess'
-import { formatBytes, formatRelativeTime } from '../format'
+import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
 import { StateBadge } from './StateBadge'
+
+// PHASE_LABELS covers internal/debrid/torbox's own usenetPhase values —
+// see debrid.DownloadStatus.Phase — capitalized for display; any value not
+// in this map (or empty) just isn't shown at all, rather than a raw
+// lowercase string leaking into the UI.
+const PHASE_LABELS: Record<string, string> = {
+  verifying: 'Verifying',
+  repairing: 'Repairing',
+  extracting: 'Extracting',
+  processing: 'Processing',
+}
 
 const POLL_INTERVAL_MS = 4000
 
@@ -133,8 +144,44 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
               </div>
               <div>
                 <dt>Progress</dt>
-                <dd>{Math.round(detail.progress * 100)}%</dd>
+                <dd>
+                  {Math.round(detail.progress * 100)}%
+                  {detail.phase && PHASE_LABELS[detail.phase] && (
+                    <span className="text-muted"> · {PHASE_LABELS[detail.phase]}</span>
+                  )}
+                </dd>
               </div>
+              {/* ETA/speed/swarm info are only meaningful while actually
+                  downloading — a queued, completed, or errored download's
+                  values are 0/stale and would just be confusing here. */}
+              {detail.state === 'downloading' && (
+                <>
+                  {detail.eta_seconds > 0 && (
+                    <div>
+                      <dt>ETA</dt>
+                      <dd>{formatDuration(detail.eta_seconds)}</dd>
+                    </div>
+                  )}
+                  {detail.download_speed_bytes > 0 && (
+                    <div>
+                      <dt>Speed</dt>
+                      <dd>{formatSpeed(detail.download_speed_bytes)}</dd>
+                    </div>
+                  )}
+                  {/* Seeders/leechers are torrent-only — usenet/webdl have
+                      no BitTorrent-swarm concept, so both are always 0
+                      there and this row just wouldn't render. */}
+                  {detail.protocol === 'torrent' && (detail.seeders > 0 || detail.leechers > 0) && (
+                    <div>
+                      <dt>Swarm</dt>
+                      <dd>
+                        {detail.seeders} {detail.seeders === 1 ? 'seed' : 'seeds'}, {detail.leechers}{' '}
+                        {detail.leechers === 1 ? 'peer' : 'peers'}
+                      </dd>
+                    </div>
+                  )}
+                </>
+              )}
               <div>
                 <dt>Protocol</dt>
                 <dd>{detail.protocol}</dd>

@@ -452,6 +452,16 @@ func TestUsenetToStatus_PassesThroughOriginalURL(t *testing.T) {
 	}
 }
 
+// TestUsenetToStatus_PassesThroughDownloadSpeed proves download_speed —
+// real, documented on TorBox's own SDK schema but unmodeled until
+// internal/sabnzbd's aggregate kbpersec needed it — passes through.
+func TestUsenetToStatus_PassesThroughDownloadSpeed(t *testing.T) {
+	status := usenetToStatus(UsenetDownload{ID: 1, DownloadSpeed: 191117})
+	if status.DownloadSpeedBytes != 191117 {
+		t.Errorf("DownloadSpeedBytes = %d, want 191117", status.DownloadSpeedBytes)
+	}
+}
+
 func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 	downloads := []map[string]any{}
 

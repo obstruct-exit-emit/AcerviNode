@@ -37,6 +37,21 @@ export interface Download {
   // provider's own account — never auto-fetched). What the Managed/Manual
   // tabs filter on.
   added_via: 'arr' | 'manual'
+  // eta_seconds/seeders/leechers/download_speed_bytes/phase are fast-moving,
+  // provider-reported fields that are never persisted server-side — read
+  // fresh from the backend's own in-memory cache on every poll, so they can
+  // lag slightly behind the very latest provider state (whatever the last
+  // background poll happened to see), same as progress/state themselves
+  // can. seeders/leechers/download_speed_bytes are torrent-only (always 0
+  // for usenet/webdl, which have no BitTorrent-swarm concept); phase is
+  // usenet-only ("verifying"/"repairing"/"extracting", or "" for plain
+  // transfer/no concept). All default to 0/"" before anything's polled a
+  // download yet.
+  eta_seconds: number
+  seeders: number
+  leechers: number
+  download_speed_bytes: number
+  phase?: string
 }
 
 export interface DownloadFile {

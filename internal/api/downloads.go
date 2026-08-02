@@ -58,6 +58,23 @@ type downloadResponse struct {
 	// step — never auto-fetched). What the web UI's Managed/Manual tabs
 	// filter GET /api/v1/downloads?added_via=... on.
 	AddedVia string `json:"added_via"`
+
+	// ETASeconds/Seeders/Leechers/DownloadSpeedBytes/Phase are fast-moving,
+	// provider-reported fields that are deliberately never persisted to the
+	// downloads table — read from database.DB's own in-memory LiveStatus
+	// cache (populated as a side effect of whichever poller last refreshed
+	// this download; see database.DB's own doc comment), not a live
+	// provider call made by this handler itself. Zero-valued (and Phase
+	// empty) whenever nothing's been polled yet, or for a provider/kind
+	// with no such concept (Seeders/Leechers/DownloadSpeedBytes are
+	// torrent-only; Phase is usenet-only) — indistinguishable in JSON from
+	// a genuine zero, the same tradeoff both compat shims already accept
+	// for their own equivalent fields.
+	ETASeconds         int64  `json:"eta_seconds"`
+	Seeders            int64  `json:"seeders"`
+	Leechers           int64  `json:"leechers"`
+	DownloadSpeedBytes int64  `json:"download_speed_bytes"`
+	Phase              string `json:"phase,omitempty"`
 }
 
 type downloadFileResponse struct {
@@ -70,7 +87,13 @@ type downloadFileResponse struct {
 
 const timeFormat = "2006-01-02T15:04:05Z07:00"
 
-func toDownloadResponse(d *database.Download) downloadResponse {
+// toDownloadResponse builds the response shape for d. live is d's current
+// database.LiveStatus — deliberately a parameter rather than something this
+// function looks up itself, so it stays a pure, easily-testable mapping;
+// see handleListDownloads/handleGetDownload, the only callers, for where
+// it's actually read from database.DB's own cache. Pass the zero
+// database.LiveStatus for a download nothing's polled yet.
+func toDownloadResponse(d *database.Download, live database.LiveStatus) downloadResponse {
 	var completedAt *string
 	if d.CompletedAt != nil {
 		s := d.CompletedAt.UTC().Format(timeFormat)
@@ -82,24 +105,29 @@ func toDownloadResponse(d *database.Download) downloadResponse {
 		nextRetryAt = &s
 	}
 	return downloadResponse{
-		ID:           d.ID,
-		Provider:     d.Provider,
-		Protocol:     string(d.Kind),
-		Hash:         d.Hash,
-		Name:         d.Name,
-		Category:     d.Category,
-		SavePath:     d.SavePath,
-		SizeBytes:    d.SizeBytes,
-		State:        d.State,
-		Progress:     d.Progress,
-		AddedAt:      d.AddedAt.UTC().Format(timeFormat),
-		UpdatedAt:    d.UpdatedAt.UTC().Format(timeFormat),
-		CompletedAt:  completedAt,
-		ErrorMessage: d.ErrorMessage,
-		RetryCount:   d.RetryCount,
-		NextRetryAt:  nextRetryAt,
-		AddedVia:     string(d.AddedVia),
-		HasSource:    d.Source != "" || d.SourceFileName != "",
+		ID:                 d.ID,
+		Provider:           d.Provider,
+		Protocol:           string(d.Kind),
+		Hash:               d.Hash,
+		Name:               d.Name,
+		Category:           d.Category,
+		SavePath:           d.SavePath,
+		SizeBytes:          d.SizeBytes,
+		State:              d.State,
+		Progress:           d.Progress,
+		AddedAt:            d.AddedAt.UTC().Format(timeFormat),
+		UpdatedAt:          d.UpdatedAt.UTC().Format(timeFormat),
+		CompletedAt:        completedAt,
+		ErrorMessage:       d.ErrorMessage,
+		RetryCount:         d.RetryCount,
+		NextRetryAt:        nextRetryAt,
+		AddedVia:           string(d.AddedVia),
+		HasSource:          d.Source != "" || d.SourceFileName != "",
+		ETASeconds:         live.ETASeconds,
+		Seeders:            live.Seeders,
+		Leechers:           live.Leechers,
+		DownloadSpeedBytes: live.DownloadSpeedBytes,
+		Phase:              live.Phase,
 	}
 }
 
@@ -134,7 +162,8 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 		if addedVia != "" && d.AddedVia != addedVia {
 			continue
 		}
-		out = append(out, toDownloadResponse(d))
+		live, _ := s.db.LiveStatus(d.ID)
+		out = append(out, toDownloadResponse(d, live))
 	}
 	writeJSON(w, out)
 }
@@ -168,11 +197,12 @@ func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 	for i, f := range files {
 		fileResp[i] = downloadFileResponse{Path: f.Path, SizeBytes: f.SizeBytes, ProviderFileID: f.ProviderFileID}
 	}
+	live, _ := s.db.LiveStatus(d.ID)
 	writeJSON(w, struct {
 		downloadResponse
 		Files      []downloadFileResponse `json:"files"`
 		FilesError string                 `json:"files_error,omitempty"`
-	}{toDownloadResponse(d), fileResp, filesError})
+	}{toDownloadResponse(d, live), fileResp, filesError})
 }
 
 // filesForDownload queries the provider for a download's current file list —
@@ -372,7 +402,8 @@ func (s *Server) handleRetryDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, toDownloadResponse(updated))
+	live, _ := s.db.LiveStatus(updated.ID)
+	writeJSON(w, toDownloadResponse(updated, live))
 }
 
 // downloadByID resolves the {id} path value, and is the single choke point

@@ -133,15 +133,16 @@ func (p *UsenetProvider) Delete(ctx context.Context, id debrid.ProviderDownloadI
 
 func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
-		ID:          debrid.ProviderDownloadID(formatID(d.ID)),
-		Name:        d.Name,
-		SizeBytes:   int64(d.Size),
-		Progress:    d.Progress,
-		State:       mapUsenetState(d),
-		ETASeconds:  int64(d.Eta),
-		RawState:    d.DownloadState,
-		OriginalURL: d.OriginalURL,
-		Phase:       usenetPhase(d.DownloadState),
+		ID:                 debrid.ProviderDownloadID(formatID(d.ID)),
+		Name:               d.Name,
+		SizeBytes:          int64(d.Size),
+		Progress:           d.Progress,
+		State:              mapUsenetState(d),
+		ETASeconds:         int64(d.Eta),
+		RawState:           d.DownloadState,
+		OriginalURL:        d.OriginalURL,
+		Phase:              usenetPhase(d.DownloadState),
+		DownloadSpeedBytes: int64(d.DownloadSpeed),
 	}
 }
 

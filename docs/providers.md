@@ -324,6 +324,32 @@ restart) recording the `fetchedAt` of the most recently *applied* update.
 A write whose `fetchedAt` is older than what's already recorded is silently
 skipped — the row keeps its fresher value instead of regressing.
 
+### LiveStatus: the same cache, reused for the native API/UI
+
+The ordering guard above needs a per-download entry regardless — extending
+it to also hold the fast-moving fields themselves (ETA, torrent swarm info,
+usenet phase) was a small addition with a real payoff: `database.DB.LiveStatus(id)`
+lets `internal/api` show the exact same live data both compat shims already
+did, without adding a *third* kind of synchronous provider call per request.
+Right after fixing the race above — caused by too many independent pollers
+hitting the provider for the same download — adding another one purely for
+the native API's own benefit would have undone the lesson just learned.
+
+Both concerns share one map (`refreshCacheEntry{fetchedAt, live LiveStatus}`)
+precisely because they're the same operation: `refreshGuardAllows` writes the
+live snapshot at the same moment, and under the same ordering check, as the
+persisted write — a stale response is exactly as wrong to cache as it would
+be to write to the database, so it's rejected the same way. `LiveStatus`
+itself just reads the cache; `ok` is `false` whenever nothing's polled that
+download yet (e.g. it was only just added).
+
+`internal/api/downloads.go`'s `toDownloadResponse` takes a `database.LiveStatus`
+as a plain parameter (not something it looks up itself) — keeps it a pure,
+testable mapping, with `handleListDownloads`/`handleGetDownload`/etc. reading
+the cache once per row and passing the result in. See [API](api.md#download-json-shape)
+for the resulting `eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/
+`phase` fields.
+
 ### Provider rate-limit backoff
 
 `refreshKind`'s own `List` call, before this, retried on every single tick

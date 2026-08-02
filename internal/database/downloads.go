@@ -691,6 +691,22 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 			}
 			continue
 		}
+		// Gates this row's entire processing below, not just the persisted
+		// write further down — including LiveStatus's own cache, which
+		// would be exactly as wrong to serve stale as the database would be
+		// to write stale. Recording still happens even for a row that turns
+		// out to need no persisted write at all (e.g. state/progress
+		// genuinely unchanged) — see refreshGuardAllows's own doc comment.
+		if !db.refreshGuardAllows(d.ID, fetchedAt, LiveStatus{
+			ETASeconds:         st.ETASeconds,
+			Seeders:            st.Seeders,
+			Leechers:           st.Leechers,
+			DownloadSpeedBytes: st.DownloadSpeedBytes,
+			Phase:              st.Phase,
+		}) {
+			slog.Debug("database: skipping stale refresh, a fresher update already landed", "id", d.ID)
+			continue
+		}
 		if d.MissingCount > 0 {
 			if err := db.UpdateMissingCount(ctx, d.ID, 0); err != nil {
 				slog.Error("database: reset missing count failed", "id", d.ID, "error", err)
@@ -777,10 +793,6 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes && errorMessage == d.ErrorMessage {
 			continue
 		}
-		if !db.refreshGuardAllows(d.ID, fetchedAt) {
-			slog.Debug("database: skipping stale refresh, a fresher update already landed", "id", d.ID)
-			continue
-		}
 		// completed_at is set once files are actually on disk
 		// (internal/importer), not merely when the provider reports done —
 		// so it isn't touched here.
@@ -796,25 +808,39 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 }
 
 // refreshGuardAllows reports whether an update whose underlying provider
-// data was fetched at fetchedAt should actually be written for id — false
-// if a fresher update (a later fetchedAt) has already been applied. The
-// check and the record are done under the same lock so two concurrent
-// callers can't both pass the check before either has recorded — the
-// connection pool's own single-connection serialization (see Open's
-// SetMaxOpenConns(1)) only protects the SQL writes themselves from
-// corrupting each other, not this in-memory ordering decision. See
-// refreshFetchedAt's own doc comment for the race this exists to close.
-func (db *DB) refreshGuardAllows(id string, fetchedAt time.Time) bool {
-	db.refreshFetchedAtMu.Lock()
-	defer db.refreshFetchedAtMu.Unlock()
-	if db.refreshFetchedAt == nil {
-		db.refreshFetchedAt = map[string]time.Time{}
+// data was fetched at fetchedAt should actually be applied for id — false
+// if a fresher update (a later fetchedAt) has already been applied. Also
+// caches live — see DB's own doc comment for why — but only when the
+// ordering check itself passes; a stale live snapshot is exactly as wrong
+// to cache as it would be to write to the database. The check and the
+// record are done under the same lock so two concurrent callers can't both
+// pass the check before either has recorded — the connection pool's own
+// single-connection serialization (see Open's SetMaxOpenConns(1)) only
+// protects the SQL writes themselves from corrupting each other, not this
+// in-memory ordering decision.
+func (db *DB) refreshGuardAllows(id string, fetchedAt time.Time, live LiveStatus) bool {
+	db.refreshMu.Lock()
+	defer db.refreshMu.Unlock()
+	if db.refreshState == nil {
+		db.refreshState = map[string]refreshCacheEntry{}
 	}
-	if last, ok := db.refreshFetchedAt[id]; ok && fetchedAt.Before(last) {
+	if existing, ok := db.refreshState[id]; ok && fetchedAt.Before(existing.fetchedAt) {
 		return false
 	}
-	db.refreshFetchedAt[id] = fetchedAt
+	db.refreshState[id] = refreshCacheEntry{fetchedAt: fetchedAt, live: live}
 	return true
+}
+
+// LiveStatus returns the most recently observed live status for id, if
+// any — see refreshGuardAllows, the only writer. ok is false if nothing's
+// ever been polled for this download yet (e.g. it was just added and no
+// tick has run) — a caller should treat that the same as "no live data
+// available right now," not an error.
+func (db *DB) LiveStatus(id string) (LiveStatus, bool) {
+	db.refreshMu.Lock()
+	defer db.refreshMu.Unlock()
+	entry, ok := db.refreshState[id]
+	return entry.live, ok
 }
 
 // DeleteDownload removes a download and its files (files cascade via FK).
