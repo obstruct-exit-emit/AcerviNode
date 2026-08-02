@@ -226,6 +226,13 @@ type Settings interface {
 	// the instance is reached. Requires a restart to load the new cert.
 	// Refused when a custom tls_cert_file/tls_key_file is configured.
 	RegenerateCertificate(ctx context.Context) error
+
+	// DeleteLocalFiles removes d's local files from disk, if any — the
+	// local-filesystem half of a "delete and remove files" request (see
+	// handleDeleteDownload). Delegates to internal/importer, the only place
+	// that knows how to resolve a download's actual destination directory
+	// (download_dir, category overrides, an explicit save_path) live.
+	DeleteLocalFiles(d *database.Download) error
 }
 
 // Server is AcerviNode's native API.

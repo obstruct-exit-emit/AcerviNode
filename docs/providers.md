@@ -413,7 +413,7 @@ of any specific delete request. A tick landing in that narrow window would
 otherwise see the still-technically-present item with no local row anymore
 and adopt it fresh — a ghost Manual download for something a user just
 intentionally removed, showing as "Available" when it genuinely isn't.
-`handleDeleteDownload` (`internal/api`) now tombstones every real delete
+`handleDeleteDownload` (`internal/api`) tombstones every real delete
 (`database.RecordDeletedDownload`) before removing the local row;
 `discoverManual` skips adopting anything tombstoned within
 `recentlyDeletedGracePeriod` (5 minutes, generous on purpose — a
@@ -422,6 +422,28 @@ since a fresh add always gets a new one, so this only ever blocks
 re-adopting the exact same now-defunct id). Tombstones older than the grace
 period are pruned opportunistically on every new one recorded, rather than
 needing a separate cleanup job.
+
+**This same race is exactly why a Managed download could turn into a Manual
+one, reported directly and confirmed live.** `internal/qbittorrent`'s and
+`internal/sabnzbd`'s own delete handlers (`POST /api/v2/torrents/delete`,
+`name=delete`) never called `RecordDeletedDownload` at all — only
+`handleDeleteDownload` in `internal/api` did. Both shim handlers already call
+`provider.Delete` unconditionally (`deleteFiles` doesn't gate *whether* that
+call happens, only what gets passed through to it — TorBox's own `Delete`
+implementation ignores the flag entirely regardless; see
+[Local file deletion](#local-file-deletion) below), so the provider-side
+torrent/download genuinely was being deleted on every request. The bug was
+purely the missing tombstone: without one, *any* delete through either shim
+— triggered by a user, or by an *arr app's own routine "remove completed
+download" cleanup step after import — was vulnerable to the exact listing-lag
+window described above. The very next `discoverManual` tick landing in that
+window would see the item still sitting in the provider's listing (not yet
+caught up with its own successful delete) with no local row protecting it,
+and adopt it fresh as a brand-new Manual download. To a user watching the UI,
+a download that started life Managed appeared to have silently become
+Manual. Fixed by giving both shims' delete handlers the exact same tombstone
+call `handleDeleteDownload` already had — all three delete surfaces now
+behave identically here.
 
 **Category is deliberately not offered for Manual downloads** — no input on
 the web UI's "+ Add" form, no Category column in the Manual tab, no Category
@@ -433,6 +455,36 @@ overrides key on (see [Configuration](configuration.md#categories-and-save-paths
 — and Manual downloads are meant to mirror TorBox's own web UI, which has no
 categorization concept at all. Brainstormed with the user and left as a 💡
 item in ROADMAP.md to revisit if the Manual tab ever gets hard to navigate.
+
+### Local file deletion
+
+**`deleteFiles=true`/`del_files=1` never actually deleted local files, on any
+of the three delete surfaces, until this was found and fixed.** Every delete
+handler (`internal/api`'s `handleDeleteDownload`, `internal/qbittorrent`'s
+`POST /api/v2/torrents/delete`, `internal/sabnzbd`'s `name=delete`) passed
+that flag straight to `provider.Delete(ctx, id, deleteFiles)` — but TorBox's
+own implementation ignores it entirely (the parameter is literally named `_`)
+and only ever removes the provider-side copy. The only code path that ever
+called `os.RemoveAll` on a download's local files was the unrelated
+[Retention/cleanup policy](#retentioncleanup-policy) below — a completely
+separate, automatic flow a user-initiated or *arr-initiated delete never
+went through. Reported directly and confirmed by tracing all three handlers.
+
+`Importer.RemoveLocalFiles(d *database.Download) error` closes the gap:
+the same `resolveDestDir`-then-`os.RemoveAll` logic `cleanupDownload` already
+used, exposed as its own method so every delete surface can call it without
+duplicating `internal/importer`'s config-dependent path resolution
+(download_dir, category overrides, an explicit `save_path`) — none of
+`internal/api`/`internal/qbittorrent`/`internal/sabnzbd` know how to compute
+a download's destination directory on their own. Wired through the `Settings`
+interface (`DeleteLocalFiles`), the same indirection every other live-config
+value already goes through — `cmd/acervinode`'s `liveSettings` is the only
+thing holding a reference to the actual `*importer.Importer`. Same guard as
+`cleanupDownload`: refuses to touch anything for a row with no `Name`, since
+`resolveDestDir` would otherwise collapse to the bare category directory
+shared with every other download in it. Best-effort everywhere it's called —
+a failure here logs a warning but never blocks the row itself from being
+deleted, matching how the provider-side delete call is already handled.
 
 ### Retention/cleanup policy
 

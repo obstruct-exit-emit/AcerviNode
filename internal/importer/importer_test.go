@@ -263,6 +263,58 @@ func seedReadyForImportDownload(t *testing.T, db *database.DB, id, name string, 
 	return d
 }
 
+// TestRemoveLocalFiles_RemovesResolvedDestDir proves RemoveLocalFiles — the
+// method internal/api, internal/qbittorrent, and internal/sabnzbd's own
+// delete handlers all call for a deleteFiles=true request — actually deletes
+// a download's local files. Before this method existed, none of those three
+// delete surfaces touched local disk at all; only the automatic retention/
+// cleanup policy (cleanupDownload) did.
+func TestRemoveLocalFiles_RemovesResolvedDestDir(t *testing.T) {
+	db := openTestDB(t)
+
+	destDir := filepath.Join(t.TempDir(), "Some.Movie")
+	d := seedReadyForImportDownload(t, db, "dl-1", "Some.Movie", time.Now().UTC(), destDir)
+
+	if _, err := os.Stat(filepath.Join(destDir, "movie.mkv")); err != nil {
+		t.Fatalf("precondition: file should exist before removal: %v", err)
+	}
+
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	if err := im.RemoveLocalFiles(d); err != nil {
+		t.Fatalf("RemoveLocalFiles() error = %v", err)
+	}
+
+	if _, err := os.Stat(destDir); !os.IsNotExist(err) {
+		t.Errorf("destDir still present (err = %v), want removed", err)
+	}
+}
+
+// TestRemoveLocalFiles_RefusesWhenNameEmpty proves the same guard
+// cleanupDownload already has: a row with no Name would make resolveDestDir
+// collapse to the bare category directory shared with every other download
+// in it, so RemoveLocalFiles refuses rather than risking os.RemoveAll on
+// something broader than intended.
+func TestRemoveLocalFiles_RefusesWhenNameEmpty(t *testing.T) {
+	categoryDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(categoryDir, "sibling.txt"), []byte("must survive"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	db := openTestDB(t)
+	d := &database.Download{
+		ID: "dl-noname", Provider: "faketorbox", ProviderDownloadID: "dl-noname", Kind: database.KindTorrent,
+		Name: "", Category: "", State: database.StateReadyForImport, AddedVia: database.AddedViaArr,
+	}
+	im := New(db, &fakeProvider{}, nil, categoryDir, time.Minute, 5)
+
+	if err := im.RemoveLocalFiles(d); err == nil {
+		t.Error("RemoveLocalFiles() error = nil, want a refusal for an empty Name")
+	}
+	if _, err := os.Stat(filepath.Join(categoryDir, "sibling.txt")); err != nil {
+		t.Errorf("sibling file was removed (err = %v), want the category directory left untouched", err)
+	}
+}
+
 // TestCleanupOldDownloads_DisabledByDefault proves cleanup_after_days=0 (the
 // default) means Tick never touches an old ready_for_import download at
 // all — no accidental deletion for anyone who hasn't opted in.

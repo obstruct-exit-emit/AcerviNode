@@ -13,12 +13,18 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// apiKeySource is the minimal interface needed to check the "apikey"
+// settingsSource is the minimal interface needed to check the "apikey"
 // parameter against the live AcerviNode API key — matching cmd/acervinode's
 // liveSettings, whose APIKey() reflects a key regenerated through the
-// settings API with no restart needed (see internal/api.Settings).
-type apiKeySource interface {
+// settings API with no restart needed (see internal/api.Settings) — plus
+// whatever else a handler here needs from live settings (see
+// handleDelete's DeleteLocalFiles).
+type settingsSource interface {
 	APIKey() string
+	// DeleteLocalFiles removes a download's local files from disk, if any —
+	// see handleDelete. Delegates to internal/importer, the only place that
+	// knows how to resolve a download's actual destination directory live.
+	DeleteLocalFiles(d *database.Download) error
 }
 
 // Server is an http.Handler implementing the SABnzbd API surface AcerviNode
@@ -27,21 +33,21 @@ type apiKeySource interface {
 type Server struct {
 	provider debrid.UsenetProvider
 	db       *database.DB
-	// apiKey is checked against the "apikey" query/form parameter on every
-	// request — SABnzbd's real auth model has no login step (see
+	// settings.APIKey() is checked against the "apikey" query/form parameter
+	// on every request — SABnzbd's real auth model has no login step (see
 	// docs/configuration.md).
-	apiKey apiKeySource
+	settings settingsSource
 
 	mux        *http.ServeMux
 	categories *categoryStore
 }
 
 // NewServer builds a SABnzbd-compat Server backed by provider and db.
-func NewServer(provider debrid.UsenetProvider, db *database.DB, apiKey apiKeySource) *Server {
+func NewServer(provider debrid.UsenetProvider, db *database.DB, settings settingsSource) *Server {
 	s := &Server{
 		provider:   provider,
 		db:         db,
-		apiKey:     apiKey,
+		settings:   settings,
 		categories: newCategoryStore(),
 	}
 	s.mux = http.NewServeMux()
@@ -65,7 +71,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Constant-time, matching the native API's own auth check (see
 	// internal/api/auth.go) — a plain != comparison here would be the one
 	// auth entry point in the app not following that convention.
-	if subtle.ConstantTimeCompare([]byte(r.FormValue("apikey")), []byte(s.apiKey.APIKey())) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.FormValue("apikey")), []byte(s.settings.APIKey())) != 1 {
 		writeJSON(w, map[string]any{"status": false, "error": "API Key Incorrect"})
 		return
 	}

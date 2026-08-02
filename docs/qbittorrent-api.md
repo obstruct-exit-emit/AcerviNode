@@ -29,7 +29,7 @@ gives AcerviNode a drop-in integration path with zero changes required on the
 | `GET /api/v2/torrents/info` | Lists tracked torrents, optionally filtered by hash(es) — polled repeatedly while a download is active |
 | `GET /api/v2/torrents/properties` | Per-torrent detail (save path, size, ...) |
 | `GET /api/v2/torrents/files` | Per-file listing, used by \*arr apps to map imports |
-| `POST /api/v2/torrents/delete` | Removes a torrent, optionally deleting its files |
+| `POST /api/v2/torrents/delete` | Removes a torrent, optionally deleting its files (`deleteFiles=true` — see docs/providers.md#local-file-deletion). Also records a delete tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
 | `GET /api/v2/torrents/categories` / `POST createCategory` | Category bookkeeping — categories are stored on the AcerviNode side and echoed back, not interpreted |
 
 ## State mapping

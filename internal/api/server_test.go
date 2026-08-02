@@ -185,6 +185,9 @@ type fakeSettings struct {
 	restartErr          error
 	regenCertCalls      int
 	regenCertErr        error
+
+	deleteLocalFilesCalls []string // download IDs passed to DeleteLocalFiles, in order
+	deleteLocalFilesErr   error
 }
 
 func (f *fakeSettings) AuthEnabled() bool { return len(f.users) > 0 }
@@ -289,6 +292,11 @@ func (f *fakeSettings) RequestRestart(_ context.Context) error {
 func (f *fakeSettings) RegenerateCertificate(_ context.Context) error {
 	f.regenCertCalls++
 	return f.regenCertErr
+}
+
+func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
+	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
+	return f.deleteLocalFilesErr
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -1695,6 +1703,46 @@ func TestHandleDeleteDownload(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("download still present after delete: %+v", got)
+	}
+}
+
+// TestHandleDeleteDownload_DeleteFilesTrueRemovesLocalFiles proves
+// deleteFiles=true actually removes local files, not just the provider-side
+// copy — before DeleteLocalFiles existed, the provider.Delete call above was
+// the only thing deleteFiles affected, and TorBox's own Delete implementation
+// ignores that flag entirely (it only ever deletes the provider-side copy),
+// so local disk was never touched by this endpoint at all.
+func TestHandleDeleteDownload_DeleteFilesTrueRemovesLocalFiles(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, &fakeProvider{}, nil, settings)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID+"?deleteFiles=true"))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if len(settings.deleteLocalFilesCalls) != 1 || settings.deleteLocalFilesCalls[0] != d.ID {
+		t.Errorf("DeleteLocalFiles calls = %v, want exactly [%s]", settings.deleteLocalFilesCalls, d.ID)
+	}
+}
+
+// TestHandleDeleteDownload_DeleteFilesFalseSkipsLocalFileRemoval proves an
+// omitted/false deleteFiles never touches local disk — a delete that only
+// meant to stop tracking a download (e.g. an *arr app's routine post-import
+// cleanup) shouldn't silently remove files the user still wants.
+func TestHandleDeleteDownload_DeleteFilesFalseSkipsLocalFileRemoval(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, &fakeProvider{}, nil, settings)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if len(settings.deleteLocalFilesCalls) != 0 {
+		t.Errorf("DeleteLocalFiles calls = %v, want none", settings.deleteLocalFilesCalls)
 	}
 }
 

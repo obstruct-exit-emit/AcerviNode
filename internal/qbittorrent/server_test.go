@@ -46,10 +46,31 @@ const testMagnet = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01
 // changeable key or download dir.
 type staticAPIKey string
 
-func (k staticAPIKey) APIKey() string      { return string(k) }
-func (k staticAPIKey) DownloadDir() string { return "/downloads" }
+func (k staticAPIKey) APIKey() string                            { return string(k) }
+func (k staticAPIKey) DownloadDir() string                       { return "/downloads" }
+func (k staticAPIKey) DeleteLocalFiles(*database.Download) error { return nil }
+
+// fakeSettings is settingsSource with an inspectable DeleteLocalFiles — for
+// tests that need to assert whether/how it was called (see
+// TestHandleDelete_DeleteFilesTrueRemovesLocalFiles).
+type fakeSettings struct {
+	deleteLocalFilesCalls []string // download IDs, in order
+	deleteLocalFilesErr   error
+}
+
+func (f *fakeSettings) APIKey() string      { return "test-api-key" }
+func (f *fakeSettings) DownloadDir() string { return "/downloads" }
+func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
+	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
+	return f.deleteLocalFilesErr
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
+	t.Helper()
+	return newTestServerWithSettings(t, staticAPIKey("test-api-key"))
+}
+
+func newTestServerWithSettings(t *testing.T, settings settingsSource) (*httptest.Server, *http.Client) {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -57,7 +78,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
+	srv := NewServer(newFakeProvider(), db, settings)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 
@@ -209,6 +230,85 @@ func TestSonarrCallSequence(t *testing.T) {
 	}
 }
 
+// TestHandleDelete_DeleteFilesTrueRemovesLocalFiles proves deleteFiles=true
+// on POST /api/v2/torrents/delete actually removes local files, not just the
+// provider-side copy — before DeleteLocalFiles existed, TorBox's own
+// provider.Delete implementation ignored the deleteFiles flag entirely, so
+// this endpoint never touched local disk at all, even when Sonarr/Radarr
+// explicitly asked it to.
+func TestHandleDelete_DeleteFilesTrueRemovesLocalFiles(t *testing.T) {
+	settings := &fakeSettings{}
+	ts, client := newTestServerWithSettings(t, settings)
+	login(t, client, ts.URL)
+
+	addResp := postMultipart(t, client, ts.URL+"/api/v2/torrents/add", map[string]string{
+		"urls":     testMagnet,
+		"category": "tv-sonarr",
+	})
+	addResp.Body.Close()
+
+	db := ts.Config.Handler.(*Server).db
+	all, err := db.ListAllDownloads(t.Context())
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListAllDownloads() = %v, %v, want exactly one row", all, err)
+	}
+	d := all[0]
+
+	delResp, err := client.PostForm(ts.URL+"/api/v2/torrents/delete", url.Values{
+		"hashes":      {d.Hash},
+		"deleteFiles": {"true"},
+	})
+	if err != nil {
+		t.Fatalf("delete error = %v", err)
+	}
+	delResp.Body.Close()
+
+	if len(settings.deleteLocalFilesCalls) != 1 || settings.deleteLocalFilesCalls[0] != d.ID {
+		t.Errorf("DeleteLocalFiles calls = %v, want exactly [%s]", settings.deleteLocalFilesCalls, d.ID)
+	}
+}
+
+// TestHandleDelete_RecordsDeletedTombstone proves a delete through the
+// qBittorrent shim records the same tombstone the native API's own delete
+// endpoint already did — without it, any delete through this shim (a user,
+// or an *arr app's own routine "remove from download client" call) landing
+// in the window before the provider's own listing catches up with its
+// delete could leave a still-provider-side-present download with no local
+// row protecting it from re-adoption, and internal/importer's next
+// discovery tick would rediscover it as a brand-new Manual download — the
+// exact "Managed download turned into Manual" symptom this closes.
+func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
+	ts, client := newTestServer(t)
+	login(t, client, ts.URL)
+
+	addResp := postMultipart(t, client, ts.URL+"/api/v2/torrents/add", map[string]string{
+		"urls":     testMagnet,
+		"category": "tv-sonarr",
+	})
+	addResp.Body.Close()
+
+	db := ts.Config.Handler.(*Server).db
+	all, err := db.ListAllDownloads(t.Context())
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListAllDownloads() = %v, %v, want exactly one row", all, err)
+	}
+	d := all[0]
+
+	delResp, err := client.PostForm(ts.URL+"/api/v2/torrents/delete", url.Values{"hashes": {d.Hash}})
+	if err != nil {
+		t.Fatalf("delete error = %v", err)
+	}
+	delResp.Body.Close()
+
+	tombstoned, err := db.RecentlyDeletedDownloads(t.Context(), d.Provider, d.Kind)
+	if err != nil {
+		t.Fatalf("RecentlyDeletedDownloads() error = %v", err)
+	}
+	if !tombstoned[d.ProviderDownloadID] {
+		t.Errorf("RecentlyDeletedDownloads() = %v, want it to contain %s", tombstoned, d.ProviderDownloadID)
+	}
+}
+
 func TestLogin_WrongPassword(t *testing.T) {
 	ts, client := newTestServer(t)
 	resp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
@@ -221,6 +321,25 @@ func TestLogin_WrongPassword(t *testing.T) {
 	body := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK || body != "Fails." {
 		t.Errorf("status=%d body=%q, want 200 Fails.", resp.StatusCode, body)
+	}
+}
+
+// login authenticates client against baseURL's /api/v2/auth/login the same
+// way TestSonarrCallSequence does inline — every settingsSource fake in this
+// package's tests uses "test-api-key" as its APIKey(), so this is the one
+// password every test server accepts.
+func login(t *testing.T, client *http.Client, baseURL string) {
+	t.Helper()
+	resp, err := client.PostForm(baseURL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"},
+		"password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || body != "Ok." {
+		t.Fatalf("login status=%d body=%q, want 200 Ok.", resp.StatusCode, body)
 	}
 }
 

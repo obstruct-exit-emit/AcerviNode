@@ -34,7 +34,7 @@ login step required.
 | `queue` | Active/pending downloads — polled repeatedly while a download is active |
 | `history` | Completed/failed downloads |
 | `fullstatus` | Basic server status |
-| `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download |
+| `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download and, since it was found not to previously (see docs/providers.md#local-file-deletion), the local files too. Every delete also records a tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
 
 ## How NZB-shaped adds map onto TorBox
 

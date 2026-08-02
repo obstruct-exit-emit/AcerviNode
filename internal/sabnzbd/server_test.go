@@ -12,13 +12,33 @@ import (
 
 const testAPIKey = "test-api-key"
 
-// staticAPIKey satisfies apiKeySource for tests that don't need a live,
+// staticAPIKey satisfies settingsSource for tests that don't need a live,
 // changeable key.
 type staticAPIKey string
 
-func (k staticAPIKey) APIKey() string { return string(k) }
+func (k staticAPIKey) APIKey() string                            { return string(k) }
+func (k staticAPIKey) DeleteLocalFiles(*database.Download) error { return nil }
+
+// fakeSettings is settingsSource with an inspectable DeleteLocalFiles — for
+// tests that need to assert whether/how it was called (see
+// TestHandleDelete_DeleteFilesTrueRemovesLocalFiles).
+type fakeSettings struct {
+	deleteLocalFilesCalls []string // download IDs, in order
+	deleteLocalFilesErr   error
+}
+
+func (f *fakeSettings) APIKey() string { return testAPIKey }
+func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
+	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
+	return f.deleteLocalFilesErr
+}
 
 func newTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return newTestServerWithSettings(t, staticAPIKey(testAPIKey))
+}
+
+func newTestServerWithSettings(t *testing.T, settings settingsSource) *httptest.Server {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -26,7 +46,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey))
+	srv := NewServer(newFakeProvider(), db, settings)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts
@@ -230,6 +250,90 @@ func TestHandleDelete_RemovesFromQueueAndHistory(t *testing.T) {
 	}
 	if hist := getHistory(t, ts.URL); len(hist.History.Slots) != 0 {
 		t.Errorf("history after delete = %+v, want empty", hist.History.Slots)
+	}
+}
+
+// TestHandleDelete_DeleteFilesTrueRemovesLocalFiles proves del_files=1
+// actually removes local files, not just the provider-side copy — before
+// DeleteLocalFiles existed, TorBox's own provider.Delete implementation
+// ignored the deleteFiles flag entirely (it only ever deletes the
+// provider-side copy), so this endpoint never touched local disk at all,
+// even when Sonarr/Radarr explicitly asked it to.
+func TestHandleDelete_DeleteFilesTrueRemovesLocalFiles(t *testing.T) {
+	settings := &fakeSettings{}
+	ts := newTestServerWithSettings(t, settings)
+
+	addResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"addurl"}, "apikey": {testAPIKey},
+		"name": {"https://example.com/queued.nzb"}, "cat": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("addurl error = %v", err)
+	}
+	var addResult map[string]any
+	json.NewDecoder(addResp.Body).Decode(&addResult)
+	addResp.Body.Close()
+	nzoID := addResult["nzo_ids"].([]any)[0].(string)
+
+	delResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"queue"}, "name": {"delete"}, "apikey": {testAPIKey},
+		"value": {nzoID}, "del_files": {"1"},
+	})
+	if err != nil {
+		t.Fatalf("queue delete error = %v", err)
+	}
+	delResp.Body.Close()
+
+	if len(settings.deleteLocalFilesCalls) != 1 || settings.deleteLocalFilesCalls[0] != nzoID {
+		t.Errorf("DeleteLocalFiles calls = %v, want exactly [%s]", settings.deleteLocalFilesCalls, nzoID)
+	}
+}
+
+// TestHandleDelete_RecordsDeletedTombstone proves a delete through the
+// SABnzbd shim records the same tombstone the native API's own delete
+// endpoint already did — without it, any delete through this shim (a user,
+// or an *arr app's own routine "remove from download client" call) landing
+// in the window before the provider's own listing catches up with its
+// delete could leave a still-provider-side-present download with no local
+// row protecting it from re-adoption, and internal/importer's next
+// discovery tick would rediscover it as a brand-new Manual download — the
+// exact "Managed download turned into
+// Manual" symptom this closes.
+func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
+	ts := newTestServer(t)
+
+	addResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"addurl"}, "apikey": {testAPIKey},
+		"name": {"https://example.com/queued.nzb"}, "cat": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("addurl error = %v", err)
+	}
+	var addResult map[string]any
+	json.NewDecoder(addResp.Body).Decode(&addResult)
+	addResp.Body.Close()
+	nzoID := addResult["nzo_ids"].([]any)[0].(string)
+
+	db := ts.Config.Handler.(*Server).db
+	d, err := db.GetDownloadByID(t.Context(), nzoID)
+	if err != nil || d == nil {
+		t.Fatalf("GetDownloadByID(%s) = %v, %v", nzoID, d, err)
+	}
+
+	delResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode": {"queue"}, "name": {"delete"}, "apikey": {testAPIKey}, "value": {nzoID},
+	})
+	if err != nil {
+		t.Fatalf("queue delete error = %v", err)
+	}
+	delResp.Body.Close()
+
+	tombstoned, err := db.RecentlyDeletedDownloads(t.Context(), d.Provider, d.Kind)
+	if err != nil {
+		t.Fatalf("RecentlyDeletedDownloads() error = %v", err)
+	}
+	if !tombstoned[d.ProviderDownloadID] {
+		t.Errorf("RecentlyDeletedDownloads() = %v, want it to contain %s", tombstoned, d.ProviderDownloadID)
 	}
 }
 

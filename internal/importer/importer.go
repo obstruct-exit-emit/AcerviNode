@@ -909,6 +909,25 @@ func (im *Importer) cleanupOldDownloads(ctx context.Context) {
 	}
 }
 
+// RemoveLocalFiles deletes d's local files from disk — the local-filesystem
+// half of a "delete and remove files" request. internal/api, internal/qbittorrent,
+// and internal/sabnzbd's own delete handlers all call this (through the
+// Settings interface, since none of them otherwise know about download_dir/
+// category-override config) rather than duplicating resolveDestDir's
+// config-dependent path logic — before this existed, every one of them asked
+// the provider to delete deleteFiles-style, but the provider call only ever
+// removes the provider-side copy; nothing anywhere actually touched local
+// disk outside the automatic retention/cleanup policy below. Refuses to
+// touch anything for a row with no Name, matching cleanupDownload's own
+// guard: resolveDestDir would otherwise collapse to the bare category
+// directory shared with every other download in it.
+func (im *Importer) RemoveLocalFiles(d *database.Download) error {
+	if strings.TrimSpace(d.Name) == "" {
+		return fmt.Errorf("refusing to remove local files: download has no name")
+	}
+	return os.RemoveAll(im.resolveDestDir(d))
+}
+
 // cleanupDownload removes one download's local files, best-effort deletes
 // it provider-side, and removes its row — see cleanupOldDownloads. Local
 // file removal is skipped (with a warning, not silently) for a row with no

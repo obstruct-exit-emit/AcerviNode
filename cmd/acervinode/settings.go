@@ -11,6 +11,7 @@ import (
 
 	"github.com/acervinode/acervinode/internal/api"
 	"github.com/acervinode/acervinode/internal/config"
+	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
 	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
@@ -377,6 +378,22 @@ func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string)
 		s.imp.SetCategoryPaths(copyCategoryPaths(s.cfg.CategoryPaths))
 	}
 	return nil
+}
+
+// DeleteLocalFiles removes d's local files from disk, if any — delegates
+// straight to the Importer, the only place that knows how to resolve a
+// download's actual destination directory (download_dir, category
+// overrides, an explicit save_path) live. A nil imp (a handful of tests
+// build liveSettings without full startup wiring) is a routine no-op, not
+// an error — nothing has ever been fetched to disk in that case either.
+func (s *liveSettings) DeleteLocalFiles(d *database.Download) error {
+	s.mu.Lock()
+	imp := s.imp
+	s.mu.Unlock()
+	if imp == nil {
+		return nil
+	}
+	return imp.RemoveLocalFiles(d)
 }
 
 // AccountStatus reports the configured TorBox account's own plan/usage —

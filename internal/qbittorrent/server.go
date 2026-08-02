@@ -22,6 +22,10 @@ type settingsSource interface {
 	// download-client Test() reads this before any other check (see
 	// handleGetPreferences).
 	DownloadDir() string
+	// DeleteLocalFiles removes a download's local files from disk, if any —
+	// see handleDelete. Delegates to internal/importer, the only place that
+	// knows how to resolve a download's actual destination directory live.
+	DeleteLocalFiles(d *database.Download) error
 }
 
 // Server is an http.Handler implementing the qBittorrent Web API surface

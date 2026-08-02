@@ -315,10 +315,19 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
 	if provider := s.deleterForKind(d.Kind); provider != nil {
-		deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			slog.Error("api: provider delete failed", "id", d.ID, "error", err)
+		}
+	}
+	// The provider call above only ever removes the provider-side copy —
+	// deleteFiles otherwise did nothing to local disk at all. Best-effort,
+	// same tone as internal/importer's own retention/cleanup policy: a
+	// failure here shouldn't block the row itself from being deleted.
+	if deleteFiles {
+		if err := s.settings.DeleteLocalFiles(d); err != nil {
+			slog.Warn("api: delete local files failed", "id", d.ID, "error", err)
 		}
 	}
 

@@ -255,6 +255,25 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			slog.Error("qbittorrent: provider delete failed", "hash", hash, "error", err)
 		}
+		// The provider call above only ever removes the provider-side copy —
+		// deleteFiles otherwise did nothing to local disk at all.
+		if deleteFiles {
+			if err := s.settings.DeleteLocalFiles(d); err != nil {
+				slog.Warn("qbittorrent: delete local files failed", "hash", hash, "error", err)
+			}
+		}
+		// Tombstone before the row is gone — the provider's own delete isn't
+		// always instantly reflected in its listing endpoints, and
+		// internal/importer's background discovery poll runs independently
+		// of this request. Without this, a Managed download an *arr app just
+		// removed (e.g. a routine post-import cleanup step) could get
+		// rediscovered on the very next tick as a brand-new Manual download,
+		// since the provider's listing hadn't caught up with its own delete
+		// yet and the local row protecting it from re-adoption is gone —
+		// matches handleDeleteDownload's identical reasoning in internal/api.
+		if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+			slog.Error("qbittorrent: record deleted-download tombstone failed", "hash", hash, "error", err)
+		}
 		if err := s.db.DeleteDownload(ctx, d.ID); err != nil {
 			slog.Error("qbittorrent: local delete failed", "hash", hash, "error", err)
 		}

@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`deleteFiles=true`/`del_files=1` never actually deleted local files, on
+  any of the three delete surfaces (native API, qBittorrent shim, SABnzbd
+  shim).** Every delete handler passed the flag straight to `provider.Delete`,
+  but TorBox's own implementation ignores it entirely and only removes the
+  provider-side copy — the only thing that ever called `os.RemoveAll` was the
+  unrelated automatic retention/cleanup policy. Fixed with a new
+  `Importer.RemoveLocalFiles`, wired through the `Settings` interface so all
+  three delete handlers can reuse it without duplicating
+  `internal/importer`'s destination-directory logic. See
+  docs/providers.md#local-file-deletion.
+
+- **A Managed download could silently turn into a Manual one.** Root cause:
+  `internal/qbittorrent`'s and `internal/sabnzbd`'s own delete handlers never
+  recorded a delete tombstone the way the native API's `handleDeleteDownload`
+  already did. TorBox's own listing endpoint can briefly still show a torrent
+  right after its delete call already succeeded (a previously-confirmed,
+  documented race) — without a tombstone, any delete through either shim
+  that landed in that window (a user, or an *arr app's own routine "remove
+  completed download" cleanup step after import) left the item vulnerable to
+  the very next background discovery tick re-adopting it fresh as a
+  brand-new Manual download. Fixed by giving both shims' delete handlers the
+  same `database.RecordDeletedDownload` tombstone call the native API
+  already had. See docs/providers.md#managed-vs-manual.
+
 - **A Managed download still took roughly 2x longer than rdt-client to be
   noticed as finished and fetched to local disk**, even after the `limit=1000`
   fix below. Confirmed via a controlled, same-account, same-content
