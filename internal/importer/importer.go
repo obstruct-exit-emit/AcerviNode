@@ -761,6 +761,21 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 		}
 	}
 
+	// resolveDestDir returning something other than d.SavePath means it fell
+	// back to a computed default (the adding *arr app never supplied an
+	// explicit save_path — always true for a SABnzbd add, real SABnzbd has
+	// no such parameter; sometimes true for qBittorrent too). That computed
+	// path only ever existed locally until now — persisting it here is what
+	// makes handleHistory/handleInfo/handleProperties report the real
+	// location afterward, instead of an empty string the *arr app's own
+	// import step has nothing to scan. See database.UpdateDownloadSavePath.
+	if d.SavePath == "" {
+		if err := im.db.UpdateDownloadSavePath(ctx, d.ID, destDir); err != nil {
+			return fmt.Errorf("persist resolved save path: %w", err)
+		}
+		d.SavePath = destDir
+	}
+
 	now := time.Now().UTC()
 	if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateReadyForImport, 1.0, d.SizeBytes, &now, ""); err != nil {
 		return fmt.Errorf("mark ready_for_import: %w", err)

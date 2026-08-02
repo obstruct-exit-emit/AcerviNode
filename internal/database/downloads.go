@@ -393,6 +393,33 @@ func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progre
 	return checkRowsAffected(res, id)
 }
 
+// UpdateDownloadSavePath persists a save path that wasn't known at insert
+// time — see internal/importer's resolveDestDir/processDownload, the only
+// caller: when the adding *arr app didn't supply an explicit save_path (SABnzbd's
+// real addurl/addfile API has no such parameter at all; qBittorrent's does,
+// but callers don't always send one), AcerviNode computes a fallback
+// destination itself the moment it actually fetches the files, and this is
+// what makes that computed path stick — without it, the row's save_path
+// stayed empty forever, and both compat shims report save_path/storage
+// straight from this column (see qbittorrent.handleInfo/handleProperties,
+// sabnzbd.handleHistory) for the *arr app's own import step to read. An
+// empty value there isn't a soft failure: Sonarr/Radarr/LibriNode see the
+// download as "Completed" but have no path to scan, so it silently never
+// imports — found live via a real LibriNode + AcerviNode setup where every
+// other symptom looked fine.
+func (db *DB) UpdateDownloadSavePath(ctx context.Context, id, savePath string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET save_path = ?, updated_at = ?
+		WHERE id = ?`,
+		savePath, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update download save path %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // UpdateMissingCount records how many consecutive successful provider
 // listings a tracked AddedViaManual download has been absent from — see
 // RefreshFromProvider, the only caller (both to increment it on a miss and

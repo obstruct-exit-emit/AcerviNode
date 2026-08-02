@@ -194,6 +194,22 @@ func TestTick_UsesDownloadDirWhenNoSavePath(t *testing.T) {
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected file at %s, stat error = %v", want, err)
 	}
+
+	// The computed fallback destination must be persisted back onto the row
+	// — both compat shims report save_path/storage straight from this
+	// column for the *arr app's own import step to read (handleInfo/
+	// handleProperties, sabnzbd's handleHistory). Left empty, the *arr app
+	// sees "Completed" with nowhere to import from and silently never does
+	// — found live via a real LibriNode setup where every other symptom
+	// looked fine.
+	got, err := db.GetDownloadByID(ctx, "dl-2")
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	wantSavePath := filepath.Join(downloadDir, "radarr", "Some Release")
+	if got.SavePath != wantSavePath {
+		t.Errorf("SavePath after fetch = %q, want the computed fallback %q persisted", got.SavePath, wantSavePath)
+	}
 }
 
 // seedReadyForImportDownload inserts a Managed, ready_for_import download

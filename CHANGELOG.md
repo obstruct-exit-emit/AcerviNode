@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Managed download whose adding *arr app never supplied an explicit
+  save_path never actually got imported, with no visible error** — reported
+  live via LibriNode + AcerviNode on shared storage ("worked fine with
+  rdt-client, so it's AcerviNode"). Root cause: `internal/importer`'s
+  `resolveDestDir` computes a fallback destination
+  (`download_dir`/category override + name) whenever a row's `save_path`
+  is empty, but only ever used that path locally to write files — it was
+  never written back to the database row. Real SABnzbd's own `addurl`/
+  `addfile` API has no `save_path` parameter at all, so this hit *every*
+  SABnzbd-added download; qBittorrent adds could hit it too whenever the
+  caller didn't send one. Both compat shims report `save_path`/`storage`
+  straight from that column (`handleInfo`/`handleProperties`,
+  `sabnzbd.handleHistory`) for the *arr app's own import step to read — an
+  empty value meant Sonarr/Radarr/LibriNode saw the download as
+  "Completed" with nothing to actually scan, so it silently never
+  imported. New `database.UpdateDownloadSavePath`, called from
+  `processDownload` the moment a fallback path is actually used, persists
+  it going forward.
+
 - **Adding a magnet-only torrent through the qBittorrent shim failed with
   `HTTP 400: Unsupported Media Type` whenever the client sent a plain
   `application/x-www-form-urlencoded` POST instead of `multipart/form-data`**
