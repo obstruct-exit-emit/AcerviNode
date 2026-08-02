@@ -26,6 +26,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already supports all four, confirmed against their real source) instead of
   a flat `Downloading` for the whole post-processing sequence. See
   docs/providers.md#usenet-post-processing-states.
+  **Live-verified afterward** against two real usenet downloads (a small
+  file, then a 6.8GB DVD9 boxset) submitted directly by the user for this
+  purpose: neither actually hit the documented `"Direct Unpack: <phase>"`
+  family — both instead sat at a distinct, real, previously-unseen
+  `"processing"` state for several minutes — proving the fallback logic
+  handles a genuinely unrecognized phase correctly (the whole point of not
+  using an exact-string whitelist). `"processing"` is now also surfaced
+  explicitly as `Verifying` (its closest safe real-SABnzbd equivalent)
+  rather than staying in the generic `Downloading` bucket.
 
 - **No completed Managed torrent could ever actually be imported through the
   qBittorrent shim.** Found while auditing what information AcerviNode

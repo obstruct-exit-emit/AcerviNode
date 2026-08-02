@@ -811,11 +811,35 @@ documents a real production failure from exactly this family —
 `download_present` still `false`, `download_finished` already `true` — and
 its fix (`packages/core/src/debrid/torbox.ts`) is what
 `internal/debrid/torbox/usenet_provider.go`'s `mapUsenetState` is modeled
-on, rather than independently reproducing the live sequence (no safe test
-NZB was available to add to the real account and observe it directly — see
-[Managed vs. Manual](#managed-vs-manual) above for what "safe to add live"
-has meant elsewhere in this project, a Creative Commons torrent; there's no
-equivalent for usenet without an actual indexer/API key).
+on. The design was shipped before it could be independently reproduced live
+(no safe test NZB was available yet — unlike the Creative Commons torrent
+used elsewhere in this project, see [Managed vs. Manual](#managed-vs-manual)
+above, there's no equivalent public-domain NZB without an actual indexer/API
+key) — the user supplied two real ones directly for this purpose shortly
+after, closing that gap; see below for what was actually observed.
+
+**Live-verified against two real usenet downloads, submitted directly by the
+user for this purpose** (a small single-file NZB and a 6.8GB DVD9 boxset,
+both added through the SABnzbd shim and polled every 1-2 seconds against
+TorBox's raw API in parallel with AcerviNode's own translated status).
+Neither actually exercised the documented `"Direct Unpack: <phase>"` family
+at all — both went `"downloading"` → **`"processing"`** →
+`"completed"`, where `"processing"` is a distinct, real, live-confirmed
+TorBox state (`download_finished=true`, `download_present=false`,
+`active=true`), held for several minutes on the larger file. TorBox's own
+help center documents `"Processing"` as its own separate phase ("doing some
+processing in the background and putting the file in the correct spot...
+usually takes less than 5 minutes"), distinct from the Direct Unpack family
+— this may be the more common real-world case for a straightforward
+download, with granular Direct-Unpack sub-states reserved for ones that
+actually need repair (neither test file did). The fix held up regardless:
+`"processing"` was never explicitly coded for, and was still correctly
+classified as still-downloading (not error) purely through the
+`active && progress > 0` fallback — the exact robustness the redesign was
+for. `usenetPhase` and `sabnzbdPhaseStatus` were extended afterward to
+surface `"processing"` explicitly too (as `"Verifying"` — see below), rather
+than leaving it in the generic `"Downloading"` bucket now that it's known to
+be a real, common case and not just a hypothetical one.
 
 The design deliberately isn't another exact-string whitelist — that would
 just break again the next time TorBox adds or renames a phase. Instead,
@@ -861,6 +885,13 @@ this family shares the literal `"Direct Unpack:"` prefix, which itself
 contains `"unpack"` (matching the whole string would wrongly tag `"Direct
 Unpack: Completed"` as extracting). `internal/sabnzbd/queue.go`'s
 `sabnzbdPhaseStatus` maps that phase to the matching real status string.
+`"processing"` (see above) has no exact real-SABnzbd equivalent — reported
+as `"Verifying"`, real SABnzbd's own first post-download step and the
+closest safe match for the same pipeline position (after
+`download_finished`, before `download_present`), rather than sending the
+literal word `"Processing"`, which has no member in Sonarr's
+`SabnzbdDownloadStatus` enum and risks a deserialization error there instead
+of just an imprecise (but safe) label here.
 
 One further real distinction, not TorBox-reported but genuinely
 AcerviNode's own: once a usenet download reaches local `provider_completed`

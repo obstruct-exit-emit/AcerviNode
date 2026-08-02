@@ -121,6 +121,11 @@ func TestMapUsenetState(t *testing.T) {
 			want: debrid.StateDownloading,
 		},
 		{
+			name: "processing — a real, live-confirmed TorBox state, not just a hypothetical one: a real 6.8GB usenet download sat here for several minutes mid-transfer",
+			d:    UsenetDownload{DownloadState: "processing", DownloadFinished: true, DownloadPresent: false, Active: true, Progress: 1.0},
+			want: debrid.StateDownloading,
+		},
+		{
 			name: "finished and present — the ordinary completion signal",
 			d:    UsenetDownload{DownloadState: "cached", DownloadFinished: true, DownloadPresent: true, Progress: 1.0},
 			want: debrid.StateCompleted,
@@ -179,6 +184,7 @@ func TestUsenetPhase(t *testing.T) {
 		{"Direct Unpack: Extracting", "extracting"},
 		{"Direct Unpack: Unpacking", "extracting"}, // guessed wording, same bucket
 		{"Direct Unpack: Completed", ""},
+		{"processing", "processing"}, // confirmed live: a real 6.8GB usenet download sat here for several minutes
 		{"downloading", ""},
 		{"cached", ""},
 		{"Failed", ""},

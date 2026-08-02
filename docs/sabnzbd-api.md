@@ -68,7 +68,7 @@ modeled on avoiding):
 | Local state | `status` | Why |
 |---|---|---|
 | `queued` | `Queued` | Not yet accepted by the provider |
-| `downloading` | `Downloading` / `Verifying` / `Repairing` / `Extracting` | Plain transfer, or one of TorBox's own post-processing sub-phases, if currently known |
+| `downloading` | `Downloading` / `Verifying` / `Repairing` / `Extracting` | Plain transfer, or one of TorBox's own post-processing sub-phases, if currently known — including TorBox's generic `"processing"` state (live-confirmed, held for several minutes on a real 6.8GB download), reported as `Verifying` since it has no exact real-SABnzbd equivalent |
 | `provider_completed` | `Moving` | The provider itself is done; [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — Sonarr's import step needs them there first, so this deliberately still isn't reported as done |
 | `ready_for_import` (moves to `/history`) | `Completed` | Files are actually on disk |
 | `error` (moves to `/history`) | `Failed` | See above |

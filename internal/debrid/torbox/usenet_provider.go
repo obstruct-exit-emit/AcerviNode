@@ -157,6 +157,17 @@ func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 // state in this family shares the literal "Direct Unpack:" prefix, which
 // itself contains "unpack" — matching the whole string would wrongly tag
 // every one of them (including "Direct Unpack: Completed") as "extracting".
+//
+// "processing" is confirmed live, not guessed — a real usenet download on
+// the real account (a 6.8GB DVD9 boxset) sat at raw state exactly
+// "processing" (download_finished=true, download_present=false, active=true)
+// for several minutes mid-transfer, never once reporting a "Direct Unpack:
+// <phase>" string at all. TorBox's own help center documents "Processing" as
+// its own distinct phase ("doing some processing in the background and
+// putting the file in the correct spot... usually takes less than 5
+// minutes"), separate from the Direct Unpack family — so this may be the
+// more common real-world case for a straightforward download, with granular
+// Direct-Unpack sub-states reserved for ones that actually need repair.
 func usenetPhase(raw string) string {
 	normalized := strings.ToLower(raw)
 	if idx := strings.LastIndex(normalized, ":"); idx != -1 {
@@ -169,6 +180,8 @@ func usenetPhase(raw string) string {
 		return "verifying"
 	case strings.Contains(normalized, "extract"), strings.Contains(normalized, "unpack"):
 		return "extracting"
+	case strings.Contains(normalized, "process"):
+		return "processing"
 	default:
 		return ""
 	}

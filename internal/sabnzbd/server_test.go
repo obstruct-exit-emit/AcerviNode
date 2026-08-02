@@ -483,6 +483,7 @@ func TestSabnzbdPhaseStatus(t *testing.T) {
 		{"verifying", "Verifying"},
 		{"repairing", "Repairing"},
 		{"extracting", "Extracting"},
+		{"processing", "Verifying"}, // TorBox's own generic bucket — no exact real-SABnzbd equivalent, see sabnzbdPhaseStatus's own doc comment
 		{"", "Downloading"},
 		{"something-unrecognized", "Downloading"},
 	}

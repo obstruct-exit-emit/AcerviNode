@@ -119,9 +119,21 @@ func toQueueSlot(d *database.Download, etaSeconds int64, phase string) queueSlot
 // choking on). "" — no specific phase known, or a torrent download's own
 // provider status (which has no such concept) — falls back to the generic
 // "Downloading" this endpoint has always reported.
+//
+// "processing" is TorBox's own generic post-download, pre-ready bucket —
+// confirmed live (download_finished=true, download_present=false,
+// active=true; see torbox.usenetPhase's own doc comment) — with no exact
+// real-SABnzbd equivalent: TorBox's help center describes it as opaque
+// background work, not specifically verify, repair, or extract. Reported as
+// "Verifying" — real SABnzbd's own first post-download step, the closest
+// safe match for the same pipeline position (after download_finished,
+// before download_present) — rather than sending the literal word
+// "Processing", which has no member in Sonarr's SabnzbdDownloadStatus enum
+// and risks a deserialization error there instead of just an imprecise (but
+// safe) label here.
 func sabnzbdPhaseStatus(phase string) string {
 	switch phase {
-	case "verifying":
+	case "verifying", "processing":
 		return "Verifying"
 	case "repairing":
 		return "Repairing"
