@@ -148,6 +148,27 @@ func (c *Client) ListTorrents(ctx context.Context) ([]Torrent, error) {
 	return env.Data, nil
 }
 
+// GetTorrent returns a single torrent's current status via mylist's own
+// id-filter — confirmed against TorBox's official SDK docs (torbox-sdk-js's
+// TorrentsService: passing id "will return an object rather than list", not
+// guessed or inferred from behavior). Used by internal/importer's fast
+// per-download poll (see docs/providers.md): checking one specific download
+// this way is far cheaper than ListTorrents, since TorBox only has to look up
+// a single row instead of listing the whole account. A zero-value Torrent
+// (ID == 0) means TorBox has no mylist entry for id at all — same "not found"
+// signal ListTorrents' own linear scan would produce, callers should fall
+// back to ListQueued exactly as they already do for that case.
+func (c *Client) GetTorrent(ctx context.Context, id string) (Torrent, error) {
+	var env envelope[Torrent]
+	if err := c.doGet(ctx, "/torrents/mylist", url.Values{"id": {id}, "bypass_cache": {"true"}}, &env); err != nil {
+		return Torrent{}, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return Torrent{}, err
+	}
+	return env.Data, nil
+}
+
 type cachedAvailabilityData struct {
 	Hash string `json:"hash"`
 }
@@ -204,9 +225,7 @@ type createUsenetDownloadData struct {
 // which doesn't match reality and caused a real decode failure here: "json:
 // cannot unmarshal number into Go struct field ...usenetdownload_id of type
 // string"). Formatted the same way torrent IDs are (formatID) so it's
-// consistent with what ListUsenetDownloads' own numeric id produces — see
-// idMatches in usenet_provider.go, which no longer needs to assume the two
-// match, now that both are derived the same way.
+// consistent with what ListUsenetDownloads' own numeric id produces.
 func (c *Client) CreateUsenetDownload(ctx context.Context, req CreateUsenetDownloadRequest) (id string, hash string, err error) {
 	fields := map[string]string{
 		"link": req.Link,
@@ -307,6 +326,20 @@ func (c *Client) ListUsenetDownloads(ctx context.Context) ([]UsenetDownload, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
 		return nil, err
+	}
+	return env.Data, nil
+}
+
+// GetUsenetDownload is ListUsenetDownloads' single-item counterpart — same
+// id-filter/cost reasoning as GetTorrent, confirmed for this endpoint too via
+// TorBox's official SDK docs (UsenetService's own id parameter description).
+func (c *Client) GetUsenetDownload(ctx context.Context, id string) (UsenetDownload, error) {
+	var env envelope[UsenetDownload]
+	if err := c.doGet(ctx, "/usenet/mylist", url.Values{"id": {id}, "bypass_cache": {"true"}}, &env); err != nil {
+		return UsenetDownload{}, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return UsenetDownload{}, err
 	}
 	return env.Data, nil
 }
@@ -482,6 +515,21 @@ func (c *Client) ListWebDownloads(ctx context.Context) ([]WebDownload, error) {
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
 		return nil, err
+	}
+	return env.Data, nil
+}
+
+// GetWebDownload is ListWebDownloads' single-item counterpart — same
+// id-filter/cost reasoning as GetTorrent, confirmed for this endpoint too via
+// TorBox's official SDK docs (WebDownloadsDebridService's own id parameter
+// description).
+func (c *Client) GetWebDownload(ctx context.Context, id string) (WebDownload, error) {
+	var env envelope[WebDownload]
+	if err := c.doGet(ctx, "/webdl/mylist", url.Values{"id": {id}, "bypass_cache": {"true"}}, &env); err != nil {
+		return WebDownload{}, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return WebDownload{}, err
 	}
 	return env.Data, nil
 }

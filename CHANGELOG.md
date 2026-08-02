@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Managed download still took roughly 2x longer than rdt-client to be
+  noticed as finished and fetched to local disk**, even after the `limit=1000`
+  fix below. Confirmed via a controlled, same-account, same-content
+  comparison against rdt-client's real Managed-equivalent auto-fetch path:
+  174.6s vs under 91s for the same already-cached file. Root cause: a
+  download's local state only ever advanced on the next
+  `import_interval_seconds` tick (10s by default) — a download that finished
+  moments after a tick simply waited for the next one, and timing
+  instrumentation confirmed the entire delay lived there, not in the actual
+  file fetch (microseconds once triggered). Shortening the bulk interval
+  directly was tried and rejected: even a 2-second interval immediately
+  tripped TorBox's real rate limit.
+
+  Fixed by adding a fast, independent per-download poll (`Importer.runFastPoll`,
+  every 3s) that checks only the Managed downloads currently
+  queued/downloading, one at a time, via a genuinely cheap targeted lookup —
+  TorBox's own `mylist` endpoints return a single object instead of the full
+  account listing when filtered by `id` (confirmed against TorBox's official
+  SDK docs), the same technique a reference implementation
+  ([decypharr](https://github.com/sirrobot01/decypharr)) uses for its own
+  active-download polling. `Provider.Status`/`UsenetProvider.Status`/
+  `WebDownloadProvider.Status` (already called by every add endpoint to
+  confirm a fresh add) switched from a full list-and-scan to this targeted
+  call too, an incidental speedup for those call sites as well. A live test
+  of the fast poll surfaced a related real bug: `Files()` was still built on
+  the slower full listing, which can lag behind the id-filtered lookup for a
+  torrent only moments old — causing a spurious "not found" on the very
+  first fetch attempt right after the fast poll noticed it (self-healed via
+  retry, but needlessly). `Provider.Files`/`UsenetProvider.Files`/
+  `WebDownloadProvider.Files` switched to the same targeted lookup too. See
+  docs/providers.md#fast-per-download-poll.
+
 - **Every TorBox `mylist`/`getqueued` poll was measurably slower than
   necessary.** Reported directly: "rdt-client communicates with TorBox so
   much faster." `ListTorrents`/`ListUsenetDownloads`/`ListWebDownloads`/

@@ -93,6 +93,18 @@ func TestProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			})
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"torrent_id": 42, "hash": "abc123"}})
 		case "/v1/api/torrents/mylist":
+			if wantID := r.URL.Query().Get("id"); wantID != "" {
+				// TorBox's real mylist returns a single object (not a list)
+				// when filtered by id — see Client.GetTorrent.
+				for _, t := range torrents {
+					if formatID(t["id"].(float64)) == wantID {
+						json.NewEncoder(w).Encode(map[string]any{"success": true, "data": t})
+						return
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]any{"success": true, "data": nil})
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": torrents})
 		case "/v1/api/torrents/requestdl":
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": "https://cdn.torbox.app/movie.mkv"})
@@ -322,6 +334,18 @@ func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			// CreateUsenetDownload).
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"usenetdownload_id": 99, "hash": "nzbhash"}})
 		case "/v1/api/usenet/mylist":
+			if wantID := r.URL.Query().Get("id"); wantID != "" {
+				// TorBox's real mylist returns a single object (not a list)
+				// when filtered by id — see Client.GetUsenetDownload.
+				for _, d := range downloads {
+					if formatID(d["id"].(float64)) == wantID {
+						json.NewEncoder(w).Encode(map[string]any{"success": true, "data": d})
+						return
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]any{"success": true, "data": nil})
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": downloads})
 		case "/v1/api/usenet/requestdl":
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": "https://cdn.torbox.app/episode.mkv"})

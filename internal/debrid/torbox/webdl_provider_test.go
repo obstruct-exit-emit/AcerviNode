@@ -36,6 +36,18 @@ func TestWebDownloadProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 			})
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"webdownload_id": 123, "hash": "webhash"}})
 		case "/v1/api/webdl/mylist":
+			if wantID := r.URL.Query().Get("id"); wantID != "" {
+				// TorBox's real mylist returns a single object (not a list)
+				// when filtered by id — see Client.GetWebDownload.
+				for _, d := range downloads {
+					if formatID(d["id"].(float64)) == wantID {
+						json.NewEncoder(w).Encode(map[string]any{"success": true, "data": d})
+						return
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]any{"success": true, "data": nil})
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": downloads})
 		case "/v1/api/webdl/requestdl":
 			json.NewEncoder(w).Encode(map[string]any{"success": true, "data": "https://cdn.torbox.app/webdl/video.mkv"})

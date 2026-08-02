@@ -27,15 +27,19 @@ import (
 // provider is the subset of debrid.TorrentProvider and debrid.UsenetProvider
 // the importer needs: List to proactively refresh status (see
 // refreshStatuses) and discover manually-added downloads (see
-// discoverManual), Files/RequestDownloadLink to actually fetch a completed
-// download's bytes, Delete for the retention/cleanup policy's best-effort
-// provider-side removal (see cleanupDownload), Name to record/key discovered
-// downloads and the discovery baseline. Both interfaces already share this
-// exact method shape (see internal/debrid), so either provider type
-// satisfies it without any adapter code.
+// discoverManual), Status for the fast per-download poll (see
+// refreshActiveDownloads) — a single targeted lookup, cheaper than List, for
+// checking one specific download that's actively in flight — Files/
+// RequestDownloadLink to actually fetch a completed download's bytes, Delete
+// for the retention/cleanup policy's best-effort provider-side removal (see
+// cleanupDownload), Name to record/key discovered downloads and the
+// discovery baseline. Both interfaces already share this exact method shape
+// (see internal/debrid), so either provider type satisfies it without any
+// adapter code.
 type provider interface {
 	Name() string
 	List(ctx context.Context) ([]debrid.DownloadStatus, error)
+	Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error)
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
@@ -113,6 +117,26 @@ const (
 	rateLimitBackoffBase = 30 * time.Second
 	rateLimitBackoffMax  = 5 * time.Minute
 )
+
+// fastPollInterval is how often refreshActiveDownloads checks each actively
+// in-flight (queued/downloading) Managed download individually, via a single
+// targeted per-ID Status() call rather than waiting for the next bulk List()
+// tick (im.interval, 10s by default) to notice it. A live, controlled,
+// same-account comparison against rogerfar/rdt-client (a reference debrid
+// download client) found AcerviNode taking ~2x longer to notice an
+// already-cached file was ready via an equivalent auto-fetch path — traced to
+// exactly this: nothing polled more often than the bulk interval, so a
+// download that finished moments after a tick simply waited for the next one.
+// A targeted per-ID lookup is dramatically cheaper against a provider's rate
+// limit than shortening the bulk interval itself would be — confirmed live
+// the hard way (a 2s bulk interval, still listing every download on the
+// account three times over, tripped TorBox's real rate limit immediately) —
+// the same principle a reference implementation (decypharr) applies for its
+// own active-download polling, see docs/providers.md. Deliberately not a live
+// config knob: this only ever touches downloads already known to be actively
+// in flight (typically very few for a personal-use instance), unlike im.interval
+// which governs every kind's full-account listing.
+const fastPollInterval = 3 * time.Second
 
 // New builds an Importer. Either provider may be nil if that capability
 // isn't configured (see cmd/acervinode's buildProviders) — downloads of that
@@ -313,11 +337,18 @@ func (im *Importer) Config() (downloadDir string, interval time.Duration, maxRet
 	return im.getConfig()
 }
 
-// Run blocks, calling Tick every interval until ctx is done.
+// Run blocks, calling Tick every interval until ctx is done. The fast
+// per-download poll (see refreshActiveDownloads) runs on its own goroutine
+// with its own ticker, deliberately independent of this loop: Tick can block
+// for a while — a slow file fetch, network hiccup — and a different
+// download's fast poll shouldn't have to wait for that to finish.
 func (im *Importer) Run(ctx context.Context) {
 	_, interval, _ := im.getConfig()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	go im.runFastPoll(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -328,6 +359,22 @@ func (im *Importer) Run(ctx context.Context) {
 			if err := im.Tick(ctx); err != nil {
 				slog.Error("importer: tick failed", "error", err)
 			}
+		}
+	}
+}
+
+// runFastPoll drives refreshActiveDownloads on fastPollInterval until ctx is
+// done — see Run's doc comment for why this is a separate goroutine rather
+// than another case in Run's own select loop.
+func (im *Importer) runFastPoll(ctx context.Context) {
+	ticker := time.NewTicker(fastPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			im.refreshActiveDownloads(ctx)
 		}
 	}
 }
@@ -450,6 +497,58 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	im.clearRateLimitHit(kind)
 	im.db.RefreshFromProvider(ctx, rows, statuses)
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
+}
+
+// refreshActiveDownloads is the fast path's entry point: for every Managed
+// download currently queued/downloading (per kind), it checks that one
+// download's status directly via a targeted per-ID lookup instead of relying
+// solely on the next bulk refreshStatuses tick — see fastPollInterval.
+func (im *Importer) refreshActiveDownloads(ctx context.Context) {
+	im.refreshActiveKind(ctx, database.KindTorrent, im.torrentProvider)
+	im.refreshActiveKind(ctx, database.KindUsenet, im.usenetProvider)
+	im.refreshActiveKind(ctx, database.KindWebDL, im.getWebDownloadProvider())
+}
+
+// refreshActiveKind is refreshActiveDownloads' per-kind worker. It shares
+// refreshKind's rate-limit cooldown state deliberately: a 429 from either the
+// bulk List() path or this targeted Status() path means the same provider
+// budget is under pressure, so both back off together rather than each
+// tracking (and potentially fighting over) their own independent cooldown.
+// Each row is refreshed through database.RefreshFromProvider — the exact same
+// state-transition/backfill logic the bulk path already uses, just fed one
+// row and one status instead of a whole account's worth, so there's no second
+// implementation of that logic to keep in sync.
+func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p provider) {
+	if p == nil {
+		return
+	}
+	if _, cooling := im.rateLimitCooldown(kind); cooling {
+		return
+	}
+	rows, err := im.db.ListActiveManagedDownloads(ctx, kind)
+	if err != nil {
+		slog.Error("importer: list active managed downloads failed", "kind", kind, "error", err)
+		return
+	}
+	for _, d := range rows {
+		st, err := p.Status(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID))
+		if err != nil {
+			if errors.Is(err, debrid.ErrRateLimited) {
+				until := im.recordRateLimitHit(kind)
+				slog.Error("importer: provider rate limited, backing off", "kind", kind, "until", until, "error", err)
+				return
+			}
+			// A single lookup miss/transient error here isn't worth logging
+			// on every fast-poll tick — the slower bulk refreshStatuses pass
+			// (with its mass-vanish guard) is what actually owns deciding a
+			// download is genuinely gone; this path only needs to notice real
+			// progress, not chase every edge case the bulk path already
+			// covers.
+			continue
+		}
+		im.clearRateLimitHit(kind)
+		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st})
+	}
 }
 
 // rateLimitCooldown reports whether kind is still within a backoff window

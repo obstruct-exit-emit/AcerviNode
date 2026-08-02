@@ -281,6 +281,36 @@ func (db *DB) ListDownloadsDueForRetry(ctx context.Context, state string, now ti
 	return out, rows.Err()
 }
 
+// ListActiveManagedDownloads returns every AddedViaArr download currently in
+// StateQueued or StateDownloading — the set internal/importer's fast,
+// per-download status poll targets (see Importer.refreshActiveDownloads), as
+// opposed to the slower bulk List() poll refreshStatuses runs for every kind
+// regardless of activity. Scoped to AddedViaArr only, matching
+// ListDownloadsDueForRetry: a Manual download is never auto-fetched, so
+// there's no latency-sensitive reason to poll it any faster than the bulk
+// refresh already does.
+func (db *DB) ListActiveManagedDownloads(ctx context.Context, kind Kind) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+downloadColumns+`
+		FROM downloads
+		WHERE kind = ? AND added_via = ? AND state IN (?, ?)
+		ORDER BY added_at`, string(kind), string(AddedViaArr), StateQueued, StateDownloading)
+	if err != nil {
+		return nil, fmt.Errorf("list active managed downloads: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // ListDownloadsEligibleForCleanup returns every AddedViaArr download in
 // StateReadyForImport whose completed_at is older than olderThan — see
 // internal/importer's retention/cleanup policy. Scoped to arr+

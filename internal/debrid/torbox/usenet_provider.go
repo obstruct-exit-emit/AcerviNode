@@ -2,6 +2,7 @@ package torbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -38,28 +39,17 @@ func (p *UsenetProvider) AddNZBURL(ctx context.Context, url string, opts debrid.
 	return debrid.ProviderDownloadID(id), nil
 }
 
-// idMatches compares a usenet download's list-endpoint numeric id against the
-// string id AcerviNode stored when it was created. Both createusenetdownload's
-// "usenetdownload_id" and mylist's "id" are JSON numbers — confirmed live
-// against a real account (the official SDK's docs describe the create
-// response's id as a string, which turned out not to match reality; see
-// CreateUsenetDownload) — so both are formatted the same way torrent ids are.
-func idMatches(numericID float64, wantID string) bool {
-	return formatID(numericID) == wantID
-}
-
+// Status is UsenetProvider's counterpart to Provider.Status — same
+// GetUsenetDownload id-filter/cost reasoning and ListQueued fallback.
 func (p *UsenetProvider) Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
-	downloads, err := p.client.ListUsenetDownloads(ctx)
+	d, err := p.client.GetUsenetDownload(ctx, string(id))
 	if err != nil {
-		return debrid.DownloadStatus{}, fmt.Errorf("torbox: usenet status: %w", err)
-	}
-	for _, d := range downloads {
-		if idMatches(d.ID, string(id)) {
-			return usenetToStatus(d), nil
+		if errors.Is(err, debrid.ErrRateLimited) {
+			return debrid.DownloadStatus{}, fmt.Errorf("torbox: usenet status: %w", err)
 		}
+	} else if d.ID != 0 {
+		return usenetToStatus(d), nil
 	}
-	// Not in mylist yet doesn't mean TorBox doesn't know about it — see
-	// Provider.Status's identical torrent-side reasoning and ListQueued.
 	if queued, err := p.client.ListQueued(ctx, "usenet"); err == nil {
 		for _, q := range queued {
 			if formatID(q.ID) == string(id) {
@@ -95,25 +85,26 @@ func (p *UsenetProvider) List(ctx context.Context) ([]debrid.DownloadStatus, err
 	return out, nil
 }
 
+// Files uses the same id-filtered GetUsenetDownload lookup Status does — see
+// Provider.Files' identical reasoning: the bulk listing can lag behind a
+// targeted lookup for a download that's only moments old.
 func (p *UsenetProvider) Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
-	downloads, err := p.client.ListUsenetDownloads(ctx)
+	d, err := p.client.GetUsenetDownload(ctx, string(id))
 	if err != nil {
 		return nil, fmt.Errorf("torbox: usenet files: %w", err)
 	}
-	for _, d := range downloads {
-		if idMatches(d.ID, string(id)) {
-			out := make([]debrid.DownloadFile, 0, len(d.Files))
-			for _, f := range d.Files {
-				out = append(out, debrid.DownloadFile{
-					ProviderFileID: formatID(f.ID),
-					Path:           f.Name,
-					SizeBytes:      int64(f.Size),
-				})
-			}
-			return out, nil
-		}
+	if d.ID == 0 {
+		return nil, fmt.Errorf("torbox: usenet download %s not found", id)
 	}
-	return nil, fmt.Errorf("torbox: usenet download %s not found", id)
+	out := make([]debrid.DownloadFile, 0, len(d.Files))
+	for _, f := range d.Files {
+		out = append(out, debrid.DownloadFile{
+			ProviderFileID: formatID(f.ID),
+			Path:           f.Name,
+			SizeBytes:      int64(f.Size),
+		})
+	}
+	return out, nil
 }
 
 func (p *UsenetProvider) RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error) {

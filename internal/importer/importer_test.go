@@ -30,6 +30,12 @@ type fakeProvider struct {
 	// concurrently.
 	listCalls atomic.Int32
 
+	statusErr error
+	// statusCalls is atomic for the same reason listCalls is — see
+	// refreshActiveDownloads tests, which run Run's fast-poll goroutine
+	// concurrently with the test's own assertions.
+	statusCalls atomic.Int32
+
 	// requestedAtMu guards requestedAt: TestTick_RespectsMaxConcurrent runs
 	// multiple downloads' RequestDownloadLink calls concurrently against the
 	// same shared fakeProvider, which a plain unsynchronized append can't
@@ -50,6 +56,23 @@ func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) 
 		return nil, f.listErr
 	}
 	return f.statuses, nil
+}
+
+// Status looks id up in the same statuses fixture List() serves — a fake
+// stand-in for TorBox's real id-filtered mylist lookup (see
+// torbox.Client.GetTorrent). Distinct listCalls/statusCalls counters let a
+// test tell the bulk path and the fast per-download path apart.
+func (f *fakeProvider) Status(_ context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
+	f.statusCalls.Add(1)
+	if f.statusErr != nil {
+		return debrid.DownloadStatus{}, f.statusErr
+	}
+	for _, st := range f.statuses {
+		if st.ID == id {
+			return st, nil
+		}
+	}
+	return debrid.DownloadStatus{}, fmt.Errorf("fakeProvider: status: %s not found", id)
 }
 
 func (f *fakeProvider) Files(_ context.Context, _ debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
@@ -858,6 +881,126 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	}
 }
 
+// TestRefreshActiveKind_OnlyChecksActiveManagedDownloads proves the fast
+// path's scoping: it calls Status() (not List()) exactly once per
+// queued/downloading Managed download, leaves a Manual download and an
+// already-provider_completed Managed download alone, and applies whatever
+// Status() reports through the same RefreshFromProvider logic the bulk path
+// uses.
+func TestRefreshActiveKind_OnlyChecksActiveManagedDownloads(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	managed := &database.Download{
+		ID: "managed", Provider: "faketorbox", ProviderDownloadID: "managed-id",
+		Kind: database.KindTorrent, Name: "Managed.Release", State: database.StateDownloading,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, managed); err != nil {
+		t.Fatalf("InsertDownload(managed) error = %v", err)
+	}
+
+	manual := &database.Download{
+		ID: "manual", Provider: "faketorbox", ProviderDownloadID: "manual-id",
+		Kind: database.KindTorrent, Name: "Manual.Release", State: database.StateDownloading,
+		AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, manual); err != nil {
+		t.Fatalf("InsertDownload(manual) error = %v", err)
+	}
+
+	alreadyDone := &database.Download{
+		ID: "done", Provider: "faketorbox", ProviderDownloadID: "done-id",
+		Kind: database.KindTorrent, Name: "Done.Release", State: database.StateProviderCompleted,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, alreadyDone); err != nil {
+		t.Fatalf("InsertDownload(alreadyDone) error = %v", err)
+	}
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "managed-id", Name: "Managed.Release", State: debrid.StateCompleted},
+	}}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+
+	if provider.statusCalls.Load() != 1 {
+		t.Errorf("Status() called %d times, want exactly 1 (only the active Managed row)", provider.statusCalls.Load())
+	}
+	if provider.listCalls.Load() != 0 {
+		t.Errorf("List() called %d times, want 0 — the fast path must never call the bulk endpoint", provider.listCalls.Load())
+	}
+
+	got, err := db.GetDownloadByID(ctx, "managed")
+	if err != nil {
+		t.Fatalf("GetDownloadByID(managed) error = %v", err)
+	}
+	if got.State != database.StateProviderCompleted {
+		t.Errorf("managed download state = %q, want provider_completed", got.State)
+	}
+}
+
+// TestRefreshActiveKind_RateLimit_SetsCooldownSharedWithBulkPath proves a
+// rate limit hit on the fast path's Status() call sets the exact same
+// per-kind cooldown refreshKind's List() path uses — the two paths back off
+// together rather than fighting over independent budgets.
+func TestRefreshActiveKind_RateLimit_SetsCooldownSharedWithBulkPath(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	active := &database.Download{
+		ID: "managed", Provider: "faketorbox", ProviderDownloadID: "managed-id",
+		Kind: database.KindTorrent, Name: "Managed.Release", State: database.StateDownloading,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, active); err != nil {
+		t.Fatalf("InsertDownload(active) error = %v", err)
+	}
+
+	provider := &fakeProvider{statusErr: fmt.Errorf("faketorbox: status: %w", debrid.ErrRateLimited)}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
+		t.Fatal("expected torrent kind to be cooling after a rate-limited Status() call")
+	}
+
+	// The bulk path must see (and respect) the same cooldown state — it
+	// should skip calling List() entirely rather than tripping the rate
+	// limit a second time.
+	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	if provider.listCalls.Load() != 0 {
+		t.Errorf("List() called %d times, want 0 — bulk path should have skipped due to the fast path's cooldown", provider.listCalls.Load())
+	}
+}
+
+// TestRefreshActiveKind_SkipsWhenCooling proves the fast path itself respects
+// an existing cooldown (e.g. one the bulk path just set) rather than calling
+// Status() anyway.
+func TestRefreshActiveKind_SkipsWhenCooling(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	active := &database.Download{
+		ID: "managed", Provider: "faketorbox", ProviderDownloadID: "managed-id",
+		Kind: database.KindTorrent, Name: "Managed.Release", State: database.StateDownloading,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, active); err != nil {
+		t.Fatalf("InsertDownload(active) error = %v", err)
+	}
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.recordRateLimitHit(database.KindTorrent)
+
+	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+	if provider.statusCalls.Load() != 0 {
+		t.Errorf("Status() called %d times, want 0 — already cooling down", provider.statusCalls.Load())
+	}
+}
+
 // TestRateLimitBackoffDuration_GrowsAndCaps proves the backoff formula
 // itself: the first hit gets exactly rateLimitBackoffBase (not double it),
 // it doubles each consecutive hit, and it never exceeds rateLimitBackoffMax
@@ -1317,6 +1460,49 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run() did not return after context cancellation")
+	}
+}
+
+// TestRun_FastPollRunsIndependentlyOfBulkInterval proves runFastPoll is
+// actually wired into Run(): with the bulk interval set far longer than
+// fastPollInterval, an active Managed download's Status() still gets called
+// on its own, faster cadence — the real-world bug this whole mechanism
+// exists to fix (see fastPollInterval's doc comment).
+func TestRun_FastPollRunsIndependentlyOfBulkInterval(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	active := &database.Download{
+		ID: "managed", Provider: "faketorbox", ProviderDownloadID: "managed-id",
+		Kind: database.KindTorrent, Name: "Managed.Release", State: database.StateDownloading,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, active); err != nil {
+		t.Fatalf("InsertDownload(active) error = %v", err)
+	}
+
+	provider := &fakeProvider{}
+	// A bulk interval much longer than fastPollInterval — if runFastPoll
+	// weren't wired in at all, statusCalls would still be 0 well after
+	// fastPollInterval has elapsed.
+	im := New(db, provider, nil, t.TempDir(), time.Hour, 5)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go im.Run(runCtx)
+
+	deadline := time.After(fastPollInterval + 2*time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if provider.statusCalls.Load() > 0 {
+				return // fast poll fired — success
+			}
+		case <-deadline:
+			t.Fatalf("Status() was never called within %v of Run() starting — fast poll isn't wired in", fastPollInterval+2*time.Second)
+		}
 	}
 }
 

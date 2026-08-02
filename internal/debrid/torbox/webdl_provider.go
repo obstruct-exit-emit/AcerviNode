@@ -2,6 +2,7 @@ package torbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -29,22 +30,23 @@ func (p *WebDownloadProvider) AddLink(ctx context.Context, link string, opts deb
 	return debrid.ProviderDownloadID(id), nil
 }
 
+// Status is WebDownloadProvider's counterpart to Provider.Status — same
+// GetWebDownload id-filter/cost reasoning. No ListQueued fallback: TorBox's
+// queue endpoint only recognizes "torrent"/"usenet" as a type, per its own
+// docs — Web Downloads doesn't have a separate pre-processing queue the same
+// way, so there's no equivalent check to make here.
 func (p *WebDownloadProvider) Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
-	downloads, err := p.client.ListWebDownloads(ctx)
+	d, err := p.client.GetWebDownload(ctx, string(id))
 	if err != nil {
-		return debrid.DownloadStatus{}, fmt.Errorf("torbox: web download status: %w", err)
-	}
-	for _, d := range downloads {
-		if formatID(d.ID) == string(id) {
-			return webDownloadToStatus(d), nil
+		if errors.Is(err, debrid.ErrRateLimited) {
+			return debrid.DownloadStatus{}, fmt.Errorf("torbox: web download status: %w", err)
 		}
+		return debrid.DownloadStatus{}, fmt.Errorf("torbox: web download %s not found: %w", id, err)
 	}
-	// Not in mylist yet doesn't mean TorBox doesn't know about it — see
-	// Provider.Status's identical torrent-side reasoning and ListQueued.
-	// TorBox's queue endpoint only recognizes "torrent"/"usenet" as a type,
-	// per its own docs — Web Downloads doesn't have a separate pre-processing
-	// queue the same way, so there's no equivalent check to make here.
-	return debrid.DownloadStatus{}, fmt.Errorf("torbox: web download %s not found", id)
+	if d.ID == 0 {
+		return debrid.DownloadStatus{}, fmt.Errorf("torbox: web download %s not found", id)
+	}
+	return webDownloadToStatus(d), nil
 }
 
 func (p *WebDownloadProvider) List(ctx context.Context) ([]debrid.DownloadStatus, error) {

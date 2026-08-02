@@ -566,6 +566,83 @@ func TestListDownloadsDueForRetry(t *testing.T) {
 	}
 }
 
+// TestListActiveManagedDownloads proves the fast-poll query's scoping:
+// only an AddedViaArr (Managed) download currently queued/downloading
+// qualifies — not a Manual download in the same states, not a Managed
+// download that's already moved past those states (provider_completed,
+// ready_for_import, error), and not a different kind.
+func TestListActiveManagedDownloads(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	managedQueued := newTestDownload(KindTorrent)
+	managedQueued.ProviderDownloadID = "managed-queued"
+	managedQueued.AddedVia = AddedViaArr
+	managedQueued.State = StateQueued
+	if err := db.InsertDownload(ctx, managedQueued); err != nil {
+		t.Fatalf("InsertDownload(managedQueued) error = %v", err)
+	}
+
+	managedDownloading := newTestDownload(KindTorrent)
+	managedDownloading.ProviderDownloadID = "managed-downloading"
+	managedDownloading.AddedVia = AddedViaArr
+	managedDownloading.State = StateDownloading
+	if err := db.InsertDownload(ctx, managedDownloading); err != nil {
+		t.Fatalf("InsertDownload(managedDownloading) error = %v", err)
+	}
+
+	managedCompleted := newTestDownload(KindTorrent)
+	managedCompleted.ProviderDownloadID = "managed-completed"
+	managedCompleted.AddedVia = AddedViaArr
+	managedCompleted.State = StateProviderCompleted
+	if err := db.InsertDownload(ctx, managedCompleted); err != nil {
+		t.Fatalf("InsertDownload(managedCompleted) error = %v", err)
+	}
+
+	manualDownloading := newTestDownload(KindTorrent)
+	manualDownloading.ProviderDownloadID = "manual-downloading"
+	manualDownloading.AddedVia = AddedViaManual
+	manualDownloading.State = StateDownloading
+	if err := db.InsertDownload(ctx, manualDownloading); err != nil {
+		t.Fatalf("InsertDownload(manualDownloading) error = %v", err)
+	}
+
+	managedOtherKind := newTestDownload(KindUsenet)
+	managedOtherKind.ProviderDownloadID = "managed-usenet-downloading"
+	managedOtherKind.AddedVia = AddedViaArr
+	managedOtherKind.State = StateDownloading
+	if err := db.InsertDownload(ctx, managedOtherKind); err != nil {
+		t.Fatalf("InsertDownload(managedOtherKind) error = %v", err)
+	}
+
+	active, err := db.ListActiveManagedDownloads(ctx, KindTorrent)
+	if err != nil {
+		t.Fatalf("ListActiveManagedDownloads() error = %v", err)
+	}
+	gotIDs := map[string]bool{}
+	for _, d := range active {
+		gotIDs[d.ID] = true
+	}
+	if !gotIDs[managedQueued.ID] {
+		t.Errorf("expected %q (managed, queued) to be active", managedQueued.ID)
+	}
+	if !gotIDs[managedDownloading.ID] {
+		t.Errorf("expected %q (managed, downloading) to be active", managedDownloading.ID)
+	}
+	if gotIDs[managedCompleted.ID] {
+		t.Errorf("expected %q (managed, already provider_completed) NOT to be active", managedCompleted.ID)
+	}
+	if gotIDs[manualDownloading.ID] {
+		t.Errorf("expected %q (manual) NOT to be active", manualDownloading.ID)
+	}
+	if gotIDs[managedOtherKind.ID] {
+		t.Errorf("expected %q (wrong kind) NOT to be active", managedOtherKind.ID)
+	}
+	if len(active) != 2 {
+		t.Errorf("active = %+v, want exactly 2 rows", active)
+	}
+}
+
 // TestListDownloadsEligibleForCleanup proves the cleanup query's scoping:
 // only a Managed (arr) download in ready_for_import older than the cutoff
 // qualifies — not one that's too recent, not a Manual download in the

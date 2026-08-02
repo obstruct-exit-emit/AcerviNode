@@ -207,6 +207,40 @@ func TestListTorrents(t *testing.T) {
 	}
 }
 
+// TestGetTorrent pins the id-filtered request shape (id + bypass_cache, no
+// limit — that's only meaningful for a multi-item response) and proves the
+// single-object response envelope decodes correctly, confirmed against
+// TorBox's official SDK docs (see Client.GetTorrent's doc comment).
+func TestGetTorrent(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/torrents/mylist" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("id"); got != "42" {
+			t.Errorf("id query param = %q, want 42", got)
+		}
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"id": 42, "hash": "abc123", "name": "Some.Release",
+				"size": 1024.0, "download_state": "downloading", "progress": 0.5,
+				"files": []map[string]any{{"id": 1, "name": "movie.mkv", "size": 1024.0}},
+			},
+		})
+	})
+
+	torrent, err := client.GetTorrent(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetTorrent() error = %v", err)
+	}
+	if torrent.Hash != "abc123" || torrent.Progress != 0.5 {
+		t.Errorf("torrent = %+v", torrent)
+	}
+}
+
 func TestCheckCachedTorrents(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/v1/api/torrents/checkcached" {
@@ -357,6 +391,34 @@ func TestListUsenetDownloads(t *testing.T) {
 	}
 }
 
+// TestGetUsenetDownload is GetTorrent's usenet counterpart — same id-filtered
+// request shape, single-object response envelope.
+func TestGetUsenetDownload(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/usenet/mylist" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("id"); got != "99" {
+			t.Errorf("id query param = %q, want 99", got)
+		}
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"id": 99, "name": "Some.NZB.Release", "download_state": "downloading", "progress": 0.25},
+		})
+	})
+
+	download, err := client.GetUsenetDownload(context.Background(), "99")
+	if err != nil {
+		t.Fatalf("GetUsenetDownload() error = %v", err)
+	}
+	if download.Name != "Some.NZB.Release" {
+		t.Errorf("download = %+v", download)
+	}
+}
+
 // TestCreateWebDownload pins createwebdownload's request shape — confirmed
 // live against the real API: application/x-www-form-urlencoded, not
 // multipart (this endpoint is link-only, no file upload option), link is the
@@ -498,6 +560,34 @@ func TestListWebDownloads(t *testing.T) {
 	}
 	if len(downloads[0].Files) != 1 || downloads[0].Files[0].ID != 0 {
 		t.Errorf("files = %+v", downloads[0].Files)
+	}
+}
+
+// TestGetWebDownload is GetTorrent's web-download counterpart — same
+// id-filtered request shape, single-object response envelope.
+func TestGetWebDownload(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/mylist" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("id"); got != "123" {
+			t.Errorf("id query param = %q, want 123", got)
+		}
+		if got := r.URL.Query().Get("bypass_cache"); got != "true" {
+			t.Errorf("bypass_cache query param = %q, want true", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"id": 123, "hash": "webhash", "name": "Dragon Ball Z", "download_state": "cached", "progress": 1.0},
+		})
+	})
+
+	download, err := client.GetWebDownload(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("GetWebDownload() error = %v", err)
+	}
+	if download.Name != "Dragon Ball Z" {
+		t.Errorf("download = %+v", download)
 	}
 }
 

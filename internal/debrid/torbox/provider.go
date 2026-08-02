@@ -2,6 +2,7 @@ package torbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -36,19 +37,25 @@ func (p *Provider) AddTorrentFile(ctx context.Context, filename string, data []b
 	return debrid.ProviderDownloadID(id), nil
 }
 
+// Status checks one specific torrent via mylist's id-filter (see
+// Client.GetTorrent) rather than listing the whole account — internal/importer's
+// fast per-download poll leans on this being cheap (see docs/providers.md), and
+// every call site that resolves a single just-added/just-checked download
+// (internal/api, internal/qbittorrent, internal/sabnzbd) benefits the same way.
+// A rate limit is surfaced immediately, matching List()'s own behavior — every
+// other GetTorrent failure (including a genuine "not found") falls through to
+// the same ListQueued fallback a full-list miss would, since a backlogged add
+// doesn't appear in mylist under any filter until it's promoted out of TorBox's
+// pre-processing queue.
 func (p *Provider) Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
-	torrents, err := p.client.ListTorrents(ctx)
+	t, err := p.client.GetTorrent(ctx, string(id))
 	if err != nil {
-		return debrid.DownloadStatus{}, fmt.Errorf("torbox: status: %w", err)
-	}
-	for _, t := range torrents {
-		if formatID(t.ID) == string(id) {
-			return torrentToStatus(t), nil
+		if errors.Is(err, debrid.ErrRateLimited) {
+			return debrid.DownloadStatus{}, fmt.Errorf("torbox: status: %w", err)
 		}
+	} else if t.ID != 0 {
+		return torrentToStatus(t), nil
 	}
-	// Not in mylist yet doesn't mean TorBox doesn't know about it — a
-	// backlogged add sits in a separate pre-processing queue until promoted
-	// (see ListQueued) and won't appear in mylist until then.
 	if queued, err := p.client.ListQueued(ctx, "torrent"); err == nil {
 		for _, q := range queued {
 			if formatID(q.ID) == string(id) {
@@ -87,17 +94,24 @@ func (p *Provider) List(ctx context.Context) ([]debrid.DownloadStatus, error) {
 	return out, nil
 }
 
+// Files uses the same id-filtered GetTorrent lookup Status does, not
+// ListTorrents+scan — found necessary live, not just for consistency: a
+// torrent moments old can report StateCompleted via the id-filtered lookup
+// before it's indexed into the bulk listing at all, which made Files()
+// spuriously fail with "not found" on internal/importer's very first fetch
+// attempt right after refreshActiveDownloads' fast poll (see
+// docs/providers.md) noticed it — self-healed via retry, but needlessly, and
+// only because Files() was still checking a different, slower-to-update view
+// of the same data.
 func (p *Provider) Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
-	torrents, err := p.client.ListTorrents(ctx)
+	t, err := p.client.GetTorrent(ctx, string(id))
 	if err != nil {
 		return nil, fmt.Errorf("torbox: files: %w", err)
 	}
-	for _, t := range torrents {
-		if formatID(t.ID) == string(id) {
-			return torrentFilesToDownloadFiles(t.Files), nil
-		}
+	if t.ID == 0 {
+		return nil, fmt.Errorf("torbox: torrent %s not found", id)
 	}
-	return nil, fmt.Errorf("torbox: torrent %s not found", id)
+	return torrentFilesToDownloadFiles(t.Files), nil
 }
 
 func (p *Provider) RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error) {

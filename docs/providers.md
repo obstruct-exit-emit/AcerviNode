@@ -216,6 +216,82 @@ for a fully completed download. Fixed by having it query the provider live
 too, the same way `internal/qbittorrent`'s own file listing already did —
 see CHANGELOG.
 
+### Fast per-download poll
+
+`refreshStatuses` alone means a download's local state only ever advances on
+an `import_interval_seconds` boundary (10s by default) — a download that
+finishes moments after a tick simply waits for the next one. A controlled,
+same-account, same-content comparison against
+[rdt-client](https://github.com/rogerfar/rdt-client) — a reference debrid
+download client — via its actual Managed-equivalent auto-fetch path (not its
+on-demand one, which isn't a fair comparison) found AcerviNode taking roughly
+2x longer to notice an already-cached file was ready and get it onto local
+disk. Timing instrumentation pinned the entire gap to this exact mechanism —
+the file-fetch step itself measured in microseconds once triggered.
+
+The obvious fix — shorten `import_interval_seconds` — was tried directly
+against a real account and rejected: even a 2-second interval, still doing a
+full `List()` for all three kinds every tick, immediately tripped TorBox's
+real rate limit. Reading rdt-client's own source confirmed why this can't be
+the fix: its real torrent-status loop runs every **1 second** flat
+(`TaskRunner.cs`), not the 10-second "Check Interval" its own UI shows (that
+setting gates a different, unrelated background service) — meaning it
+already polls 10x more often than AcerviNode's default, the same direction a
+naive fix would have pushed, just further into rate-limit territory.
+
+The actual fix borrows a different strategy, found by reading
+[decypharr](https://github.com/sirrobot01/decypharr)'s own TorBox client
+(`pkg/debrid/providers/torbox/torbox.go`): `GetTorrent`/`UpdateTorrent` call
+`mylist` filtered to one specific `id`, not the full account listing.
+Confirmed against TorBox's own official SDK docs (not guessed): passing `id`
+to `mylist`/`usenet/mylist`/`webdl/mylist` "will return an object rather than
+list" — a single-item lookup TorBox can presumably serve far more cheaply
+than listing everything, the same principle decypharr's own polling design
+leans on (its bulk `TorrentsRefreshInterval` defaults to a lazy 10 minutes;
+per-active-item status checks via this id-filtered call are what actually
+keep it responsive).
+
+`Client.GetTorrent`/`GetUsenetDownload`/`GetWebDownload` implement this;
+`Provider.Status`/`UsenetProvider.Status`/`WebDownloadProvider.Status` (already
+part of `debrid.TorrentProvider`/`UsenetProvider`, previously implemented as a
+full `List()` plus a linear scan) now use them directly — a free speedup for
+every existing call site that resolves one specific download's status right
+after an add (`internal/api`, `internal/qbittorrent`, `internal/sabnzbd`), not
+just the new poll below.
+
+**`Files` needed the same change, found live, not just for consistency:**
+the first real end-to-end test of the fast poll hit a genuine race —
+`refreshActiveDownloads` noticed a brand-new torrent as `StateCompleted`
+within about a second of adding it (the id-filtered lookup genuinely does
+reflect current state that fast), but `processDownload`'s very next step,
+`Files()`, was still built on `ListTorrents()` + a linear scan — TorBox's
+*bulk* listing hadn't indexed the same brand-new torrent into itself yet,
+so it failed outright with "not found." Not a bug in the fast poll itself;
+the bulk listing and the id-filtered lookup are just genuinely different
+views with different latency, and `Files()` was checking the slower one.
+The retry/backoff path caught it (attempt 2 succeeded once the bulk listing
+caught up), but needlessly — `Provider.Files`/`UsenetProvider.Files`/
+`WebDownloadProvider.Files` now use the same targeted `Get*` lookup `Status`
+does, closing the gap at the source instead of leaning on retry to paper
+over it.
+
+`Importer.runFastPoll` runs `refreshActiveDownloads` on its own goroutine and
+its own ticker (`fastPollInterval`, 3s — deliberately not a config knob, see
+its doc comment), independent of `Run`'s own bulk-tick loop so a slow file
+fetch mid-`Tick` never delays noticing a *different* download's completion.
+Each tick, for every kind, it fetches only the Managed (`arr`) downloads
+currently `queued`/`downloading` (`database.ListActiveManagedDownloads` —
+manual downloads and anything already past those states are never fast-polled,
+since nothing's waiting on them any faster) and checks each one individually
+via `Status`, applying the result through the exact same
+`database.RefreshFromProvider` the bulk path uses — fed one row and one status
+instead of a whole account's worth, so there's no second state-transition
+implementation to keep in sync. A rate limit hit here records against the
+same per-kind cooldown state `refreshKind`'s bulk `List()` path uses (see
+below) — both paths share one provider-side budget, so either one backing off
+backs off the other too, rather than each tracking (and potentially fighting
+over) an independent one.
+
 ### Provider rate-limit backoff
 
 `refreshKind`'s own `List` call, before this, retried on every single tick
