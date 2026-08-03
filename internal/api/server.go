@@ -134,6 +134,10 @@ type GeneralInfo struct {
 	// poll cadence — see config.Config.FastPollIntervalSeconds's own doc
 	// comment.
 	FastPollIntervalSeconds int `json:"fast_poll_interval_seconds"`
+	// ProviderRequestTimeoutSeconds bounds a single call to the debrid
+	// provider's own API — see config.Config.ProviderRequestTimeoutSeconds's
+	// own doc comment.
+	ProviderRequestTimeoutSeconds int `json:"provider_request_timeout_seconds"`
 	// TLSEnabled/TLSPort/TLSCertFile/TLSKeyFile mirror config.Config's own
 	// TLS fields exactly — see docs/providers.md's TLS section. Cert/key
 	// file overrides are config/env-only (no editable UI field), the same
@@ -152,21 +156,22 @@ type GeneralInfo struct {
 // every other field applies immediately; see Settings.UpdateGeneral's
 // RestartRequired return value.
 type GeneralUpdate struct {
-	Port                      int    `json:"port"`
-	DataDir                   string `json:"data_dir"`
-	DownloadDir               string `json:"download_dir"`
-	LogLevel                  string `json:"log_level"`
-	ImportIntervalSeconds     int    `json:"import_interval_seconds"`
-	ImportMaxRetries          int    `json:"import_max_retries"`
-	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
-	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
-	CleanupAfterDays          int    `json:"cleanup_after_days"`
-	DownloadDirMode           string `json:"download_dir_mode"`
-	FastPollIntervalSeconds   int    `json:"fast_poll_interval_seconds"`
-	TLSEnabled                bool   `json:"tls_enabled"`
-	TLSPort                   int    `json:"tls_port"`
-	TLSCertFile               string `json:"tls_cert_file"`
-	TLSKeyFile                string `json:"tls_key_file"`
+	Port                          int    `json:"port"`
+	DataDir                       string `json:"data_dir"`
+	DownloadDir                   string `json:"download_dir"`
+	LogLevel                      string `json:"log_level"`
+	ImportIntervalSeconds         int    `json:"import_interval_seconds"`
+	ImportMaxRetries              int    `json:"import_max_retries"`
+	MaxConcurrentDownloads        int    `json:"max_concurrent_downloads"`
+	ImportFetchTimeoutSeconds     int    `json:"import_fetch_timeout_seconds"`
+	CleanupAfterDays              int    `json:"cleanup_after_days"`
+	DownloadDirMode               string `json:"download_dir_mode"`
+	FastPollIntervalSeconds       int    `json:"fast_poll_interval_seconds"`
+	ProviderRequestTimeoutSeconds int    `json:"provider_request_timeout_seconds"`
+	TLSEnabled                    bool   `json:"tls_enabled"`
+	TLSPort                       int    `json:"tls_port"`
+	TLSCertFile                   string `json:"tls_cert_file"`
+	TLSKeyFile                    string `json:"tls_key_file"`
 }
 
 // Settings lets the API read and change configuration live, without a

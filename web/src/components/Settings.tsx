@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   getCategories,
   getGeneralSettings,
   getProviderSettings,
+  getStatus,
   getTorBoxAccount,
   regenerateApiKey,
   regenerateCertificate,
@@ -17,10 +18,11 @@ import {
   type GeneralSettings,
   type GeneralUpdateInput,
   type ProviderSettings,
+  type StatusInfo,
   type TorBoxAccount,
 } from '../api'
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
-import { formatBytes } from '../format'
+import { formatBytes, formatRelativeTime } from '../format'
 import { SecuritySettings } from './SecuritySettings'
 
 // Settings groups, *arr-style (matching LibriNode's own SettingsView): pages
@@ -162,6 +164,15 @@ export function Settings({ apiKey }: Props) {
     kind: 'idle',
   })
   const [account, setAccount] = useState<TorBoxAccount | null>(null)
+  // Whether the (separately-fetched, potentially slow — see load()) account
+  // status call is still in flight, so the Provider tab can say so instead
+  // of just silently showing nothing until it resolves.
+  const [accountLoading, setAccountLoading] = useState(false)
+  // internal/importer's own health signals (tick liveness, per-kind
+  // rate-limit cooldowns, per-kind error counts) — a fast, purely local
+  // call, part of the main load() below rather than fetched separately the
+  // way account status is.
+  const [health, setHealth] = useState<StatusInfo | null>(null)
   const [categories, setCategories] = useState<Categories | null>(null)
   const [newOverrideCategory, setNewOverrideCategory] = useState('')
   const [newOverridePath, setNewOverridePath] = useState('')
@@ -175,10 +186,14 @@ export function Settings({ apiKey }: Props) {
 
   async function load() {
     try {
-      const [providerSettings, generalSettings, cats] = await Promise.all([
+      const [providerSettings, generalSettings, cats, statusInfo] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
+        // Fast and purely local (no live provider network call — see
+        // getStatus's own doc comment), unlike getTorBoxAccount below, so
+        // it's safe to bundle here with everything else.
+        getStatus(apiKey),
       ])
       setSettings(providerSettings)
       setGeneral(generalSettings)
@@ -194,6 +209,7 @@ export function Settings({ apiKey }: Props) {
         cleanup_after_days: generalSettings.cleanup_after_days,
         download_dir_mode: generalSettings.download_dir_mode,
         fast_poll_interval_seconds: generalSettings.fast_poll_interval_seconds,
+        provider_request_timeout_seconds: generalSettings.provider_request_timeout_seconds,
         tls_enabled: generalSettings.tls_enabled,
         tls_port: generalSettings.tls_port,
         // Round-tripped unchanged, same as data_dir — neither has an
@@ -202,6 +218,7 @@ export function Settings({ apiKey }: Props) {
         tls_key_file: generalSettings.tls_key_file,
       })
       setCategories(cats)
+      setHealth(statusInfo)
     } catch {
       // The dashboard's own polling will surface auth/connectivity errors;
       // this view just leaves the form usable either way.
@@ -217,10 +234,13 @@ export function Settings({ apiKey }: Props) {
     // anything to do with TorBox's own health — sat blank that whole time.
     // Fetched independently so the rest of the page is usable immediately
     // regardless of how slow or broken the provider connection is right now.
+    setAccountLoading(true)
     try {
       setAccount(await getTorBoxAccount(apiKey))
     } catch {
       // Same treatment as the block above — routine, not fatal.
+    } finally {
+      setAccountLoading(false)
     }
   }
 
@@ -669,9 +689,41 @@ export function Settings({ apiKey }: Props) {
               <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
             </dl>
           )}
+          {/* configured but not yet resolved (or currently re-checking) —
+              account itself doesn't distinguish "never fetched" from
+              "fetched, unavailable", so this only shows while a fetch is
+              actually in flight, not just whenever account is null. */}
+          {configured && accountLoading && <p className="settings-help">Checking account status…</p>}
+
+          {health && (
+            <Section
+              title="Status"
+              help="Whether AcerviNode's own background polling is actually alive and making progress — distinct from the account panel above, which is about the provider's own account state."
+            >
+              <dl className="detail-meta">
+                <dt>Background polling</dt>
+                <dd>{health.last_tick_at ? `last ran ${formatRelativeTime(health.last_tick_at)}` : 'never run yet'}</dd>
+                {(['torrent', 'usenet', 'webdl'] as const).map((kind) => {
+                  const k = health.kinds[kind]
+                  if (!k) return null
+                  const rateLimited = k.rate_limited_until && new Date(k.rate_limited_until).getTime() > Date.now()
+                  return (
+                    <Fragment key={kind}>
+                      <dt>{kind}</dt>
+                      <dd>
+                        {k.last_successful_list_at ? `last synced ${formatRelativeTime(k.last_successful_list_at)}` : 'never synced yet'}
+                        {rateLimited && <> · rate-limited until {new Date(k.rate_limited_until as string).toLocaleTimeString()}</>}
+                        {k.error_count > 0 && <> · {k.error_count} in error</>}
+                      </dd>
+                    </Fragment>
+                  )
+                })}
+              </dl>
+            </Section>
+          )}
 
           {form && (
-            <Section title="Polling" help="How often AcerviNode talks to the provider itself. Applies immediately, no restart needed.">
+            <Section title="Polling & timeout" help="How often, and how patiently, AcerviNode talks to the provider itself. Applies immediately, no restart needed.">
               <form className="general-form" onSubmit={handleGeneralSubmit}>
                 <label>
                   Import interval (seconds)
@@ -691,6 +743,15 @@ export function Settings({ apiKey }: Props) {
                     onChange={(e) => setForm({ ...form, fast_poll_interval_seconds: Number(e.target.value) })}
                   />
                 </label>
+                <label>
+                  Request timeout (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.provider_request_timeout_seconds}
+                    onChange={(e) => setForm({ ...form, provider_request_timeout_seconds: Number(e.target.value) })}
+                  />
+                </label>
                 <button type="submit" disabled={generalStatus.kind === 'saving'}>
                   {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
                 </button>
@@ -701,7 +762,11 @@ export function Settings({ apiKey }: Props) {
                 is noticed within a few seconds instead of waiting for the next full import interval — separate
                 from (and much cheaper than) the import interval, since it only ever checks downloads already known
                 to be in progress. The default (3s) was tuned against a real provider to stay responsive without
-                risking a rate limit; raise it if you routinely have many downloads active at once.
+                risking a rate limit; raise it if you routinely have many downloads active at once. Request timeout
+                bounds a single call to the provider's own API (unlike the fetch idle timeout under Import &amp;
+                cleanup, this one covers small API calls, not file downloads, so it's a plain total deadline) —
+                lower it to fail faster during a provider outage, raise it if you're seeing timeouts on a slow
+                connection to the provider.
               </p>
               {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
               {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}

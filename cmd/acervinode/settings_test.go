@@ -302,7 +302,8 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
 		CleanupAfterDays: 14,
 		DownloadDirMode:  "0750", FastPollIntervalSeconds: 5,
-		TLSPort: cfg.TLSPort, // unchanged — no restart needed
+		ProviderRequestTimeoutSeconds: 45,
+		TLSPort:                       cfg.TLSPort, // unchanged — no restart needed
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -348,8 +349,71 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 ||
 		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 ||
 		reloaded.CleanupAfterDays != 14 || reloaded.DownloadDirMode != "0750" ||
-		reloaded.FastPollIntervalSeconds != 5 {
+		reloaded.FastPollIntervalSeconds != 5 || reloaded.ProviderRequestTimeoutSeconds != 45 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
+	}
+}
+
+// TestLiveSettings_UpdateGeneral_RebuildsProvidersOnTimeoutChange proves a
+// changed provider_request_timeout_seconds actually takes effect live: it's
+// baked into each torbox.Client at construction (see
+// torbox.WithRequestTimeout), unlike every other Importer-facing field
+// above, which can just be pushed into an already-live object — so this
+// needs UpdateGeneral to rebuild all three Dynamic providers from the
+// current key, the same as SetTorBoxAPIKey already does on every key
+// change. This only proves the plumbing doesn't drop the provider or need a
+// restart — the actual per-request deadline behavior itself is
+// TestRequestTimeout_BoundsEveryCall's job, in the torbox package, where a
+// fake HTTP server can be injected; liveSettings always points at the real
+// TorBox base URL, so there's nothing to inject a slow server into here.
+func TestLiveSettings_UpdateGeneral_RebuildsProvidersOnTimeoutChange(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+
+	ctx := context.Background()
+	if err := settings.SetTorBoxAPIKey(ctx, "a-real-looking-key"); err != nil {
+		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
+	}
+	if !torrentDyn.Configured() {
+		t.Fatal("torrentDyn.Configured() = false after SetTorBoxAPIKey, want true")
+	}
+
+	general := settings.General()
+	general.ProviderRequestTimeoutSeconds = 45
+	update := api.GeneralUpdate{
+		Port: general.Port, DataDir: general.DataDir, DownloadDir: general.DownloadDir,
+		LogLevel: general.LogLevel, ImportIntervalSeconds: general.ImportIntervalSeconds, ImportMaxRetries: general.ImportMaxRetries,
+		MaxConcurrentDownloads: general.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: general.ImportFetchTimeoutSeconds,
+		CleanupAfterDays: general.CleanupAfterDays, DownloadDirMode: general.DownloadDirMode,
+		FastPollIntervalSeconds: general.FastPollIntervalSeconds, ProviderRequestTimeoutSeconds: general.ProviderRequestTimeoutSeconds,
+		TLSEnabled: general.TLSEnabled, TLSPort: general.TLSPort, TLSCertFile: general.TLSCertFile, TLSKeyFile: general.TLSKeyFile,
+	}
+	restartRequired, err := settings.UpdateGeneral(ctx, update)
+	if err != nil {
+		t.Fatalf("UpdateGeneral() error = %v", err)
+	}
+	if restartRequired {
+		t.Error("restartRequired = true, want false (provider_request_timeout_seconds applies live)")
+	}
+
+	// Still configured, with three fresh providers under the hood (a
+	// panic/nil here would mean the rebuild dropped one) — Configured()
+	// itself is the only thing observable from outside the debrid package
+	// without a real network call.
+	if !torrentDyn.Configured() || !usenetDyn.Configured() || !webDownloadDyn.Configured() {
+		t.Error("Dynamic providers should all three stay configured after a timeout-only UpdateGeneral")
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if reloaded.ProviderRequestTimeoutSeconds != 45 {
+		t.Errorf("reloaded config's provider_request_timeout_seconds = %d, want 45", reloaded.ProviderRequestTimeoutSeconds)
 	}
 }
 
@@ -369,6 +433,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.
 		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
 		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
 		DownloadDirMode: cfg.DownloadDirMode, FastPollIntervalSeconds: cfg.FastPollIntervalSeconds,
+		ProviderRequestTimeoutSeconds: cfg.ProviderRequestTimeoutSeconds,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -419,7 +484,8 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForTLSChanges(t *testing.T) {
 		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
 		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
 		DownloadDirMode: cfg.DownloadDirMode, FastPollIntervalSeconds: cfg.FastPollIntervalSeconds,
-		TLSEnabled: true, TLSPort: cfg.TLSPort,
+		ProviderRequestTimeoutSeconds: cfg.ProviderRequestTimeoutSeconds,
+		TLSEnabled:                    true, TLSPort: cfg.TLSPort,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)

@@ -54,23 +54,40 @@ func (e *APIError) Unwrap() error {
 	return nil
 }
 
+// defaultRequestTimeout is NewClient's starting value — see
+// WithRequestTimeout and config.Config.ProviderRequestTimeoutSeconds, which
+// is what actually keeps this live-changeable rather than fixed at
+// construction (cmd/acervinode's liveSettings rebuilds a fresh Client via
+// this option whenever the setting changes, the same way it already does
+// for the API key itself).
+const defaultRequestTimeout = 30 * time.Second
+
 // Client is a low-level TorBox API client: one HTTP call in, one decoded
 // response out. It knows nothing about debrid.TorrentProvider or
 // debrid.UsenetProvider — see provider.go and usenet_provider.go for the
 // adapters that translate between the two.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	baseURL        string
+	apiKey         string
+	httpClient     *http.Client
+	requestTimeout time.Duration
 }
 
 // NewClient builds a Client authenticated with apiKey against the real
 // TorBox API. Use the With* options to point it at a test server instead.
 func NewClient(apiKey string, opts ...Option) *Client {
 	c := &Client{
-		baseURL:    defaultBaseURL,
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		baseURL: defaultBaseURL,
+		apiKey:  apiKey,
+		// No client-wide Timeout — do() derives a per-request deadline from
+		// requestTimeout instead, the same reasoning as
+		// internal/importer.fetchFile's own per-request context.WithTimeout:
+		// a *http.Client's own Timeout field is fixed at construction, and
+		// this needs to be a fresh, possibly-different value on every Client
+		// rebuild (a changed provider_request_timeout_seconds setting) without
+		// requiring anything downstream to know the client was rebuilt.
+		httpClient:     &http.Client{},
+		requestTimeout: defaultRequestTimeout,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -90,6 +107,18 @@ func WithBaseURL(baseURL string) Option {
 // WithHTTPClient overrides the underlying *http.Client.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) { c.httpClient = hc }
+}
+
+// WithRequestTimeout overrides how long a single TorBox API call (list,
+// status, add, delete, account — every one of them, all funneled through
+// do()) may run before being cancelled. Unlike internal/importer's own
+// idle/stall fetch timeout, this is a plain total-request deadline: TorBox
+// API responses are small JSON payloads, not multi-gigabyte files, so
+// there's no legitimate "slow but actively trickling for 30+ seconds"
+// scenario to protect against the way there is for a file download — a
+// flat deadline is the right tool here.
+func WithRequestTimeout(d time.Duration) Option {
+	return func(c *Client) { c.requestTimeout = d }
 }
 
 func (c *Client) url(path string) string {
@@ -183,7 +212,10 @@ func (c *Client) doMultipart(ctx context.Context, path string, fields map[string
 }
 
 func (c *Client) do(req *http.Request, out any) error {
-	resp, err := c.httpClient.Do(req)
+	ctx, cancel := context.WithTimeout(req.Context(), c.requestTimeout)
+	defer cancel()
+
+	resp, err := c.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("torbox request: %w", err)
 	}

@@ -217,8 +217,11 @@ func parseLogLevel(level string) slog.Level {
 // newTorBoxProviders is the one place a concrete provider package (torbox) is
 // referenced outside its own package — adding Real-Debrid later means adding
 // a case here (and in liveSettings), nothing else (see docs/providers.md).
-func newTorBoxProviders(apiKey string) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
-	return torbox.NewProvider(apiKey), torbox.NewUsenetProvider(apiKey), torbox.NewWebDownloadProvider(apiKey)
+// requestTimeout is applied to every one of the three providers' underlying
+// *torbox.Client — see torbox.WithRequestTimeout.
+func newTorBoxProviders(apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
+	opt := torbox.WithRequestTimeout(requestTimeout)
+	return torbox.NewProvider(apiKey, opt), torbox.NewUsenetProvider(apiKey, opt), torbox.NewWebDownloadProvider(apiKey, opt)
 }
 
 // setupProviders builds the Dynamic*Provider wrappers that are the single
@@ -234,7 +237,7 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.DynamicTorre
 	usenetDyn := debrid.NewDynamicUsenetProvider("torbox")
 	webDownloadDyn := debrid.NewDynamicWebDownloadProvider("torbox")
 	if torboxCfg, ok := cfg.Providers["torbox"]; ok && torboxCfg.APIKey != "" {
-		tp, up, wp := newTorBoxProviders(torboxCfg.APIKey)
+		tp, up, wp := newTorBoxProviders(torboxCfg.APIKey, time.Duration(cfg.ProviderRequestTimeoutSeconds)*time.Second)
 		torrentDyn.Set(tp)
 		usenetDyn.Set(up)
 		webDownloadDyn.Set(wp)

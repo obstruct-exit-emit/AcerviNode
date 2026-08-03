@@ -102,6 +102,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **New `provider_request_timeout_seconds` setting, plus two more
+  Provider-tab additions.** Three related follow-ups from the same TorBox
+  outage that motivated the idle-timeout fix above:
+  - The debrid provider's own API calls (list, status, add, delete,
+    account) were bounded by a hardcoded 30s `http.Client.Timeout` in
+    `internal/debrid/torbox`, with no way to change it at all. Now a real,
+    live-editable setting (`provider_request_timeout_seconds`, default 30s)
+    — unlike the fetch timeout above, this one stays a plain
+    **total-request** deadline on purpose: a provider API response is a
+    small JSON payload, not a multi-gigabyte file, so there's no
+    legitimate "slow but actively trickling" case to protect against here.
+    Changing it rebuilds the provider from the current key with the new
+    timeout baked in, the same as changing the key itself already does —
+    no restart needed.
+  - The Provider tab now shows a **Status** panel — `GET /api/v1/status`'s
+    data (background-polling liveness, each kind's last successful sync,
+    any active rate-limit cooldown, error counts), previously only
+    reachable via `curl`.
+  - The account panel shows **"Checking account status…"** while that
+    (separately-fetched, sometimes slow — see the fix above) call is still
+    in flight, instead of just silently showing nothing until it resolves
+    or forever if it never does.
+
 - **`import_interval_seconds`/`fast_poll_interval_seconds` moved from
   Settings → General to Settings → Provider**, alongside the TorBox account
   status and connection test — both are about how often AcerviNode polls

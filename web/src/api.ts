@@ -240,6 +240,10 @@ export interface GeneralSettings {
   // import_interval_seconds's own full-account listing — see
   // docs/providers.md.
   fast_poll_interval_seconds: number
+  // provider_request_timeout_seconds bounds a single call to the debrid
+  // provider's own API (list, status, add, delete, account) — a plain
+  // total-request deadline, unlike fetch_timeout above (an idle one).
+  provider_request_timeout_seconds: number
   // tls_cert_file/tls_key_file are config/env-only (no editable UI field —
   // same treatment data_dir already gets) but still reported here for
   // transparency, the same way data_dir is.
@@ -272,6 +276,7 @@ export interface GeneralUpdateInput {
   cleanup_after_days: number
   download_dir_mode: string
   fast_poll_interval_seconds: number
+  provider_request_timeout_seconds: number
   tls_enabled: boolean
   tls_port: number
   tls_cert_file: string
@@ -372,6 +377,27 @@ export interface TorBoxAccount {
 
 export function getTorBoxAccount(apiKey: string): Promise<TorBoxAccount> {
   return request('/api/v1/settings/account', apiKey)
+}
+
+// StatusInfo is GET /api/v1/status's response — internal/importer's own
+// health signals (tick liveness, per-kind rate-limit cooldowns, per-kind
+// error counts), distinct from TorBoxAccount above (the provider's own
+// account state, e.g. cooldown_until) — this answers "is polling itself
+// working," not "is the provider account restricted." A fast, purely local
+// call (no live network call to the provider), unlike getTorBoxAccount.
+export interface KindStatus {
+  last_successful_list_at?: string
+  rate_limited_until?: string
+  error_count: number
+}
+
+export interface StatusInfo {
+  last_tick_at?: string
+  kinds: Record<string, KindStatus>
+}
+
+export function getStatus(apiKey: string): Promise<StatusInfo> {
+  return request('/api/v1/status', apiKey)
 }
 
 // --- Auth: optional login accounts on top of the API key, which keeps

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/acervinode/acervinode/internal/debrid"
 )
@@ -701,6 +702,43 @@ func TestDo_NonSuccessHTTPStatus(t *testing.T) {
 	}
 	if !strings.Contains(apiErr.Detail, "invalid api key") {
 		t.Errorf("Detail = %q", apiErr.Detail)
+	}
+}
+
+// TestNewClient_DefaultsToDefaultRequestTimeout proves NewClient starts with
+// defaultRequestTimeout when WithRequestTimeout isn't given — matches the
+// value config.Config.ProviderRequestTimeoutSeconds defaults to.
+func TestNewClient_DefaultsToDefaultRequestTimeout(t *testing.T) {
+	client := NewClient("test-api-key")
+	if client.requestTimeout != defaultRequestTimeout {
+		t.Errorf("requestTimeout = %v, want %v", client.requestTimeout, defaultRequestTimeout)
+	}
+}
+
+// TestRequestTimeout_BoundsEveryCall proves WithRequestTimeout is actually
+// enforced — a server that never responds at all causes the call to fail
+// (rather than hang) once the configured timeout elapses. Every do* method
+// (doGet/doPostJSON/doPostForm/doMultipart) funnels through the same do(),
+// so this one path covers all of them.
+func TestRequestTimeout_BoundsEveryCall(t *testing.T) {
+	blockForever := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-blockForever // never responds within the test's lifetime
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(blockForever) })
+
+	client := NewClient("test-api-key", WithBaseURL(server.URL), WithRequestTimeout(50*time.Millisecond))
+
+	start := time.Now()
+	err := client.doGet(context.Background(), "/some/path", nil, &struct{}{})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("doGet() error = nil, want a timeout error")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("doGet() took %v, want it to give up around the 50ms request timeout, not hang", elapsed)
 	}
 }
 

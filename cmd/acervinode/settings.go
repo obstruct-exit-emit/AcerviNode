@@ -181,7 +181,7 @@ func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(apiKey)
+	torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
 	s.torrentDyn.Set(torrentProvider)
 	s.usenetDyn.Set(usenetProvider)
 	s.webDownloadDyn.Set(webDownloadProvider)
@@ -260,22 +260,23 @@ func (s *liveSettings) General() api.GeneralInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return api.GeneralInfo{
-		APIKey:                    s.cfg.APIKey,
-		Port:                      s.cfg.Port,
-		DataDir:                   s.cfg.DataDir,
-		DownloadDir:               s.cfg.DownloadDir,
-		LogLevel:                  s.cfg.LogLevel,
-		ImportIntervalSeconds:     s.cfg.ImportIntervalSeconds,
-		ImportMaxRetries:          s.cfg.ImportMaxRetries,
-		MaxConcurrentDownloads:    s.cfg.MaxConcurrentDownloads,
-		ImportFetchTimeoutSeconds: s.cfg.ImportFetchTimeoutSeconds,
-		CleanupAfterDays:          s.cfg.CleanupAfterDays,
-		DownloadDirMode:           s.cfg.DownloadDirMode,
-		FastPollIntervalSeconds:   s.cfg.FastPollIntervalSeconds,
-		TLSEnabled:                s.cfg.TLSEnabled,
-		TLSPort:                   s.cfg.TLSPort,
-		TLSCertFile:               s.cfg.TLSCertFile,
-		TLSKeyFile:                s.cfg.TLSKeyFile,
+		APIKey:                        s.cfg.APIKey,
+		Port:                          s.cfg.Port,
+		DataDir:                       s.cfg.DataDir,
+		DownloadDir:                   s.cfg.DownloadDir,
+		LogLevel:                      s.cfg.LogLevel,
+		ImportIntervalSeconds:         s.cfg.ImportIntervalSeconds,
+		ImportMaxRetries:              s.cfg.ImportMaxRetries,
+		MaxConcurrentDownloads:        s.cfg.MaxConcurrentDownloads,
+		ImportFetchTimeoutSeconds:     s.cfg.ImportFetchTimeoutSeconds,
+		CleanupAfterDays:              s.cfg.CleanupAfterDays,
+		DownloadDirMode:               s.cfg.DownloadDirMode,
+		FastPollIntervalSeconds:       s.cfg.FastPollIntervalSeconds,
+		ProviderRequestTimeoutSeconds: s.cfg.ProviderRequestTimeoutSeconds,
+		TLSEnabled:                    s.cfg.TLSEnabled,
+		TLSPort:                       s.cfg.TLSPort,
+		TLSCertFile:                   s.cfg.TLSCertFile,
+		TLSKeyFile:                    s.cfg.TLSKeyFile,
 	}
 }
 
@@ -304,6 +305,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.CleanupAfterDays = update.CleanupAfterDays
 	candidate.DownloadDirMode = update.DownloadDirMode
 	candidate.FastPollIntervalSeconds = update.FastPollIntervalSeconds
+	candidate.ProviderRequestTimeoutSeconds = update.ProviderRequestTimeoutSeconds
 	candidate.TLSEnabled = update.TLSEnabled
 	candidate.TLSPort = update.TLSPort
 	candidate.TLSCertFile = update.TLSCertFile
@@ -315,6 +317,12 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	restartRequired := candidate.Port != s.cfg.Port || candidate.DataDir != s.cfg.DataDir ||
 		candidate.TLSEnabled != s.cfg.TLSEnabled || candidate.TLSPort != s.cfg.TLSPort ||
 		candidate.TLSCertFile != s.cfg.TLSCertFile || candidate.TLSKeyFile != s.cfg.TLSKeyFile
+
+	// Rebuilding the providers needs the current TorBox key, which is only
+	// ever stored in cfg.Providers, not part of this candidate/update at
+	// all — captured before *s.cfg is overwritten below.
+	requestTimeoutChanged := candidate.ProviderRequestTimeoutSeconds != s.cfg.ProviderRequestTimeoutSeconds
+	torboxAPIKey := s.cfg.Providers["torbox"].APIKey
 
 	*s.cfg = candidate
 	if err := s.cfg.Save(s.configPath); err != nil {
@@ -333,6 +341,18 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 			s.imp.SetDirMode(dirMode)
 		}
 		s.imp.SetFastPollInterval(time.Duration(candidate.FastPollIntervalSeconds) * time.Second)
+	}
+	// Unlike every other field above, a changed provider request timeout
+	// can't just be pushed into an existing live object — it's baked into
+	// each torbox.Client at construction (see torbox.WithRequestTimeout).
+	// Rebuilding all three providers from the current key is the same thing
+	// SetTorBoxAPIKey already does on every key change; this just does it
+	// for a timeout-only change too, so it doesn't need its own restart.
+	if requestTimeoutChanged && torboxAPIKey != "" {
+		torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(torboxAPIKey, time.Duration(candidate.ProviderRequestTimeoutSeconds)*time.Second)
+		s.torrentDyn.Set(torrentProvider)
+		s.usenetDyn.Set(usenetProvider)
+		s.webDownloadDyn.Set(webDownloadProvider)
 	}
 
 	return restartRequired, nil

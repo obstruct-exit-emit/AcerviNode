@@ -96,6 +96,19 @@ type Config struct {
 	// handful of downloads are actively in flight at once.
 	FastPollIntervalSeconds int `yaml:"fast_poll_interval_seconds"`
 
+	// ProviderRequestTimeoutSeconds bounds how long a single call to the
+	// debrid provider's own API (list, status, add, delete, account — every
+	// one of them) may run before being cancelled. A plain total-request
+	// deadline, not an idle one like ImportFetchTimeoutSeconds — a provider
+	// API response is a small JSON payload, not a multi-gigabyte file, so
+	// there's no legitimate "slow but actively trickling for 30+ seconds"
+	// case to protect against the way there is for a file download. Default
+	// (30s) matches torbox.defaultRequestTimeout, the value this replaced —
+	// previously fixed at construction with no way to change it at all; found
+	// worth exposing live after a real TorBox outage where account-status
+	// calls each took the full 30s to fail.
+	ProviderRequestTimeoutSeconds int `yaml:"provider_request_timeout_seconds"`
+
 	// CategoryPaths overrides DownloadDir on a per-category basis: a download
 	// in category "movies" mapped to "/mnt/movies" lands directly under that
 	// path (still namespaced by the download's own name) instead of under
@@ -150,20 +163,21 @@ var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, 
 
 func defaults() *Config {
 	return &Config{
-		Port:                      7846,
-		DataDir:                   "./data",
-		LogLevel:                  "info",
-		Providers:                 map[string]ProviderConfig{},
-		DownloadDir:               "./downloads",
-		ImportIntervalSeconds:     10,
-		ImportMaxRetries:          5,
-		MaxConcurrentDownloads:    3,
-		ImportFetchTimeoutSeconds: 600,
-		CleanupAfterDays:          0,
-		DownloadDirMode:           "0777",
-		FastPollIntervalSeconds:   3,
-		CategoryPaths:             map[string]string{},
-		TLSPort:                   8443,
+		Port:                          7846,
+		DataDir:                       "./data",
+		LogLevel:                      "info",
+		Providers:                     map[string]ProviderConfig{},
+		DownloadDir:                   "./downloads",
+		ImportIntervalSeconds:         10,
+		ImportMaxRetries:              5,
+		MaxConcurrentDownloads:        3,
+		ImportFetchTimeoutSeconds:     600,
+		CleanupAfterDays:              0,
+		DownloadDirMode:               "0777",
+		FastPollIntervalSeconds:       3,
+		ProviderRequestTimeoutSeconds: 30,
+		CategoryPaths:                 map[string]string{},
+		TLSPort:                       8443,
 	}
 }
 
@@ -262,6 +276,11 @@ func applyEnv(cfg *Config) {
 			cfg.FastPollIntervalSeconds = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_PROVIDER_REQUEST_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ProviderRequestTimeoutSeconds = n
+		}
+	}
 	if v := os.Getenv("ACERVINODE_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLSEnabled = b
@@ -334,6 +353,9 @@ func (c *Config) Validate() error {
 	}
 	if c.FastPollIntervalSeconds < 1 {
 		return fmt.Errorf("fast_poll_interval_seconds must be at least 1")
+	}
+	if c.ProviderRequestTimeoutSeconds < 1 {
+		return fmt.Errorf("provider_request_timeout_seconds must be at least 1")
 	}
 	if c.TLSEnabled {
 		if c.TLSPort < 1 || c.TLSPort > 65535 {
