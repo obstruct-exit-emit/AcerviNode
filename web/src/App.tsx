@@ -26,6 +26,8 @@ import { ProviderBadges } from './components/ProviderBadges'
 import { Settings } from './components/Settings'
 import SetupWizard from './components/SetupWizard'
 import {
+  DEFAULT_IDLE_TIMEOUT_MS,
+  fetchWithIdleTimeout,
   forceDownload,
   listenForDownloadWindowMessages,
   openDownloadWindow,
@@ -432,7 +434,7 @@ export default function App() {
       for (const f of files) {
         try {
           const { url } = await getFileLink(activeKey, d.id, f.provider_file_id as string)
-          const resp = await fetch(url)
+          const resp = await fetchWithIdleTimeout(url, DEFAULT_IDLE_TIMEOUT_MS)
           if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
           await writeFileToDirectory(folder, f.path, resp, (chunkBytes) => {
             loadedBytes += chunkBytes

@@ -62,18 +62,91 @@ export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null>
   }
 }
 
+// DEFAULT_IDLE_TIMEOUT_MS matches internal/importer's own
+// import_fetch_timeout_seconds default (600s) — see writeFileToDirectory's
+// own doc comment for why this is idle/stall-based, not a total-transfer
+// budget. Not read live from Settings: that endpoint is admin-only, but a
+// Manual download (the only thing this streams) is reachable by a member
+// too, so there's no session-independent way to fetch the configured value
+// from here — a hardcoded default matching the backend's own is the
+// simplest honest answer.
+export const DEFAULT_IDLE_TIMEOUT_MS = 600_000
+
+// fetchWithIdleTimeout wraps fetch, aborting if idleTimeoutMs pass with no
+// response received at all — the connect-and-wait-for-headers half of the
+// same idle/stall protection writeFileToDirectory applies to the body
+// itself once headers do arrive (see its own doc comment); together they
+// cover a stall at any point in a streamed download, not just mid-transfer,
+// the same two phases internal/importer's own idleTimeoutReader covers on
+// the backend. externalSignal, if given, aborts the request too (e.g. a
+// user's manual Stop click in DownloadWindow.tsx) — combined via
+// AbortSignal.any, safe here since this whole subsystem is already
+// Chromium-only (see this file's own top doc comment) and AbortSignal.any
+// has been in Chromium since 2023. A caller checking its own external
+// controller's aborted flag afterward (see DownloadWindow.tsx's "deliberate
+// Stop, not a real failure" check) still works unchanged either way: only a
+// real externalSignal abort sets that controller's own aborted flag, not an
+// idle-timeout one, so a stall is correctly reported as a real failure
+// rather than silently swallowed as if the user had clicked Stop.
+export async function fetchWithIdleTimeout(url: string, idleTimeoutMs: number, externalSignal?: AbortSignal): Promise<Response> {
+  const idleController = new AbortController()
+  const timer = setTimeout(() => idleController.abort(), idleTimeoutMs)
+  const signal = externalSignal ? AbortSignal.any([externalSignal, idleController.signal]) : idleController.signal
+  try {
+    return await fetch(url, { signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// readWithIdleTimeout races a single reader.read() call against an idle
+// deadline, rejecting if it fires first — used by writeFileToDirectory
+// below. Doesn't reset anything itself; the caller calling this again on
+// every successful chunk is what makes the deadline "idle" rather than
+// "total" — see writeFileToDirectory's own doc comment.
+function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, idleTimeoutMs: number): Promise<ReadableStreamReadResult<T>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`No data received for ${Math.round(idleTimeoutMs / 1000)}s — connection appears stalled`))
+    }, idleTimeoutMs)
+    reader.read().then(
+      (result) => {
+        clearTimeout(timer)
+        resolve(result)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+
 // writeFileToDirectory streams a fetch Response's body straight to disk
 // (never buffering the whole file in memory — matters for multi-gigabyte
 // video files), creating any subdirectories a "/"-containing path implies.
 // onChunk, if given, is called with each chunk's byte length as it's
 // written — the caller sums these across a whole batch of files to drive a
-// progress bar; omitting it uses pipeTo directly (marginally cheaper, no
-// per-chunk callback overhead) for callers that don't need progress.
+// progress bar.
+//
+// idleTimeoutMs is an idle/stall deadline, not a total-transfer one —
+// mirrors internal/importer's own idleTimeoutReader on the backend
+// (import_fetch_timeout_seconds): the clock resets on every chunk actually
+// received, so a large file that's slow but genuinely still transferring
+// is never affected by this however long the whole download takes; only a
+// connection that's actually gone quiet (the provider CDN link hangs, the
+// network drops mid-transfer) trips it. Before this, a stalled streamed
+// download — the in-tab path in App.tsx and the Downloads popup window in
+// DownloadWindow.tsx, the only two callers — just sat there forever with
+// no error and no way to notice short of watching the progress bar stop
+// moving; the popup's own manual Stop button was the only recourse, and
+// the in-tab path didn't even have that.
 export async function writeFileToDirectory(
   root: FileSystemDirectoryHandle,
   path: string,
   response: Response,
   onChunk?: (bytesWritten: number) => void,
+  idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
 ): Promise<void> {
   if (!response.body) {
     throw new Error(`${path}: response has no body to stream`)
@@ -90,21 +163,17 @@ export async function writeFileToDirectory(
   const fileHandle = await dir.getFileHandle(parts[parts.length - 1], { create: true })
   const writable = await fileHandle.createWritable()
 
-  if (!onChunk) {
-    await response.body.pipeTo(writable)
-    return
-  }
-
   const reader = response.body.getReader()
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs)
       if (done) break
       await writable.write(value)
-      onChunk(value.byteLength)
+      onChunk?.(value.byteLength)
     }
     await writable.close()
   } catch (err) {
+    await reader.cancel().catch(() => {})
     await writable.abort().catch(() => {})
     throw err
   }

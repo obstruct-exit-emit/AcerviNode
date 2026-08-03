@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getFileLink } from '../api'
-import { queryWritePermission, requestWritePermission, writeFileToDirectory } from '../fsAccess'
+import { DEFAULT_IDLE_TIMEOUT_MS, fetchWithIdleTimeout, queryWritePermission, requestWritePermission, writeFileToDirectory } from '../fsAccess'
 import { DOWNLOAD_CHANNEL_NAME } from '../downloadWindowProtocol'
 import type { AddBatchMessage, BatchCompleteMessage, BatchProgressMessage, FailedFile, ToPopupMessage } from '../downloadWindowProtocol'
 import { formatBytes } from '../format'
@@ -156,7 +156,7 @@ export function DownloadWindow() {
       try {
         const { url } = await getFileLink('', batch.downloadId, f.providerFileId)
         if (controller.signal.aborted) break
-        const resp = await fetch(url, { signal: controller.signal })
+        const resp = await fetchWithIdleTimeout(url, DEFAULT_IDLE_TIMEOUT_MS, controller.signal)
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
         await writeFileToDirectory(batch.directoryHandle, f.path, resp, (chunkBytes) => {
           loaded += chunkBytes
