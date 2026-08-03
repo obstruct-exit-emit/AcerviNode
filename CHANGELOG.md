@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A usenet download that genuinely failed (e.g. TorBox's own "failed
+  (Repair failed, not enough repair blocks (165 short))") could still show
+  as "Repairing" in the web UI.** The user supplied a real NZB specifically
+  to test error surfacing, live-confirming the state mapping, `error_message`
+  (native API), and SABnzbd's `fail_message` (what an *arr app actually
+  reads) all already worked correctly end-to-end — but TorBox's own raw
+  failure string contains the word "repair", which `usenetPhase`'s substring
+  match happily matched regardless of whether the download had actually
+  failed. Fixed by only computing `Phase` for a download in
+  `StateDownloading` — it was only ever meant to describe an in-progress
+  sub-phase, not something a terminal error/completed state should report at
+  all. `RawState`/`error_message`/`fail_message` are unaffected, since the
+  full detail there is exactly what's needed.
+
 - **A download's reported progress/state/size could freeze on stale data,
   even though the database and TorBox itself had already moved on.** Found
   live watching a real, genuinely uncached torrent download: `GET

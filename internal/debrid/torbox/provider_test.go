@@ -168,6 +168,11 @@ func TestMapUsenetState(t *testing.T) {
 			want: debrid.StateError,
 		},
 		{
+			name: "a real, live-confirmed repair failure — the user supplied an NZB with too few repair blocks specifically to test this",
+			d:    UsenetDownload{DownloadState: "failed (Repair failed, not enough repair blocks (165 short))", DownloadFinished: true, DownloadPresent: false, Active: false, Progress: 1},
+			want: debrid.StateError,
+		},
+		{
 			name: "empty state",
 			d:    UsenetDownload{DownloadState: ""},
 			want: debrid.StateUnknown,
@@ -459,6 +464,33 @@ func TestUsenetToStatus_PassesThroughDownloadSpeed(t *testing.T) {
 	status := usenetToStatus(UsenetDownload{ID: 1, DownloadSpeed: 191117})
 	if status.DownloadSpeedBytes != 191117 {
 		t.Errorf("DownloadSpeedBytes = %d, want 191117", status.DownloadSpeedBytes)
+	}
+}
+
+// TestUsenetToStatus_FailedRepairDoesNotReportPhaseRepairing proves the fix
+// for a real bug found live testing a real, user-supplied NZB with too few
+// repair blocks: TorBox's own raw failure string ("failed (Repair failed,
+// not enough repair blocks (165 short))") contains "repair", which
+// usenetPhase alone would happily match — usenetToStatus must not call it
+// for a state that isn't actually StateDownloading, or the UI would show a
+// failed download as still "Repairing".
+func TestUsenetToStatus_FailedRepairDoesNotReportPhaseRepairing(t *testing.T) {
+	status := usenetToStatus(UsenetDownload{
+		ID:               1,
+		DownloadState:    "failed (Repair failed, not enough repair blocks (165 short))",
+		DownloadFinished: true,
+		Progress:         1,
+	})
+	if status.State != debrid.StateError {
+		t.Fatalf("State = %q, want error", status.State)
+	}
+	if status.Phase != "" {
+		t.Errorf("Phase = %q, want empty for a failed (not actively repairing) download", status.Phase)
+	}
+	// RawState — what feeds errorMessage/fail_message — must still carry the
+	// full detail, since that's what actually needs to reach the user/*arr.
+	if status.RawState != "failed (Repair failed, not enough repair blocks (165 short))" {
+		t.Errorf("RawState = %q, want the full raw reason preserved", status.RawState)
 	}
 }
 

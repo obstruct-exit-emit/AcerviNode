@@ -951,6 +951,25 @@ literal word `"Processing"`, which has no member in Sonarr's
 `SabnzbdDownloadStatus` enum and risks a deserialization error there instead
 of just an imprecise (but safe) label here.
 
+**A genuine failure, live-verified.** The user later supplied a real NZB
+specifically engineered to fail par2 repair (too few repair blocks present
+in the release), closing the last gap in this section — every prior test
+NZB happened to succeed. TorBox's own raw state came back as
+`"failed (Repair failed, not enough repair blocks (165 short))"` within
+under a minute. Confirmed correctly classified as `StateError` by the
+existing `"fail"` substring check, and confirmed the full detail reaches
+both `GET /api/v1/downloads`'s `error_message` and the SABnzbd shim's
+`fail_message` (`mode=history`) — the field a real \*arr app actually reads
+to decide a download needs a new release — without any code changes
+needed; both were already wired correctly. One real bug *was* found this
+way: the same raw string also contains `"repair"`, which `usenetPhase`'s
+substring match doesn't distinguish from an in-progress repair, so a
+download that had already failed still reported `Phase: "repairing"`.
+Fixed by only ever computing `Phase` when the mapped state is
+`StateDownloading` — it was only ever meant to describe an in-progress
+sub-phase, and a terminal state (error or completed) has no sub-phase to
+report at all.
+
 One further real distinction, not TorBox-reported but genuinely
 AcerviNode's own: once a usenet download reaches local `provider_completed`
 (TorBox is done; [Completed Download Handling](#completed-download-handling-internalimporter)

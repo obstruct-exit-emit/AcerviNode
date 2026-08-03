@@ -132,16 +132,27 @@ func (p *UsenetProvider) Delete(ctx context.Context, id debrid.ProviderDownloadI
 }
 
 func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
+	state := mapUsenetState(d)
+	// Phase is only meaningful for an in-progress download — usenetPhase
+	// substring-matches the raw state, and a *failed* repair (e.g. TorBox's
+	// real "failed (Repair failed, not enough repair blocks (165 short))")
+	// contains "repair" too, which would otherwise mislabel a genuinely
+	// errored download as still "Repairing" in the UI. Found live testing a
+	// real NZB the user supplied specifically because it fails this way.
+	var phase string
+	if state == debrid.StateDownloading {
+		phase = usenetPhase(d.DownloadState)
+	}
 	return debrid.DownloadStatus{
 		ID:                 debrid.ProviderDownloadID(formatID(d.ID)),
 		Name:               d.Name,
 		SizeBytes:          int64(d.Size),
 		Progress:           d.Progress,
-		State:              mapUsenetState(d),
+		State:              state,
 		ETASeconds:         int64(d.Eta),
 		RawState:           d.DownloadState,
 		OriginalURL:        d.OriginalURL,
-		Phase:              usenetPhase(d.DownloadState),
+		Phase:              phase,
 		DownloadSpeedBytes: int64(d.DownloadSpeed),
 	}
 }
