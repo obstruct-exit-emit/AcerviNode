@@ -175,19 +175,13 @@ export function Settings({ apiKey }: Props) {
 
   async function load() {
     try {
-      const [providerSettings, generalSettings, cats, accountStatus] = await Promise.all([
+      const [providerSettings, generalSettings, cats] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
-        // Not configured, or configured with a provider that doesn't support
-        // account status, both come back as available:false rather than
-        // throwing — see handleGetAccountStatus's doc comment — so this is
-        // safe to call unconditionally alongside the rest of load().
-        getTorBoxAccount(apiKey),
       ])
       setSettings(providerSettings)
       setGeneral(generalSettings)
-      setAccount(accountStatus)
       setForm({
         port: generalSettings.port,
         data_dir: generalSettings.data_dir,
@@ -211,6 +205,22 @@ export function Settings({ apiKey }: Props) {
     } catch {
       // The dashboard's own polling will surface auth/connectivity errors;
       // this view just leaves the form usable either way.
+    }
+
+    // Deliberately NOT part of the Promise.all above — this is a live call
+    // to the provider itself (see getTorBoxAccount's own doc comment), which
+    // can take up to the provider client's own timeout (seen live taking a
+    // real 30s when TorBox itself was degraded) before resolving, even
+    // though it's designed to resolve with available:false rather than
+    // throw. Bundling it with the rest of load() meant the *entire* Settings
+    // page — API key, Import & cleanup, Categories, none of which have
+    // anything to do with TorBox's own health — sat blank that whole time.
+    // Fetched independently so the rest of the page is usable immediately
+    // regardless of how slow or broken the provider connection is right now.
+    try {
+      setAccount(await getTorBoxAccount(apiKey))
+    } catch {
+      // Same treatment as the block above — routine, not fatal.
     }
   }
 
