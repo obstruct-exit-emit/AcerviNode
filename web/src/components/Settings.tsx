@@ -35,7 +35,7 @@ import { SecuritySettings } from './SecuritySettings'
 // not a full media-manager's worth of libraries/quality profiles/indexers.
 const settingsGroups = [
   { name: 'General', blurb: "This instance's API key and import/cleanup behavior." },
-  { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through.' },
+  { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through, and how often it polls it.' },
   { name: 'Categories', blurb: 'Pre-register categories for Sonarr/Radarr, and optionally redirect their downloads to a specific directory.' },
   { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
   { name: 'Security', blurb: 'Login accounts on top of the API key, and their roles.' },
@@ -422,24 +422,6 @@ export function Settings({ apiKey }: Props) {
               <Section title="Import & cleanup" help="Applies immediately, no restart needed.">
                 <div className="general-form">
                   <label>
-                    Import interval (seconds)
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.import_interval_seconds}
-                      onChange={(e) => setForm({ ...form, import_interval_seconds: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Fast poll interval (seconds)
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.fast_poll_interval_seconds}
-                      onChange={(e) => setForm({ ...form, fast_poll_interval_seconds: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
                     Import max retries
                     <input
                       type="number"
@@ -477,17 +459,14 @@ export function Settings({ apiKey }: Props) {
                   </label>
                 </div>
                 <p className="settings-help">
-                  The fast poll interval checks each actively downloading Managed download individually, so a
-                  finished download is noticed within a few seconds instead of waiting for the next full import
-                  interval — separate from (and much cheaper than) the import interval above, since it only ever
-                  checks downloads already known to be in progress. The default (3s) was tuned against a real
-                  provider to stay responsive without risking a rate limit; raise it if you routinely have many
-                  downloads active at once. Max concurrent downloads bounds how many provider_completed downloads
-                  are fetched to disk at once (previously always strictly one at a time). The fetch timeout covers a
-                  single file's whole transfer, not just connecting — raise it if large files on a slow connection
-                  are failing partway through. Cleanup only ever touches a Managed download once it's reached "ready
-                  for import" (already handed off to Sonarr/Radarr) and stayed there this long — a Manual download
-                  is never auto-deleted. 0 disables cleanup entirely (the default).
+                  Import max retries is how many times a failed fetch-to-disk attempt is retried before a Managed
+                  download is given up on and moved to "error". Max concurrent downloads bounds how many
+                  provider_completed downloads are fetched to disk at once (previously always strictly one at a
+                  time). The fetch timeout covers a single file's whole transfer, not just connecting — raise it if
+                  large files on a slow connection are failing partway through. Cleanup only ever touches a Managed
+                  download once it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed
+                  there this long — a Manual download is never auto-deleted. 0 disables cleanup entirely (the
+                  default). See the Provider tab for how often AcerviNode polls the debrid provider itself.
                 </p>
               </Section>
 
@@ -677,6 +656,44 @@ export function Settings({ apiKey }: Props) {
               <dt>Total downloaded</dt>
               <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
             </dl>
+          )}
+
+          {form && (
+            <Section title="Polling" help="How often AcerviNode talks to the provider itself. Applies immediately, no restart needed.">
+              <form className="general-form" onSubmit={handleGeneralSubmit}>
+                <label>
+                  Import interval (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.import_interval_seconds}
+                    onChange={(e) => setForm({ ...form, import_interval_seconds: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Fast poll interval (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.fast_poll_interval_seconds}
+                    onChange={(e) => setForm({ ...form, fast_poll_interval_seconds: Number(e.target.value) })}
+                  />
+                </label>
+                <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                  {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+                </button>
+              </form>
+              <p className="settings-help">
+                Import interval is the bulk poll that syncs every tracked download's status from the provider. Fast
+                poll interval checks each actively downloading Managed download individually, so a finished download
+                is noticed within a few seconds instead of waiting for the next full import interval — separate
+                from (and much cheaper than) the import interval, since it only ever checks downloads already known
+                to be in progress. The default (3s) was tuned against a real provider to stay responsive without
+                risking a rate limit; raise it if you routinely have many downloads active at once.
+              </p>
+              {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+              {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+            </Section>
           )}
         </section>
       )}

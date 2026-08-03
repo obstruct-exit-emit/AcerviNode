@@ -86,6 +86,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`import_interval_seconds`/`fast_poll_interval_seconds` moved from
+  Settings → General to Settings → Provider**, alongside the TorBox account
+  status and connection test — both are about how often AcerviNode polls
+  the configured debrid provider, not the instance itself, and now sit next
+  to the cooldown/rate-limit information they're most relevant to. Same
+  fields, same `PUT /api/v1/settings/general` endpoint — a pure UI
+  reorganization, nothing to migrate.
+
 - **Every category is now editable and deletable, including the pre-seeded
   *arr-app defaults.** Previously, `defaultArrCategories` (Radarr's
   "movies"/"radarr", Sonarr's "tv"/"tv-sonarr", Lidarr's "music"/"lidarr",
