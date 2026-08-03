@@ -252,19 +252,37 @@ export default function App() {
   // Bulk delete/retry both loop the existing single-item endpoint rather
   // than needing a new batch endpoint of their own — same precedent as
   // "Download all" looping the per-file link call instead of a dedicated
-  // batch API. One failure doesn't stop the rest; every id is attempted and
+  // batch API. Run BULK_CONCURRENCY at a time rather than strictly one at a
+  // time — a plain sequential loop made a large selection visibly crawl
+  // (each delete/retry is its own round trip, including a real provider-side
+  // call), but firing every request at once risked tripping TorBox's own
+  // rate limit the same way an unthrottled burst of adds already has
+  // elsewhere in this project — a small concurrency cap is the middle
+  // ground. One failure doesn't stop the rest; every id is attempted and
   // failures are reported together at the end.
+  const BULK_CONCURRENCY = 4
+
+  async function runWithLimit<T>(items: T[], limit: number, task: (item: T) => Promise<unknown>): Promise<T[]> {
+    const failed: T[] = []
+    let next = 0
+    async function worker() {
+      while (next < items.length) {
+        const item = items[next++]
+        try {
+          await task(item)
+        } catch {
+          failed.push(item)
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+    return failed
+  }
+
   async function handleBulkDelete(ids: string[]) {
     if (!ready || ids.length === 0) return
     if (!confirm(`Delete ${ids.length} download${ids.length === 1 ? '' : 's'}? This also removes them from the debrid provider.`)) return
-    const failed: string[] = []
-    for (const id of ids) {
-      try {
-        await deleteDownload(activeKey, id, true)
-      } catch {
-        failed.push(id)
-      }
-    }
+    const failed = await runWithLimit(ids, BULK_CONCURRENCY, (id) => deleteDownload(activeKey, id, true))
     setSelectedIds(new Set())
     refresh(activeKey)
     if (failed.length > 0) {
@@ -274,14 +292,7 @@ export default function App() {
 
   async function handleBulkRetry(ids: string[]) {
     if (!ready || ids.length === 0) return
-    const failed: string[] = []
-    for (const id of ids) {
-      try {
-        await retryDownload(activeKey, id)
-      } catch {
-        failed.push(id)
-      }
-    }
+    const failed = await runWithLimit(ids, BULK_CONCURRENCY, (id) => retryDownload(activeKey, id))
     setSelectedIds(new Set())
     refresh(activeKey)
     if (failed.length > 0) {
