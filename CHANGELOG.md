@@ -35,6 +35,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Every well-known \*arr-app default category is now pre-registered with
+  both compat shims automatically, on every startup** — closing the
+  remaining friction from the category fix above for the common case: a user
+  who never customizes an \*arr app's own default category field hits zero
+  setup friction at all, no visit to AcerviNode's Settings page needed.
+  Confirmed directly against each app's real source
+  (`SabnzbdSettings.cs`/`QBittorrentSettings.cs`), not guessed: Radarr
+  defaults to `"movies"` (SABnzbd) / `"radarr"` (qBittorrent), Sonarr to
+  `"tv"` / `"tv-sonarr"`, Lidarr to `"music"` / `"lidarr"`, Readarr to
+  `"Readarr"` / `"readarr"` — Readarr's SABnzbd default really is
+  capitalized (category comparisons are case-sensitive). A fully custom
+  category name still needs the one-time manual registration — see
+  docs/sabnzbd-api.md#categories.
 - **Four more real qBittorrent endpoints Sonarr/Radarr call under specific
   optional client settings**: `POST /api/v2/torrents/setCategory` (a
   separate "post-import category," different from the add-time one),

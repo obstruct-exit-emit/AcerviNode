@@ -606,12 +606,14 @@ export function Settings({ apiKey }: Props) {
           <p className="settings-help">
             Register a category name here <strong>before</strong> configuring it in Sonarr/Radarr — real SABnzbd has
             no way to create a category on the fly, so a brand new category typed into Radarr's SABnzbd client gets
-            rejected outright by its own "Test" step unless AcerviNode already knows about it. Leave the path blank
-            to just register the name; fill it in to also redirect that category's completed downloads to a specific
-            directory instead of the default <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a
-            different disk or mount). Only affects Managed (Sonarr/Radarr) downloads — category has no effect on
-            Manual ones. Clear an existing override's path and save to remove it (the category itself stays
-            registered).
+            rejected outright by its own "Test" step unless AcerviNode already knows about it. Every *arr app's own
+            <em> default</em> category (Radarr's "movies"/"radarr", Sonarr's "tv"/"tv-sonarr", Lidarr's
+            "music"/"lidarr", Readarr's "Readarr"/"readarr") is already registered automatically — this is only
+            needed for a custom name you've typed in instead. Leave the path blank to just register the name; fill
+            it in to also redirect that category's completed downloads to a specific directory instead of the
+            default <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only
+            affects Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing
+            override's path and save to remove it (the category itself stays registered).
           </p>
 
           {categories &&

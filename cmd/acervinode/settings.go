@@ -96,6 +96,12 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 // every restart, even though its path override survived in config.yaml —
 // putting the user right back where they started until something else
 // happened to re-declare it.
+//
+// Also seeds every well-known *arr-app default category name
+// (defaultArrCategories) unconditionally, every startup — unlike the
+// config.yaml-backed ones above, these aren't something a user configured;
+// they're what closes the gap for a user who never customizes an *arr app's
+// own default category field at all, with zero AcerviNode-side setup.
 func (s *liveSettings) SetShimServers(qbt *qbittorrent.Server, sab *sabnzbd.Server) {
 	s.mu.Lock()
 	s.qbt = qbt
@@ -104,6 +110,10 @@ func (s *liveSettings) SetShimServers(qbt *qbittorrent.Server, sab *sabnzbd.Serv
 	s.mu.Unlock()
 
 	for category := range categories {
+		qbt.AddCategory(category)
+		sab.AddCategory(category)
+	}
+	for _, category := range defaultArrCategories {
 		qbt.AddCategory(category)
 		sab.AddCategory(category)
 	}

@@ -116,6 +116,17 @@ so it's immediately visible to `mode=get_config` and passes Radarr/Sonarr's
 Test — the AcerviNode-side equivalent of pre-creating the category in real
 SABnzbd's own admin UI first.
 
+Every well-known \*arr-app *default* category is also pre-registered
+automatically, every startup — `cmd/acervinode`'s `defaultArrCategories`,
+confirmed directly against each app's real source
+(`SabnzbdSettings.cs`/`QBittorrentSettings.cs`): Radarr's SABnzbd default is
+`"movies"`, Sonarr's is `"tv"`, Lidarr's is `"music"`, Readarr's is
+(genuinely, confirmed, not a typo) capitalized `"Readarr"` — category
+comparisons are case-sensitive, matching a plain C# string `==` check in
+`TestCategory()`. A user who never customizes an \*arr app's own default
+category field hits zero setup friction at all; a custom name still needs
+the manual registration step above.
+
 The qBittorrent shim doesn't have this problem: Sonarr/Radarr's own
 `TestCategory()` for qBittorrent calls `createCategory` automatically for a
 missing category (confirmed against their real source) before failing — see

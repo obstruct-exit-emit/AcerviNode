@@ -592,12 +592,14 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	defer db.Close()
 
 	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect, seeding defaultArrCategories
 
-	if err := settings.AddCategory("torrent", "movies"); err != nil {
+	// Custom names, deliberately not among defaultArrCategories, so this
+	// test proves AddCategory itself works independent of startup seeding.
+	if err := settings.AddCategory("torrent", "my-custom-movies"); err != nil {
 		t.Fatalf("AddCategory(torrent) error = %v", err)
 	}
-	if err := settings.AddCategory("usenet", "tv"); err != nil {
+	if err := settings.AddCategory("usenet", "my-custom-tv"); err != nil {
 		t.Fatalf("AddCategory(usenet) error = %v", err)
 	}
 	if err := settings.AddCategory("bogus", "x"); err == nil {
@@ -605,17 +607,66 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	}
 
 	torrentCats, usenetCats := settings.Categories()
-	if len(torrentCats) != 1 || torrentCats[0] != "movies" {
-		t.Errorf("torrent categories = %v, want [movies]", torrentCats)
-	}
-	found := false
-	for _, c := range usenetCats {
-		if c == "tv" {
-			found = true
+	foundTorrent, foundUsenet := false, false
+	for _, c := range torrentCats {
+		if c == "my-custom-movies" {
+			foundTorrent = true
 		}
 	}
-	if !found {
-		t.Errorf("usenet categories = %v, want it to include tv", usenetCats)
+	for _, c := range usenetCats {
+		if c == "my-custom-tv" {
+			foundUsenet = true
+		}
+	}
+	if !foundTorrent {
+		t.Errorf("torrent categories = %v, want it to include my-custom-movies", torrentCats)
+	}
+	if !foundUsenet {
+		t.Errorf("usenet categories = %v, want it to include my-custom-tv", usenetCats)
+	}
+}
+
+// TestLiveSettings_SetShimServers_SeedsDefaultArrCategories proves the fix
+// for a real user report: a brand new *arr app's default category (e.g.
+// Radarr's own SABnzbd default of "movies", or its qBittorrent default of
+// "radarr" — both confirmed against Radarr's real source, see
+// defaultArrCategories) is already known to both compat shims the moment
+// they're wired up — no visit to AcerviNode's own Settings → Categories
+// page needed first, unlike a fully custom category name.
+func TestLiveSettings_SetShimServers_SeedsDefaultArrCategories(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+
+	torrentCats, usenetCats := settings.Categories()
+	for _, want := range defaultArrCategories {
+		foundTorrent, foundUsenet := false, false
+		for _, c := range torrentCats {
+			if c == want {
+				foundTorrent = true
+			}
+		}
+		for _, c := range usenetCats {
+			if c == want {
+				foundUsenet = true
+			}
+		}
+		if !foundTorrent {
+			t.Errorf("torrent categories = %v, want it to include %s", torrentCats, want)
+		}
+		if !foundUsenet {
+			t.Errorf("usenet categories = %v, want it to include %s", usenetCats, want)
+		}
 	}
 }
 
