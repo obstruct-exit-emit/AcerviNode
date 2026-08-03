@@ -21,19 +21,24 @@ import (
 // library's own reflect.Kind naming for "which variant of a thing this is",
 // and avoids "type" clashing with the Go keyword throughout the backend).
 type downloadResponse struct {
-	ID           string  `json:"id"`
-	Provider     string  `json:"provider"`
-	Protocol     string  `json:"protocol"`
-	Hash         string  `json:"hash,omitempty"`
-	Name         string  `json:"name"`
-	Category     string  `json:"category,omitempty"`
-	SavePath     string  `json:"save_path,omitempty"`
-	SizeBytes    int64   `json:"size_bytes"`
-	State        string  `json:"state"`
-	Progress     float64 `json:"progress"`
-	AddedAt      string  `json:"added_at"`
-	UpdatedAt    string  `json:"updated_at"`
-	CompletedAt  *string `json:"completed_at,omitempty"`
+	ID          string  `json:"id"`
+	Provider    string  `json:"provider"`
+	Protocol    string  `json:"protocol"`
+	Hash        string  `json:"hash,omitempty"`
+	Name        string  `json:"name"`
+	Category    string  `json:"category,omitempty"`
+	SavePath    string  `json:"save_path,omitempty"`
+	SizeBytes   int64   `json:"size_bytes"`
+	State       string  `json:"state"`
+	Progress    float64 `json:"progress"`
+	AddedAt     string  `json:"added_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	// CachedAt is when the provider first reported this download done —
+	// see database.Download.CachedAt. Distinct from CompletedAt: for a
+	// Manual download that's never fetched to local disk, CachedAt is set
+	// but CompletedAt stays nil forever.
+	CachedAt     *string `json:"cached_at,omitempty"`
 	ErrorMessage string  `json:"error_message,omitempty"`
 	// RetryCount/NextRetryAt reflect internal/importer's backoff — non-zero
 	// only for a download that has failed at least once and is still being
@@ -99,6 +104,11 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus) download
 		s := d.CompletedAt.UTC().Format(timeFormat)
 		completedAt = &s
 	}
+	var cachedAt *string
+	if d.CachedAt != nil {
+		s := d.CachedAt.UTC().Format(timeFormat)
+		cachedAt = &s
+	}
 	var nextRetryAt *string
 	if d.NextRetryAt != nil {
 		s := d.NextRetryAt.UTC().Format(timeFormat)
@@ -118,6 +128,7 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus) download
 		AddedAt:            d.AddedAt.UTC().Format(timeFormat),
 		UpdatedAt:          d.UpdatedAt.UTC().Format(timeFormat),
 		CompletedAt:        completedAt,
+		CachedAt:           cachedAt,
 		ErrorMessage:       d.ErrorMessage,
 		RetryCount:         d.RetryCount,
 		NextRetryAt:        nextRetryAt,

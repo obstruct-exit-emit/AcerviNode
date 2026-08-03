@@ -217,6 +217,12 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
                 <dd title={detail.updated_at}>{formatRelativeTime(detail.updated_at)}</dd>
               </div>
               <div>
+                <dt>Cached</dt>
+                <dd title={detail.cached_at ?? undefined}>
+                  {detail.cached_at ? formatRelativeTime(detail.cached_at) : '—'}
+                </dd>
+              </div>
+              <div>
                 <dt>Completed</dt>
                 <dd title={detail.completed_at ?? undefined}>
                   {detail.completed_at ? formatRelativeTime(detail.completed_at) : '—'}

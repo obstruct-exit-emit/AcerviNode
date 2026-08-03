@@ -30,6 +30,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A Manual download's detail view now shows when it became available
+  on the provider, not just whether files have ever been fetched to local
+  disk.** Asked directly by the user after noticing the detail view had no
+  timestamp for a torrent already `Available` (cached on TorBox, waiting to
+  be manually downloaded) — the existing `completed_at` never fires for a
+  Manual download that's never actually pulled to disk, and `updated_at`
+  is written on every state-machine change (hash/source backfills, missing-
+  count resets, ...), not specifically on becoming cached, so neither was a
+  reliable proxy. Added a new `cached_at` column, set once — the first time
+  a row is observed as `provider_completed` — by the same
+  `UpdateDownloadStatus` call every refresh path already goes through, and
+  cleared by `ReAddDownload` (a fresh provider-side download hasn't been
+  observed cached yet). Exposed as `cached_at` on `GET /api/v1/downloads`
+  and shown as a new "Cached" row in the web UI's download detail view,
+  next to "Completed".
+
 - **The native API and web UI now show the same live data the compat
   shims do — ETA, torrent seeds/peers/speed, usenet post-processing
   phase — instead of none of it at all.** `GET /api/v1/downloads` gained

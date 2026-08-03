@@ -79,7 +79,13 @@ type Download struct {
 	AddedAt            time.Time
 	UpdatedAt          time.Time
 	CompletedAt        *time.Time
-	ErrorMessage       string
+	// CachedAt is set once, the first time this row is observed as
+	// StateProviderCompleted — the provider itself is done, whether or not
+	// the files have been fetched to local disk yet (that's CompletedAt, a
+	// separate, later moment). Stays nil for a download that's never
+	// reached that state. See UpdateDownloadStatus.
+	CachedAt     *time.Time
+	ErrorMessage string
 	// RetryCount and NextRetryAt back internal/importer's backoff: a failed
 	// fetch attempt increments RetryCount and sets NextRetryAt to when it's
 	// eligible to try again, until MaxRetries is reached and the row moves
@@ -388,15 +394,18 @@ func (db *DB) RetryDownload(ctx context.Context, id string) error {
 // own list), not just a transient fetch failure. The local id/name/
 // category/hash/source are preserved; provider_download_id, state,
 // progress, size, retry bookkeeping, and completed_at are all reset as if
-// this were a fresh add. Callers are expected to have already resubmitted
-// source to the provider and obtained newProviderDownloadID (see
-// internal/api's handleReAddDownload) — this only updates the local row.
+// this were a fresh add, including cached_at (see UpdateDownloadStatus) — a
+// new provider-side download hasn't been observed as provider_completed
+// yet, whatever the old one's cached_at said. Callers are expected to have
+// already resubmitted source to the provider and obtained
+// newProviderDownloadID (see internal/api's handleReAddDownload) — this
+// only updates the local row.
 func (db *DB) ReAddDownload(ctx context.Context, id, newProviderDownloadID string) error {
 	res, err := db.ExecContext(ctx, `
 		UPDATE downloads
 		SET provider_download_id = ?, state = ?, progress = 0, size_bytes = 0,
 		    retry_count = 0, next_retry_at = NULL, error_message = NULL,
-		    completed_at = NULL, updated_at = ?
+		    completed_at = NULL, cached_at = NULL, updated_at = ?
 		WHERE id = ?`,
 		newProviderDownloadID, StateQueued, time.Now().UTC(), id,
 	)
@@ -410,12 +419,20 @@ func (db *DB) ReAddDownload(ctx context.Context, id, newProviderDownloadID strin
 // including size_bytes — a magnet-only add starts with no size info (magnet
 // URIs don't carry it), so this is what backfills the real value once the
 // provider reports one, rather than leaving it stuck at 0 forever.
+//
+// cached_at is set here too, but only the first time: the CASE guards on
+// cached_at already being NULL, so a row that's already recorded one keeps
+// it even as later calls (any state, any caller) keep passing state through
+// unconditionally — simpler than threading a "first time?" bool through
+// every one of this function's call sites.
 func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progress float64, sizeBytes int64, completedAt *time.Time, errorMessage string) error {
 	res, err := db.ExecContext(ctx, `
 		UPDATE downloads
-		SET state = ?, progress = ?, size_bytes = ?, completed_at = ?, error_message = ?, updated_at = ?
+		SET state = ?, progress = ?, size_bytes = ?, completed_at = ?, error_message = ?, updated_at = ?,
+		    cached_at = CASE WHEN cached_at IS NULL AND ? = ? THEN ? ELSE cached_at END
 		WHERE id = ?`,
-		state, progress, sizeBytes, completedAt, nullable(errorMessage), time.Now().UTC(), id,
+		state, progress, sizeBytes, completedAt, nullable(errorMessage), time.Now().UTC(),
+		state, StateProviderCompleted, time.Now().UTC(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("update download status %s: %w", id, err)
@@ -921,7 +938,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
-	size_bytes, state, progress, added_at, updated_at, completed_at, error_message,
+	size_bytes, state, progress, added_at, updated_at, completed_at, cached_at, error_message,
 	retry_count, next_retry_at, source, added_via, missing_count, source_file_name`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
@@ -945,7 +962,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 	if err := row.Scan(
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
-		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &errorMessage,
+		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &d.CachedAt, &errorMessage,
 		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount, &sourceFileName,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)

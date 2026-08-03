@@ -251,6 +251,50 @@ func TestUpdateDownloadStatus(t *testing.T) {
 	}
 }
 
+func TestUpdateDownloadStatus_SetsCachedAtOnceOnFirstProviderCompleted(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	before, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if before.CachedAt != nil {
+		t.Fatalf("got CachedAt=%v before any provider_completed, want nil", before.CachedAt)
+	}
+
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateProviderCompleted, 1.0, 1024, nil, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+	firstCached, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if firstCached.CachedAt == nil {
+		t.Fatal("got CachedAt=nil after provider_completed, want set")
+	}
+	cachedAt := *firstCached.CachedAt
+
+	// A later write, even one that changes state again, must not move
+	// CachedAt — it records the *first* time this happened, not the most
+	// recent.
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateProviderCompleted, 1.0, 2048, nil, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+	after, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if after.CachedAt == nil || !after.CachedAt.Equal(cachedAt) {
+		t.Errorf("got CachedAt=%v after second write, want unchanged %v", after.CachedAt, cachedAt)
+	}
+}
+
 func TestUpdateDownloadStatus_UnknownID(t *testing.T) {
 	db := openTestDB(t)
 	err := db.UpdateDownloadStatus(context.Background(), "does-not-exist", "error", 0, 0, nil, "boom")
@@ -468,6 +512,12 @@ func TestReAddDownload(t *testing.T) {
 	if err := db.UpdateDownloadRetry(ctx, d.ID, 5, time.Now().Add(-time.Hour), "gave up: not found"); err != nil {
 		t.Fatalf("seed UpdateDownloadRetry() error = %v", err)
 	}
+	// Route through provider_completed first so CachedAt gets set on the old
+	// provider-side download, proving ReAddDownload actually clears it below
+	// rather than it just having never been set.
+	if err := db.UpdateDownloadStatus(ctx, d.ID, StateProviderCompleted, 1.0, 2048, nil, ""); err != nil {
+		t.Fatalf("seed UpdateDownloadStatus(provider_completed) error = %v", err)
+	}
 	completedAt := time.Now().UTC()
 	if err := db.UpdateDownloadStatus(ctx, d.ID, StateError, 1.0, 2048, &completedAt, "gave up: not found"); err != nil {
 		t.Fatalf("seed UpdateDownloadStatus() error = %v", err)
@@ -498,6 +548,9 @@ func TestReAddDownload(t *testing.T) {
 	}
 	if got.CompletedAt != nil {
 		t.Errorf("CompletedAt = %v, want nil (not complete again yet)", got.CompletedAt)
+	}
+	if got.CachedAt != nil {
+		t.Errorf("CachedAt = %v, want nil (new provider-side download hasn't been observed cached yet)", got.CachedAt)
 	}
 	// The local id, name, category, hash, and source must all survive —
 	// only the provider-side identity and progress reset.
@@ -753,6 +806,9 @@ func TestRefreshFromProvider_UpdatesChangedRows(t *testing.T) {
 	}
 	if got.State != StateProviderCompleted || got.Progress != 1 || got.SizeBytes != 999 {
 		t.Errorf("persisted row = state:%q progress:%v size:%v, want provider_completed/1/999", got.State, got.Progress, got.SizeBytes)
+	}
+	if got.CachedAt == nil {
+		t.Error("got CachedAt=nil after refreshing into provider_completed, want set")
 	}
 }
 

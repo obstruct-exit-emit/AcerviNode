@@ -22,6 +22,11 @@ export interface Download {
   added_at: string
   updated_at: string
   completed_at?: string
+  // cached_at is when the provider first reported this download done —
+  // distinct from completed_at (files actually on local disk): a Manual
+  // download that's never fetched has cached_at set but completed_at stays
+  // unset forever.
+  cached_at?: string
   error_message?: string
   retry_count?: number
   next_retry_at?: string

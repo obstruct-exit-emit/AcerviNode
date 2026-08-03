@@ -1143,6 +1143,38 @@ func TestHandleGetDownload(t *testing.T) {
 	}
 }
 
+// TestHandleGetDownload_ExposesCachedAt proves cached_at round-trips through
+// the native API once a row has actually reached provider_completed — and
+// stays absent until then, distinct from completed_at (files on disk).
+func TestHandleGetDownload_ExposesCachedAt(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	var beforeCached downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &beforeCached); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if beforeCached.CachedAt != nil {
+		t.Errorf("cached_at = %v before provider_completed, want nil", beforeCached.CachedAt)
+	}
+
+	if err := db.UpdateDownloadStatus(context.Background(), d.ID, database.StateProviderCompleted, 1.0, d.SizeBytes, nil, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	var afterCached downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &afterCached); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if afterCached.CachedAt == nil {
+		t.Error("cached_at = nil after provider_completed, want set")
+	}
+}
+
 // TestHandleGetDownload_ExposesHasSource proves has_source reflects whether
 // the row's (never directly exposed) Source is non-empty — what the web UI
 // gates its Re-add button on, since resubmitting requires a stored original

@@ -90,6 +90,7 @@ necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
   "added_at": "2026-07-27T05:15:00Z",
   "updated_at": "2026-07-27T05:16:17Z",
   "completed_at": "2026-07-27T05:16:17Z",
+  "cached_at": "2026-07-27T05:15:03Z",
   "added_via": "arr",
   "has_source": true,
   "eta_seconds": 754,
@@ -114,6 +115,15 @@ compat shim behind it at all (see [Providers](providers.md#webdownloadprovider))
 identifier,
 not the provider's — use it for `/downloads/{id}` calls, not `hash` or a
 provider ID.
+
+`cached_at` is set once, the first time this download is observed as
+`provider_completed` — the provider itself is done, regardless of whether
+files have been fetched to local disk yet. Distinct from `completed_at`,
+which only fires once files are actually on disk: a Manual download that's
+cached but never fetched has `cached_at` set and `completed_at` omitted
+forever. Omitted (not `null`) until that first observation; cleared by
+`POST .../readd` (a new provider-side download hasn't been observed cached
+yet, whatever the old one's was).
 
 `retry_count` and `next_retry_at` are omitted entirely (not just zero/null) until
 a download has failed at least once — see
