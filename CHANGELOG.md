@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`import_fetch_timeout_seconds` is now an idle/stall deadline, not a
+  total-transfer one.** Previously it was a single deadline covering an
+  entire file's fetch from start to finish — a large file on a slow
+  connection that was genuinely, continuously transferring (never stalled)
+  could still get killed and retried just for taking too long in absolute
+  terms, forcing the value to be raised arbitrarily high to accommodate the
+  largest expected file rather than actually catching a hung connection.
+  Fixed: `internal/importer` now resets the deadline every time bytes are
+  actually received (covering the connect-and-wait-for-headers phase too,
+  not just the body) — a transfer that's slow but steadily active is never
+  affected by this however long the whole download takes; only a
+  connection that's actually gone quiet trips it. Same config field, same
+  default (600s) — pure behavior fix, nothing to migrate. See
+  docs/configuration.md and the Settings UI's relabeled "Import fetch idle
+  timeout" field.
+
 - **Every NZB-sourced Managed import failed outright in Radarr/Sonarr** with
   "Access to the path ... is denied," even though the download showed
   Completed. Root cause, diagnosed live from a real Radarr log: AcerviNode's

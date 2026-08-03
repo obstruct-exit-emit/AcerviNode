@@ -46,11 +46,15 @@ type Config struct {
 	// Tick processed its due downloads strictly one at a time, however many
 	// there were.
 	MaxConcurrentDownloads int `yaml:"max_concurrent_downloads"`
-	// ImportFetchTimeoutSeconds bounds how long a single file fetch may run
-	// before internal/importer gives up on it (counted as a failed attempt,
-	// subject to the same retry/backoff as any other fetch error) — covers
-	// the whole transfer, not just connecting, so it needs headroom for
-	// large files on a slow connection.
+	// ImportFetchTimeoutSeconds is an idle/stall deadline, not a
+	// total-transfer one: internal/importer gives up on a file fetch
+	// (counted as a failed attempt, subject to the same retry/backoff as
+	// any other fetch error) only after this many seconds pass with zero
+	// bytes received — covers the connect-and-wait-for-headers phase too,
+	// not just the body. A transfer that's slow overall but never actually
+	// stops making progress is never affected by this, however long the
+	// whole thing takes; only a connection that's actually gone quiet trips
+	// it. See internal/importer's idleTimeoutReader.
 	ImportFetchTimeoutSeconds int `yaml:"import_fetch_timeout_seconds"`
 	// CleanupAfterDays, if > 0, has internal/importer automatically remove a
 	// Managed (AddedViaArr) download once it's been ready_for_import for at

@@ -450,7 +450,7 @@ export function Settings({ apiKey }: Props) {
                     />
                   </label>
                   <label>
-                    Import fetch timeout (seconds)
+                    Import fetch idle timeout (seconds)
                     <input
                       type="number"
                       min={1}
@@ -472,11 +472,13 @@ export function Settings({ apiKey }: Props) {
                   Import max retries is how many times a failed fetch-to-disk attempt is retried before a Managed
                   download is given up on and moved to "error". Max concurrent downloads bounds how many
                   provider_completed downloads are fetched to disk at once (previously always strictly one at a
-                  time). The fetch timeout covers a single file's whole transfer, not just connecting — raise it if
-                  large files on a slow connection are failing partway through. Cleanup only ever touches a Managed
-                  download once it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed
-                  there this long — a Manual download is never auto-deleted. 0 disables cleanup entirely (the
-                  default). See the Provider tab for how often AcerviNode polls the debrid provider itself.
+                  time). The fetch idle timeout only fires after this many seconds pass with zero bytes received —
+                  a large file on a slow connection that's still steadily, actively transferring is never affected
+                  by this however long the whole download takes; only a connection that's actually gone quiet (stuck
+                  connecting, or stalled mid-transfer) trips it. Cleanup only ever touches a Managed download once
+                  it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
+                  a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). See the
+                  Provider tab for how often AcerviNode polls the debrid provider itself.
                 </p>
               </Section>
 

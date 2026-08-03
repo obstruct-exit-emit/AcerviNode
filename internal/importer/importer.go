@@ -1164,6 +1164,30 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// idleTimeoutReader wraps an io.Reader (a response body), calling cancel if
+// no bytes are read for longer than timeout — an idle/stall timeout, not a
+// total-transfer deadline: a large file that's steadily, actively
+// transferring never trips this however long the whole download takes;
+// only a connection that's actually gone quiet does. Every successful Read
+// resets the clock. See fetchFile, the only caller — it also resets the
+// same timer right after response headers arrive (before any Read call
+// happens at all), so a server that accepts the connection but never sends
+// a response is caught the same way a mid-transfer stall is, not left
+// waiting forever.
+type idleTimeoutReader struct {
+	r       io.Reader
+	timer   *time.Timer
+	timeout time.Duration
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.timer.Reset(r.timeout)
+	}
+	return n, err
+}
+
 // ensureWritableDir creates dir (and any missing parents) then makes sure
 // it — even if it already existed — ends up world-writable (0777), not
 // just requesting that mode from MkdirAll: the process's own umask
@@ -1252,12 +1276,22 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("resolve download link: %w", err)
 	}
 
-	// A per-request deadline rather than the client's own Timeout field,
-	// since fetchTimeout can change live (SetFetchTimeout) — the client
-	// itself is built once at construction. Covers the whole transfer, not
-	// just connecting, so it needs headroom for large files.
-	fetchCtx, cancel := context.WithTimeout(ctx, im.getFetchTimeout())
+	// An idle/stall deadline, not a total-transfer one — see
+	// idleTimeoutReader's own doc comment for why: a per-request context
+	// (rather than the client's own Timeout field) since fetchTimeout can
+	// change live (SetFetchTimeout) and the client itself is built once at
+	// construction. The timer starts now, covering the connect-and-wait-for-
+	// headers phase too (a server that accepts the connection but never
+	// responds at all is exactly as "stalled" as one that stops mid-body),
+	// and gets reset once more the moment headers actually arrive, before
+	// any Read of the body has happened — so a real response starts the
+	// clock fresh for the body-reading phase that follows.
+	fetchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	idleTimeout := im.getFetchTimeout()
+	timer := time.AfterFunc(idleTimeout, cancel)
+	defer timer.Stop()
+
 	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, link, nil)
 	if err != nil {
 		return fmt.Errorf("build download request: %w", err)
@@ -1267,9 +1301,11 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("download: %w", err)
 	}
 	defer resp.Body.Close()
+	timer.Reset(idleTimeout)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download: unexpected status %d", resp.StatusCode)
 	}
+	body := &idleTimeoutReader{r: resp.Body, timer: timer, timeout: idleTimeout}
 
 	// Write to a .part sibling and rename into place, so a process crash or
 	// cancelled context mid-transfer never leaves a truncated file at the
@@ -1282,7 +1318,7 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	pw := &progressWriter{w: out, onProgress: onProgress}
-	if _, err := io.Copy(pw, resp.Body); err != nil {
+	if _, err := io.Copy(pw, body); err != nil {
 		out.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write file: %w", err)

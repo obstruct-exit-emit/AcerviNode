@@ -1857,6 +1857,66 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 	}
 }
 
+// TestFetchFile_SucceedsWithSlowButActiveTransfer proves fetchTimeout is an
+// idle/stall deadline, not a total-transfer one: a transfer that's slow
+// overall but never actually stops making progress must succeed even though
+// its whole duration exceeds the configured value — only a gap between
+// chunks longer than that value (see TestFetchFile_TimesOutOnSlowTransfer,
+// an extreme case where no data ever arrives at all) should ever trip it.
+func TestFetchFile_SucceedsWithSlowButActiveTransfer(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	const chunkDelay = 30 * time.Millisecond
+	const numChunks = 5
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server's ResponseWriter doesn't support flushing")
+		}
+		for range numChunks {
+			w.Write([]byte("x"))
+			flusher.Flush()
+			time.Sleep(chunkDelay)
+		}
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: numChunks}},
+	}
+
+	d := &database.Download{
+		ID: "dl-slow-active", Provider: "fake", ProviderDownloadID: "provider-slow-active", Kind: database.KindTorrent,
+		Hash: "slowactivehash", Name: "Slow But Active Release", Category: "tv", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	// Comfortably longer than any single gap between chunks (chunkDelay),
+	// but shorter than the whole transfer (numChunks*chunkDelay) — the
+	// point of this test.
+	im.SetFetchTimeout(chunkDelay * 3)
+
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateReadyForImport {
+		t.Errorf("state = %q, want ready_for_import — a slow but continuously active transfer must not time out", got.State)
+	}
+	if got.RetryCount != 0 {
+		t.Errorf("RetryCount = %d, want 0 (no failed attempt)", got.RetryCount)
+	}
+}
+
 // TestProcessDownload_MakesDestinationDirectoryWorldWritable proves the fix
 // for a real, live-diagnosed bug: Radarr's SABnzbd import path always
 // attempts a genuine move (unlike its qBittorrent path, which only ever
