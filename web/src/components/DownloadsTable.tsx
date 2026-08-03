@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { Download } from '../api'
 import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
 import { StateBadge } from './StateBadge'
@@ -7,6 +8,12 @@ interface Props {
   onDelete: (d: Download) => void
   onRetry: (d: Download) => void
   onDownloadAll: (d: Download) => void
+  // Bulk selection — a row's checkbox and the header's select-all checkbox.
+  // Lives in the parent (App.tsx) rather than local state here, since the
+  // bulk action bar rendered above the table needs the same set.
+  selectedIds: Set<string>
+  onToggleSelect: (id: string) => void
+  onToggleSelectAll: () => void
   // Every row with a "Download all" currently in flight — a Set (not a
   // single id) because more than one row can genuinely be downloading at
   // once now that a batch can be handed off to the Downloads popup window
@@ -45,10 +52,25 @@ export function DownloadsTable({
   busyIds,
   downloadProgress,
   onSelect,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
   allowRetry,
   showCategory,
   emptyMessage,
 }: Props) {
+  const selectAllRef = useRef<HTMLInputElement>(null)
+  const selectedCount = downloads.filter((d) => selectedIds.has(d.id)).length
+  const allSelected = downloads.length > 0 && selectedCount === downloads.length
+
+  // React has no JSX prop for a checkbox's indeterminate state (it's a DOM
+  // property, not an HTML attribute) — has to be set imperatively.
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedCount > 0 && !allSelected
+    }
+  }, [selectedCount, allSelected])
+
   if (downloads.length === 0) {
     return <p className="empty">{emptyMessage}</p>
   }
@@ -57,6 +79,15 @@ export function DownloadsTable({
     <table className="downloads">
       <thead>
         <tr>
+          <th className="select-cell">
+            <input
+              ref={selectAllRef}
+              type="checkbox"
+              checked={allSelected}
+              onChange={onToggleSelectAll}
+              aria-label="Select all"
+            />
+          </th>
           <th>Name</th>
           <th>Protocol</th>
           {showCategory && <th>Category</th>}
@@ -73,6 +104,14 @@ export function DownloadsTable({
           const progress = downloadProgress[d.id]
           return (
           <tr key={d.id} className="row-clickable" onClick={() => onSelect(d)}>
+            <td className="select-cell" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={selectedIds.has(d.id)}
+                onChange={() => onToggleSelect(d.id)}
+                aria-label={`Select ${d.name}`}
+              />
+            </td>
             <td className="name-cell" title={d.name}>
               {d.name}
               {d.error_message && <div className="error-message">{d.error_message}</div>}

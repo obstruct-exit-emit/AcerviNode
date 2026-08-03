@@ -86,6 +86,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Bulk select/delete/retry in the downloads table.** A checkbox column
+  (row + header select-all/indeterminate) and a contextual action bar that
+  only appears once something's selected — the table looks identical to
+  before this existed the rest of the time. Delete is available on both
+  tabs; Retry only on Managed (matching the existing per-row Retry button's
+  own Managed-only scoping — a Manual download has nothing for Retry to
+  act on) and only counts/acts on the selected rows actually in `error`
+  state. Both loop the existing single-item endpoint rather than needing a
+  new batch API, same precedent as "Download all" looping the per-file link
+  call. Selection is scoped to whichever tab is currently visible (cleared
+  on tab switch) and automatically drops any id that stops existing (e.g.
+  deleted through its own row's ✕ while still checked).
+
 - **New `GET /api/v1/status` endpoint** reports whether AcerviNode's own
   background polling is actually alive and making progress — built
   proactively, picked directly off the roadmap's own "Path to daily-driver

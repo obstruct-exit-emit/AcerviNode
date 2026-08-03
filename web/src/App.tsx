@@ -17,6 +17,7 @@ import {
   type ProviderStatus,
 } from './api'
 import { AddDownload } from './components/AddDownload'
+import { BulkActionBar } from './components/BulkActionBar'
 import { DownloadDetail } from './components/DownloadDetail'
 import { DownloadOptionsDialog, type DownloadOptions } from './components/DownloadOptionsDialog'
 import { DownloadsTable } from './components/DownloadsTable'
@@ -76,6 +77,25 @@ export default function App() {
   // here shows the plain "…" indicator instead (every other mode has
   // nothing granular to report).
   const [downloadProgress, setDownloadProgress] = useState<Record<string, { loaded: number; total: number }>>({})
+  // Bulk selection for the currently-active tab's table — a single Set
+  // rather than one per tab, cleared on every tab switch (see the effect
+  // below) so it's always scoped to whichever table is actually visible.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function toggleSelectAll(ids: string[]) {
+    setSelectedIds((prev) => {
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id))
+      return allSelected ? new Set() : new Set(ids)
+    })
+  }
 
   function markBusy(id: string) {
     setBusyIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
@@ -165,6 +185,31 @@ export default function App() {
     return () => clearInterval(interval)
   }, [ready, activeKey, refresh])
 
+  // Selection is scoped to whichever table is currently visible — switching
+  // tabs starts fresh rather than carrying a Manual-tab selection into the
+  // Managed tab's bulk action bar (or vice versa).
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [view])
+
+  // Drops any selected id that's no longer present in either list — e.g. a
+  // row deleted through a different path (its own row's ✕, or discovered
+  // vanished by the importer) while still checked here. Only updates state
+  // when something actually needs dropping, to avoid a pointless re-render
+  // every single poll.
+  useEffect(() => {
+    const known = new Set([...managedDownloads, ...manualDownloads].map((d) => d.id))
+    setSelectedIds((prev) => {
+      let changed = false
+      const next = new Set<string>()
+      for (const id of prev) {
+        if (known.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [managedDownloads, manualDownloads])
+
   // Relays the Downloads popup window's progress back into each row's own
   // progress bar, keyed by download id — best-effort, since the popup works
   // fine without anyone listening.
@@ -201,6 +246,46 @@ export default function App() {
       refresh(activeKey)
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // Bulk delete/retry both loop the existing single-item endpoint rather
+  // than needing a new batch endpoint of their own — same precedent as
+  // "Download all" looping the per-file link call instead of a dedicated
+  // batch API. One failure doesn't stop the rest; every id is attempted and
+  // failures are reported together at the end.
+  async function handleBulkDelete(ids: string[]) {
+    if (!ready || ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} download${ids.length === 1 ? '' : 's'}? This also removes them from the debrid provider.`)) return
+    const failed: string[] = []
+    for (const id of ids) {
+      try {
+        await deleteDownload(activeKey, id, true)
+      } catch {
+        failed.push(id)
+      }
+    }
+    setSelectedIds(new Set())
+    refresh(activeKey)
+    if (failed.length > 0) {
+      alert(`${failed.length} of ${ids.length} download(s) failed to delete.`)
+    }
+  }
+
+  async function handleBulkRetry(ids: string[]) {
+    if (!ready || ids.length === 0) return
+    const failed: string[] = []
+    for (const id of ids) {
+      try {
+        await retryDownload(activeKey, id)
+      } catch {
+        failed.push(id)
+      }
+    }
+    setSelectedIds(new Set())
+    refresh(activeKey)
+    if (failed.length > 0) {
+      alert(`${failed.length} of ${ids.length} download(s) failed to retry.`)
     }
   }
 
@@ -426,32 +511,58 @@ export default function App() {
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
         {isAdmin && view === 'managed' && (
-          <DownloadsTable
-            downloads={managedDownloads}
-            onDelete={handleDelete}
-            onRetry={handleRetry}
-            onDownloadAll={handleDownloadAll}
-            busyIds={busyIds}
-            downloadProgress={downloadProgress}
-            onSelect={(d) => setSelectedId(d.id)}
-            allowRetry
-            showCategory
-            emptyMessage="No managed downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly."
-          />
+          <>
+            <BulkActionBar
+              count={managedDownloads.filter((d) => selectedIds.has(d.id)).length}
+              onDelete={() => handleBulkDelete(managedDownloads.filter((d) => selectedIds.has(d.id)).map((d) => d.id))}
+              onRetry={() =>
+                handleBulkRetry(
+                  managedDownloads.filter((d) => selectedIds.has(d.id) && d.state === 'error').map((d) => d.id),
+                )
+              }
+              retryCount={managedDownloads.filter((d) => selectedIds.has(d.id) && d.state === 'error').length}
+              onClear={() => setSelectedIds(new Set())}
+            />
+            <DownloadsTable
+              downloads={managedDownloads}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDownloadAll={handleDownloadAll}
+              busyIds={busyIds}
+              downloadProgress={downloadProgress}
+              onSelect={(d) => setSelectedId(d.id)}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={() => toggleSelectAll(managedDownloads.map((d) => d.id))}
+              allowRetry
+              showCategory
+              emptyMessage="No managed downloads yet. Add one through Sonarr/Radarr, or via the qBittorrent/SABnzbd compat APIs directly."
+            />
+          </>
         )}
         {view === 'manual' && (
-          <DownloadsTable
-            downloads={manualDownloads}
-            onDelete={handleDelete}
-            onRetry={handleRetry}
-            onDownloadAll={handleDownloadAll}
-            busyIds={busyIds}
-            downloadProgress={downloadProgress}
-            onSelect={(d) => setSelectedId(d.id)}
-            allowRetry={false}
-            showCategory={false}
-            emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
-          />
+          <>
+            <BulkActionBar
+              count={manualDownloads.filter((d) => selectedIds.has(d.id)).length}
+              onDelete={() => handleBulkDelete(manualDownloads.filter((d) => selectedIds.has(d.id)).map((d) => d.id))}
+              onClear={() => setSelectedIds(new Set())}
+            />
+            <DownloadsTable
+              downloads={manualDownloads}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDownloadAll={handleDownloadAll}
+              busyIds={busyIds}
+              downloadProgress={downloadProgress}
+              onSelect={(d) => setSelectedId(d.id)}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={() => toggleSelectAll(manualDownloads.map((d) => d.id))}
+              allowRetry={false}
+              showCategory={false}
+              emptyMessage="No manual downloads yet. Add one with the button above, or add it directly through TorBox — it'll show up here automatically."
+            />
+          </>
         )}
         {isAdmin && view === 'settings' && <Settings apiKey={activeKey} />}
       </main>
