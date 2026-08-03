@@ -610,6 +610,15 @@ export function Settings({ apiKey }: Props) {
             </>
           )}
 
+          {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
+            <p className="settings-error">
+              ⚠ TorBox is restricting this account until{' '}
+              {new Date(account.cooldown_until).toLocaleString()} — every download's progress can look frozen with
+              no other visible cause while this is active. Not something AcerviNode can do anything about; it'll
+              clear on its own.
+            </p>
+          )}
+
           {account?.available && (
             <dl className="detail-meta account-status">
               <dt>Plan</dt>

@@ -353,6 +353,11 @@ export interface TorBoxAccount {
   is_subscribed?: boolean
   premium_expires_at?: string
   total_bytes_downloaded?: number
+  // cooldown_until, if present and in the future, means the provider is
+  // currently restricting this account — every download's progress/state
+  // can look frozen with no other visible explanation while this is set.
+  // Not documented anywhere by the provider; surfaced as-is, not acted on.
+  cooldown_until?: string
 }
 
 export function getTorBoxAccount(apiKey: string): Promise<TorBoxAccount> {

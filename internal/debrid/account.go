@@ -10,6 +10,19 @@ type AccountStatus struct {
 	IsSubscribed         bool
 	PremiumExpiresAt     string
 	TotalBytesDownloaded int64
+	// CooldownUntil, if set, is when a provider-imposed restriction on this
+	// account is believed to lift — see torbox.UserData.CooldownUntil's own
+	// doc comment for exactly what was (and wasn't) confirmed about it.
+	// Found live investigating a real "everything looks frozen" report:
+	// while this was set to a future time, TorBox silently returned empty
+	// (200 OK, zero items, no error) from every listing endpoint instead of
+	// erroring or rate-limiting in a way AcerviNode's own backoff already
+	// detects — indistinguishable from every download having vanished
+	// (harmless — see database.RefreshFromProvider's mass-vanish circuit
+	// breaker — but leaves everything looking frozen with no visible
+	// explanation until this is surfaced). Empty string when not currently
+	// restricted, or for a provider that doesn't report this at all.
+	CooldownUntil string
 }
 
 // AccountProvider is implemented by a provider that can report its own

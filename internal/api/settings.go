@@ -173,6 +173,12 @@ type accountStatusResponse struct {
 	IsSubscribed         bool   `json:"is_subscribed,omitempty"`
 	PremiumExpiresAt     string `json:"premium_expires_at,omitempty"`
 	TotalBytesDownloaded int64  `json:"total_bytes_downloaded,omitempty"`
+	// CooldownUntil surfaces a real provider-imposed restriction that
+	// otherwise looks like "everything's stopped updating" with no visible
+	// explanation — see debrid.AccountStatus.CooldownUntil's own doc
+	// comment for what was (and wasn't) confirmed about it. Empty when not
+	// currently restricted, or for a provider that doesn't report this.
+	CooldownUntil string `json:"cooldown_until,omitempty"`
 }
 
 // handleGetAccountStatus implements GET /api/v1/settings/account — a live
@@ -193,6 +199,7 @@ func (s *Server) handleGetAccountStatus(w http.ResponseWriter, r *http.Request) 
 		IsSubscribed:         status.IsSubscribed,
 		PremiumExpiresAt:     status.PremiumExpiresAt,
 		TotalBytesDownloaded: status.TotalBytesDownloaded,
+		CooldownUntil:        status.CooldownUntil,
 	})
 }
 

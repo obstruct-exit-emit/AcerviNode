@@ -1,5 +1,5 @@
 import type { Download } from '../api'
-import { formatBytes, formatRelativeTime, formatSpeed } from '../format'
+import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
 import { StateBadge } from './StateBadge'
 
 interface Props {
@@ -89,13 +89,16 @@ export function DownloadsTable({
               <span className="progress-label">
                 {Math.round(d.progress * 100)}%
                 {/* Only worth showing while actually moving — a completed,
-                    queued, or stalled download's speed is 0 and would just
-                    be noise here (the full breakdown, including why it's
-                    stalled, lives in the detail view). */}
-                {d.state === 'downloading' && d.download_speed_bytes > 0 && (
-                  <span className="progress-speed"> · {formatSpeed(d.download_speed_bytes)}</span>
+                    queued, or stalled download's ETA is 0/unknown and would
+                    just be noise here (the full breakdown, including why
+                    it's stalled, lives in the detail view). */}
+                {d.state === 'downloading' && d.eta_seconds > 0 && (
+                  <span className="progress-eta"> · {formatDuration(d.eta_seconds)}</span>
                 )}
               </span>
+              {d.state === 'downloading' && d.download_speed_bytes > 0 && (
+                <div className="progress-speed">{formatSpeed(d.download_speed_bytes)}</div>
+              )}
             </td>
             <td>{formatBytes(d.size_bytes)}</td>
             <td title={d.added_at}>{formatRelativeTime(d.added_at)}</td>

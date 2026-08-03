@@ -600,6 +600,21 @@ type UserData struct {
 	IsSubscribed         bool    `json:"is_subscribed"`
 	PremiumExpiresAt     string  `json:"premium_expires_at"`
 	TotalBytesDownloaded float64 `json:"total_bytes_downloaded"`
+	// CooldownUntil is a real field on /user/me's response, not documented
+	// anywhere found. Found live, while investigating a real "everything
+	// looks frozen" report: with this set to a future time, every one of
+	// TorBox's own listing endpoints (torrents/usenet mylist, bypass_cache
+	// or not) returned a 200 with zero items instead of erroring —
+	// confirmed by replicating AcerviNode's exact request by hand and
+	// watching it come back empty the same way. That specific mechanism
+	// (this field being the direct cause, as opposed to a coincidental
+	// correlation with some other account-level restriction) isn't
+	// independently confirmed from TorBox's own side — there's no official
+	// documentation of what this field means — but the correlation was
+	// exact and repeatable in the moment it was found. Surfaced as-is
+	// rather than acted on: AcerviNode doesn't change polling behavior
+	// based on it, only displays it (see debrid.AccountStatus.CooldownUntil).
+	CooldownUntil string `json:"cooldown_until"`
 }
 
 // GetUserData returns the current account's plan/usage info.

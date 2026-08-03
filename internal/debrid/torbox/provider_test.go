@@ -408,6 +408,7 @@ func TestProvider_Account(t *testing.T) {
 				"plan": 2, "is_subscribed": true,
 				"premium_expires_at":     "2027-01-01T00:00:00Z",
 				"total_bytes_downloaded": 1024.0,
+				"cooldown_until":         "2026-08-04T04:29:02Z",
 			},
 		})
 	}))
@@ -423,6 +424,12 @@ func TestProvider_Account(t *testing.T) {
 	}
 	if !status.IsSubscribed || status.PremiumExpiresAt != "2027-01-01T00:00:00Z" || status.TotalBytesDownloaded != 1024 {
 		t.Errorf("status = %+v", status)
+	}
+	// CooldownUntil — a real, undocumented field found live correlating
+	// with every TorBox listing endpoint silently going empty — see its own
+	// doc comment on torbox.UserData.
+	if status.CooldownUntil != "2026-08-04T04:29:02Z" {
+		t.Errorf("CooldownUntil = %q, want passed through unchanged", status.CooldownUntil)
 	}
 }
 

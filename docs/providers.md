@@ -1134,7 +1134,40 @@ documented anywhere found during research) — `UserData` in
 `internal/debrid/torbox/types.go` only models the subset AcerviNode's own account
 status display actually uses: `plan` (an integer tier — 0 Free, 1 Essential, 2 Pro,
 3 Standard, confirmed live against the real account, which is a Pro/`plan: 2`
-subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`.
+subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`,
+`cooldown_until`.
+
+#### `cooldown_until` — a real, undocumented account restriction
+
+Found live while investigating a real "everything looks frozen" report — every
+download's `progress` had stopped updating, `RefreshFromProvider`'s mass-vanish
+warning was firing on literally every single tick, hours running, and
+`refreshKind`'s bulk `List()` calls (both kinds) were consistently returning zero
+items. Confirmed this wasn't AcerviNode's own request at fault by replicating it
+by hand (`curl` with the exact same `bypass_cache=true&limit=1000` params, same
+key) directly against TorBox — same empty result. `GET /user/me`, checked next,
+had `cooldown_until` set to a real future timestamp (roughly 24h out from the
+account's own `updated_at`) — every listing endpoint stayed empty for as long as
+that held.
+
+That specific causal mechanism (`cooldown_until` being *why* listings are empty,
+as opposed to a coincidental correlation with some other account-level state) is
+**not independently confirmed from TorBox's own documentation** — there isn't
+any found for this field at all. The correlation observed live was exact and
+repeatable in the moment, which is the most that can honestly be claimed. Given
+the account's own usage counters (`torrents_downloaded`/`usenet_downloads_downloaded`)
+were both very high at the time, this reads like a TorBox-side anti-abuse/rate
+cooldown triggered by sustained heavy API usage — this project's own long-running
+live-testing sessions being the most likely cause on the account it was found on,
+not something a normal personal-use pattern would be expected to trigger.
+
+AcerviNode doesn't change any polling behavior based on this field — no special
+backoff, no different retry logic — it's surfaced purely for visibility:
+`debrid.AccountStatus.CooldownUntil` → `GET /api/v1/settings/account`'s
+`cooldown_until` → a warning banner in the Settings page's TorBox account section
+whenever it's set to a future time. Without this, the exact same "why has nothing
+updated in hours" investigation would otherwise require reading logs or querying
+TorBox directly by hand, same as how this was actually found.
 
 ## Auth: login accounts and roles
 

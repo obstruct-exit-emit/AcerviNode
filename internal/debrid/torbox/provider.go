@@ -158,6 +158,7 @@ func (p *Provider) Account(ctx context.Context) (debrid.AccountStatus, error) {
 		IsSubscribed:         data.IsSubscribed,
 		PremiumExpiresAt:     data.PremiumExpiresAt,
 		TotalBytesDownloaded: int64(data.TotalBytesDownloaded),
+		CooldownUntil:        data.CooldownUntil,
 	}, nil
 }
 

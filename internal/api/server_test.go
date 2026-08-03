@@ -2372,6 +2372,7 @@ func TestHandleAddWebDownload_RequiresAuth(t *testing.T) {
 func TestHandleGetAccountStatus_Available(t *testing.T) {
 	settings := &fakeSettings{accountStatus: debrid.AccountStatus{
 		PlanName: "Pro", IsSubscribed: true, PremiumExpiresAt: "2027-01-01T00:00:00Z", TotalBytesDownloaded: 1024,
+		CooldownUntil: "2026-08-04T04:29:02Z",
 	}}
 	srv, _ := newTestServer(t, nil, nil, settings)
 
@@ -2387,6 +2388,12 @@ func TestHandleGetAccountStatus_Available(t *testing.T) {
 	}
 	if !got.Available || got.PlanName != "Pro" || !got.IsSubscribed || got.TotalBytesDownloaded != 1024 {
 		t.Errorf("response = %+v", got)
+	}
+	// CooldownUntil surfaces a real, live-found TorBox account restriction
+	// that otherwise makes every download look frozen with no visible
+	// explanation — see debrid.AccountStatus.CooldownUntil's own doc comment.
+	if got.CooldownUntil != "2026-08-04T04:29:02Z" {
+		t.Errorf("CooldownUntil = %q, want passed through unchanged", got.CooldownUntil)
 	}
 }
 

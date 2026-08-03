@@ -100,6 +100,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   many downloads active at once). Both apply immediately, no restart
   needed.
 
+- **The Settings page's TorBox account panel now surfaces `cooldown_until`
+  when TorBox sets it** — a real, undocumented field on TorBox's own `GET
+  /user/me` found live while investigating a report that every download's
+  progress had frozen for hours. Root cause: not a regression in
+  AcerviNode (confirmed by replicating its exact outbound request by hand
+  against TorBox directly and reproducing the same empty result), but a
+  TorBox-side account restriction — while `cooldown_until` was set to a
+  future time, every one of TorBox's own listing endpoints silently
+  returned zero items instead of erroring, which AcerviNode's existing
+  mass-vanish safeguard correctly avoided misreading as "everything
+  disappeared," but with no visible explanation for why nothing was
+  updating. AcerviNode doesn't change any polling behavior based on this
+  field — it's display-only — but a warning banner now appears on the
+  Settings page whenever it's active, so this is diagnosable at a glance
+  next time instead of requiring a manual log/API investigation. See
+  docs/providers.md#cooldown_until--a-real-undocumented-account-restriction
+  for the full writeup, including the caveat that TorBox doesn't document
+  this field anywhere and the causal mechanism isn't independently
+  confirmed on their end.
+
+- **The downloads table's per-row speed now sits on its own line below the
+  progress bar, with the ETA shown inline next to the percentage instead**
+  (previously both speed and percentage were crammed onto one line, and
+  ETA wasn't shown in the table at all, only the detail view) — easier to
+  read at a glance across many active downloads.
+
 - **A Managed download's progress bar now shows real progress while it's
   being fetched to local disk, instead of freezing at 100%.** Once a
   provider itself finishes a download, AcerviNode still has to actually

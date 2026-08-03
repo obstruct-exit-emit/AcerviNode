@@ -573,6 +573,16 @@ table.downloads tbody tr:hover {
   font-family: var(--mono);
 }
 
+/* Sits on its own line below the bar (a block element following the inline
+   track/label above it wraps naturally, no extra layout needed) — see
+   DownloadsTable, the only place that renders it. */
+.progress-speed {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+
 .delete-btn {
   background: none;
   border: none;
