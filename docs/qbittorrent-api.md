@@ -31,6 +31,8 @@ gives AcerviNode a drop-in integration path with zero changes required on the
 | `GET /api/v2/torrents/files` | Per-file listing, used by \*arr apps to map imports |
 | `POST /api/v2/torrents/delete` | Removes a torrent, optionally deleting its files (`deleteFiles=true` — see docs/providers.md#local-file-deletion). Also records a delete tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
 | `GET /api/v2/torrents/categories` / `POST createCategory` | Category bookkeeping — categories are stored on the AcerviNode side and echoed back, not interpreted |
+| `POST /api/v2/torrents/setCategory` | Changes an already-tracked torrent's category — called by Sonarr/Radarr's `MarkItemAsImported` when a separate "post-import category" setting differs from the add-time one (confirmed against their real source: an optional setting, not part of the default add flow). Auto-registers the category the same permissive way `createCategory` does, rather than replicating real qBittorrent's stricter "category must already exist" 409 |
+| `POST /api/v2/torrents/setShareLimits` / `topPrio` / `setForceStart` | Accepted as no-ops — called by Sonarr/Radarr only when specific optional client settings are enabled (seed ratio/time limits, "First" queue priority, "Force Start" initial state; confirmed against their real source), and AcerviNode has no seeding, priority-queue, or paused-state concept to actually apply them to. Returning success (rather than 404) is what lets an add complete normally for a user who has one of these turned on |
 
 ## State mapping
 

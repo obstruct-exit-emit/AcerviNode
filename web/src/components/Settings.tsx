@@ -35,7 +35,7 @@ import { SecuritySettings } from './SecuritySettings'
 const settingsGroups = [
   { name: 'General', blurb: "This instance's API key and import/cleanup behavior." },
   { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through.' },
-  { name: 'Categories', blurb: "Redirect a Sonarr/Radarr category's downloads to a specific directory." },
+  { name: 'Categories', blurb: 'Pre-register categories for Sonarr/Radarr, and optionally redirect their downloads to a specific directory.' },
   { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
   { name: 'Security', blurb: 'Login accounts on top of the API key, and their roles.' },
 ] as const
@@ -301,11 +301,19 @@ export function Settings({ apiKey }: Props) {
   // required one (SetCategoryPath accepts any non-empty name), the old UI
   // just artificially gated the form on Sonarr/Radarr (or a manual "add
   // category" step) having been seen first.
+  //
+  // path is optional: submitting with just a category name registers it
+  // with both compat shims (no path override applied) — the only way to
+  // pre-declare a category before Sonarr/Radarr ever connects. This matters
+  // specifically for the SABnzbd shim: real SABnzbd (and this shim,
+  // faithfully) has no API to create a category on the fly, so Radarr's own
+  // "Test" step rejects a category outright if AcerviNode doesn't already
+  // know about it — found live.
   async function handleAddOverride(e: FormEvent) {
     e.preventDefault()
     const category = newOverrideCategory.trim()
     const path = newOverridePath.trim()
-    if (!category || !path) return
+    if (!category) return
     setNewOverrideStatus({ kind: 'saving' })
     try {
       await setCategoryPath(apiKey, category, path)
@@ -594,12 +602,16 @@ export function Settings({ apiKey }: Props) {
 
       {group === 'Categories' && (
         <section className="settings-card">
-          <h2>Save path overrides</h2>
+          <h2>Categories</h2>
           <p className="settings-help">
-            Redirect a category's completed downloads to a specific directory instead of the default{' '}
-            <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only affects
-            Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing override's
-            path and save to remove it.
+            Register a category name here <strong>before</strong> configuring it in Sonarr/Radarr — real SABnzbd has
+            no way to create a category on the fly, so a brand new category typed into Radarr's SABnzbd client gets
+            rejected outright by its own "Test" step unless AcerviNode already knows about it. Leave the path blank
+            to just register the name; fill it in to also redirect that category's completed downloads to a specific
+            directory instead of the default <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a
+            different disk or mount). Only affects Managed (Sonarr/Radarr) downloads — category has no effect on
+            Manual ones. Clear an existing override's path and save to remove it (the category itself stays
+            registered).
           </p>
 
           {categories &&
@@ -614,16 +626,21 @@ export function Settings({ apiKey }: Props) {
               value={newOverrideCategory}
               onChange={(e) => setNewOverrideCategory(e.target.value)}
             />
-            <input type="text" placeholder="Path (e.g. /mnt/tv)" value={newOverridePath} onChange={(e) => setNewOverridePath(e.target.value)} />
-            <button type="submit" disabled={newOverrideStatus.kind === 'saving' || !newOverrideCategory.trim() || !newOverridePath.trim()}>
-              {newOverrideStatus.kind === 'saving' ? 'Adding…' : 'Add override'}
+            <input
+              type="text"
+              placeholder="Path (optional, e.g. /mnt/tv)"
+              value={newOverridePath}
+              onChange={(e) => setNewOverridePath(e.target.value)}
+            />
+            <button type="submit" disabled={newOverrideStatus.kind === 'saving' || !newOverrideCategory.trim()}>
+              {newOverrideStatus.kind === 'saving' ? 'Adding…' : 'Register'}
             </button>
           </form>
           {newOverrideStatus.kind === 'error' && <p className="settings-error">Failed to add: {newOverrideStatus.message}</p>}
 
           {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
             <p className="settings-help">
-              Declared by Sonarr/Radarr — torrent: {categories.torrent.join(', ') || 'none'}; usenet:{' '}
+              Currently known — torrent (qBittorrent): {categories.torrent.join(', ') || 'none'}; usenet (SABnzbd):{' '}
               {categories.usenet.join(', ') || 'none'}.
             </p>
           )}

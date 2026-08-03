@@ -38,12 +38,21 @@ paths respectively).
 Both compat shims track category names *arr apps declare (purely so
 `/api/v2/torrents/categories`/`mode=get_config` have something to report back —
 AcerviNode never interprets a category itself). `GET /api/v1/settings/categories`
-reports them (and, separately, `POST /api/v1/settings/categories` still lets a
-caller pre-declare one directly, the same way an *arr app's own createCategory
-call does) — but the web UI's Settings tab no longer surfaces that as its own
-step. Setting a save-path override (below) doesn't require a category to be
-"known" first: `PUT /api/v1/settings/categories/path` accepts any category
-name directly, declared or not.
+reports them, and `POST /api/v1/settings/categories` lets a caller pre-declare
+one directly, the same way an *arr app's own createCategory call does.
+
+`PUT /api/v1/settings/categories/path` (the web UI's Settings → Categories
+section) also registers the category with both compat shims as a side effect
+of setting its path override — even with an empty path, which just registers
+the name with no override applied. This is the only way to make a category
+show up before Sonarr/Radarr has ever connected, which matters specifically
+for the SABnzbd shim: real SABnzbd (and this one, faithfully) has no API to
+create a category on the fly, so Radarr/Sonarr's own SABnzbd "Test" step
+rejects a category outright unless AcerviNode already knows about it — see
+[SABnzbd API compatibility](sabnzbd-api.md#categories). Every registered
+category (with or without a path) is persisted in `category_paths` and
+survives a restart — `SetShimServers` re-seeds both shims' category stores
+from it at startup, since those stores are otherwise purely in-memory.
 
 ## Example
 
@@ -89,10 +98,11 @@ when one was supplied — an explicit `save_path` from the *arr app always wins.
 When no `save_path` was supplied, AcerviNode falls back to `download_dir`, organized
 as `<download_dir>/<category>/<name>/` — unless that category has its own override
 configured via `category_paths` (`PUT /api/v1/settings/categories/path`, or the web
-UI's Settings tab's "Save path overrides" section), in which case files land
+UI's Settings → Categories section), in which case files land
 directly under `<override>/<name>/` instead. Useful for routing one category to a
 different disk or mount than the rest — e.g. movies to a large secondary drive while
 everything else stays on `download_dir`. Setting one doesn't require the category to
-have been declared/seen by Sonarr/Radarr first — the web UI's "Add override" form
-takes any category name directly. `GET /api/v1/settings/categories`'s `paths`
-field reports the current overrides.
+have been declared/seen by Sonarr/Radarr first — the web UI's "Register" form
+takes any category name directly (path is optional — see [Categories](#categories)
+above). `GET /api/v1/settings/categories`'s `paths` field reports the current
+overrides.

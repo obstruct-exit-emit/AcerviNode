@@ -317,6 +317,124 @@ func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
 // root (what real qBittorrent calls content_path); content_path here must
 // carry that real value, with save_path synthesized as its parent purely
 // so the comparison never accidentally matches.
+// TestHandleSetCategory_UpdatesCategoryAndRegistersIt proves setCategory —
+// what Sonarr/Radarr's MarkItemAsImported calls for a separate post-import
+// category — actually changes the tracked row's category, and that the new
+// name shows up in GET /api/v2/torrents/categories (real qBittorrent
+// requires a category to already exist there before setCategory succeeds;
+// this shim auto-registers it instead — see handleSetCategory's own doc
+// comment for why).
+func TestHandleSetCategory_UpdatesCategoryAndRegistersIt(t *testing.T) {
+	ts, client := newTestServer(t)
+	login(t, client, ts.URL)
+
+	addResp := postMultipart(t, client, ts.URL+"/api/v2/torrents/add", map[string]string{
+		"urls":     testMagnet,
+		"category": "tv-sonarr",
+	})
+	addResp.Body.Close()
+
+	db := ts.Config.Handler.(*Server).db
+	all, err := db.ListAllDownloads(t.Context())
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListAllDownloads() = %v, %v, want exactly one row", all, err)
+	}
+	d := all[0]
+
+	resp, err := client.PostForm(ts.URL+"/api/v2/torrents/setCategory", url.Values{
+		"hashes": {d.Hash}, "category": {"tv-sonarr-imported"},
+	})
+	if err != nil {
+		t.Fatalf("setCategory error = %v", err)
+	}
+	resp.Body.Close()
+
+	got, err := db.GetDownloadByID(t.Context(), d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.Category != "tv-sonarr-imported" {
+		t.Errorf("Category = %q, want tv-sonarr-imported", got.Category)
+	}
+
+	catResp, err := client.Get(ts.URL + "/api/v2/torrents/categories")
+	if err != nil {
+		t.Fatalf("categories error = %v", err)
+	}
+	defer catResp.Body.Close()
+	var cats map[string]categoryResponse
+	if err := json.NewDecoder(catResp.Body).Decode(&cats); err != nil {
+		t.Fatalf("decode categories: %v", err)
+	}
+	if _, ok := cats["tv-sonarr-imported"]; !ok {
+		t.Errorf("categories = %v, want tv-sonarr-imported to be registered", cats)
+	}
+}
+
+// TestHandleSetCategory_HashesAllAppliesToEveryTorrent proves "all" (real
+// qBittorrent's own wildcard for "every tracked torrent") is honored, not
+// just a literal pipe-separated hash list.
+func TestHandleSetCategory_HashesAllAppliesToEveryTorrent(t *testing.T) {
+	ts, client := newTestServer(t)
+	login(t, client, ts.URL)
+
+	for i := 0; i < 2; i++ {
+		addResp := postMultipart(t, client, ts.URL+"/api/v2/torrents/add", map[string]string{
+			"urls": testMagnet, "category": "tv-sonarr",
+		})
+		addResp.Body.Close()
+	}
+
+	resp, err := client.PostForm(ts.URL+"/api/v2/torrents/setCategory", url.Values{
+		"hashes": {"all"}, "category": {"movies"},
+	})
+	if err != nil {
+		t.Fatalf("setCategory error = %v", err)
+	}
+	resp.Body.Close()
+
+	db := ts.Config.Handler.(*Server).db
+	all, err := db.ListAllDownloads(t.Context())
+	if err != nil {
+		t.Fatalf("ListAllDownloads() error = %v", err)
+	}
+	for _, d := range all {
+		if d.Category != "movies" {
+			t.Errorf("download %s Category = %q, want movies", d.ID, d.Category)
+		}
+	}
+}
+
+// TestHandleSetShareLimits_TopPrio_SetForceStart_AreAcceptedNoOps proves
+// these three real qBittorrent endpoints — called by Sonarr/Radarr only when
+// specific optional client settings are enabled (seed limits, "First"
+// priority, "Force Start" initial state — confirmed against their real
+// source) — return success rather than 404ing, even though AcerviNode has no
+// seeding/priority-queue/paused-state concept to actually apply them to.
+func TestHandleSetShareLimits_TopPrio_SetForceStart_AreAcceptedNoOps(t *testing.T) {
+	ts, client := newTestServer(t)
+	login(t, client, ts.URL)
+
+	cases := []struct {
+		path   string
+		values url.Values
+	}{
+		{"/api/v2/torrents/setShareLimits", url.Values{"hashes": {"all"}, "ratioLimit": {"-2"}, "seedingTimeLimit": {"-2"}, "inactiveSeedingTimeLimit": {"-2"}}},
+		{"/api/v2/torrents/topPrio", url.Values{"hashes": {"all"}}},
+		{"/api/v2/torrents/setForceStart", url.Values{"hashes": {"all"}, "value": {"true"}}},
+	}
+	for _, c := range cases {
+		resp, err := client.PostForm(ts.URL+c.path, c.values)
+		if err != nil {
+			t.Fatalf("%s error = %v", c.path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s status = %d, want 200", c.path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
 func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 	d := &database.Download{SavePath: "/downloads/tv-sonarr/Some.Release.Name"}
 	info := toTorrentInfo(d, liveTorrentInfo{})

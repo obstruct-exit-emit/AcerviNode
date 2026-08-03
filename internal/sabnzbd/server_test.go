@@ -342,6 +342,47 @@ func TestHandleDelete_RecordsDeletedTombstone(t *testing.T) {
 	}
 }
 
+// TestHandleHistory_ReportsBytes proves the real SABnzbd history field
+// "bytes" is populated — confirmed against Sonarr's real source
+// (SabnzbdHistoryItem/Sabnzbd.cs's GetHistory) that it's read directly into
+// the download item's own TotalSize, unlike nzb_name/download_time (also on
+// the real schema, confirmed unused by Sonarr's parsing) — found missing
+// entirely during an API-parity audit.
+func TestHandleHistory_ReportsBytes(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := t.Context()
+
+	completed := &database.Download{
+		ID: "dl-completed", Provider: "fake", ProviderDownloadID: "provider-completed",
+		Kind: database.KindUsenet, Name: "Completed Release", Category: "tv-sonarr",
+		State: database.StateReadyForImport, SizeBytes: 292301045,
+	}
+	failed := &database.Download{
+		ID: "dl-failed-bytes", Provider: "fake", ProviderDownloadID: "provider-failed-bytes",
+		Kind: database.KindUsenet, Name: "Failed Release", Category: "tv-sonarr",
+		State: database.StateError, ErrorMessage: "simulated", SizeBytes: 12345,
+	}
+	db := ts.Config.Handler.(*Server).db
+	if err := db.InsertDownload(ctx, completed); err != nil {
+		t.Fatalf("InsertDownload(completed) error = %v", err)
+	}
+	if err := db.InsertDownload(ctx, failed); err != nil {
+		t.Fatalf("InsertDownload(failed) error = %v", err)
+	}
+
+	hist := getHistory(t, ts.URL)
+	byID := make(map[string]historySlot, len(hist.History.Slots))
+	for _, slot := range hist.History.Slots {
+		byID[slot.NzoID] = slot
+	}
+	if got := byID["dl-completed"].Bytes; got != 292301045 {
+		t.Errorf("completed slot Bytes = %d, want 292301045", got)
+	}
+	if got := byID["dl-failed-bytes"].Bytes; got != 12345 {
+		t.Errorf("failed slot Bytes = %d, want 12345", got)
+	}
+}
+
 func getQueue(t *testing.T, baseURL string) queueResponse {
 	t.Helper()
 	resp, err := http.Get(baseURL + "/api?mode=queue&apikey=" + testAPIKey)

@@ -673,6 +673,119 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 	}
 }
 
+// TestLiveSettings_SetCategoryPath_RegistersCategoryWithBothShims proves the
+// fix for a real bug found live: a user configuring a brand new category in
+// Radarr's SABnzbd client got rejected outright by Radarr's own Test step,
+// since real SABnzbd (and this shim, faithfully) has no API to create a
+// category on the fly — it must already exist server-side. This is the only
+// web UI path that can satisfy that before Sonarr/Radarr ever connects, so
+// setting a category path (even with no override, i.e. an empty path) must
+// also make the category show up in both shims' own category lists.
+func TestLiveSettings_SetCategoryPath_RegistersCategoryWithBothShims(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect
+
+	ctx := context.Background()
+	if err := settings.SetCategoryPath(ctx, "movies-radarr", ""); err != nil {
+		t.Fatalf("SetCategoryPath() error = %v", err)
+	}
+
+	torrentCats, usenetCats := settings.Categories()
+	foundTorrent, foundUsenet := false, false
+	for _, c := range torrentCats {
+		if c == "movies-radarr" {
+			foundTorrent = true
+		}
+	}
+	for _, c := range usenetCats {
+		if c == "movies-radarr" {
+			foundUsenet = true
+		}
+	}
+	if !foundTorrent {
+		t.Errorf("torrent categories = %v, want it to include movies-radarr", torrentCats)
+	}
+	if !foundUsenet {
+		t.Errorf("usenet categories = %v, want it to include movies-radarr", usenetCats)
+	}
+}
+
+// TestLiveSettings_SetCategoryPath_SurvivesRestart proves a category
+// registered via SetCategoryPath — with or without an actual path override
+// — is still known to both compat shims after a simulated restart (a fresh
+// liveSettings/buildHandler built from the same persisted config.yaml, the
+// same thing an actual process restart does). Before this, category
+// registration only ever touched the shims' own in-memory-only category
+// stores directly, with nothing at startup to re-seed them from
+// config.yaml's persisted category_paths — so the fix for Radarr's SABnzbd
+// "category missing" validation would only last until AcerviNode's next
+// restart, putting a user right back where they started.
+func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+
+	ctx := context.Background()
+	if err := settings.SetCategoryPath(ctx, "movies-radarr", ""); err != nil {
+		t.Fatalf("SetCategoryPath() error = %v", err)
+	}
+	if err := settings.SetCategoryPath(ctx, "tv-with-override", "/mnt/tv"); err != nil {
+		t.Fatalf("SetCategoryPath() error = %v", err)
+	}
+
+	// Simulate a restart: reload config from the same file, build a brand
+	// new liveSettings/handler from scratch — no in-memory state carries
+	// over except what config.yaml actually persisted.
+	reloadedCfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() reload error = %v", err)
+	}
+	torrentDyn2, usenetDyn2, webDownloadDyn2, settings2 := setupProviders(reloadedCfg, configPath)
+	buildHandler(db, torrentDyn2, usenetDyn2, webDownloadDyn2, settings2)
+
+	torrentCats, usenetCats := settings2.Categories()
+	for _, want := range []string{"movies-radarr", "tv-with-override"} {
+		foundTorrent, foundUsenet := false, false
+		for _, c := range torrentCats {
+			if c == want {
+				foundTorrent = true
+			}
+		}
+		for _, c := range usenetCats {
+			if c == want {
+				foundUsenet = true
+			}
+		}
+		if !foundTorrent {
+			t.Errorf("torrent categories after restart = %v, want it to include %s", torrentCats, want)
+		}
+		if !foundUsenet {
+			t.Errorf("usenet categories after restart = %v, want it to include %s", usenetCats, want)
+		}
+	}
+}
+
 // --- Auth: liveSettings' wiring of config.Config's user-account methods,
 // plus the SetupNeeded convenience check built specifically for this layer
 // (the underlying business rules — default-account protection, role

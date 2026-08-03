@@ -467,6 +467,27 @@ func (db *DB) UpdateDownloadSavePath(ctx context.Context, id, savePath string) e
 	return checkRowsAffected(res, id)
 }
 
+// UpdateDownloadCategory changes a download's category after the fact — see
+// internal/qbittorrent's handleSetCategory, the only caller: real
+// qBittorrent's own POST /api/v2/torrents/setCategory, which Sonarr/Radarr
+// call from MarkItemAsImported when a separate "post-import category"
+// setting differs from the add-time one (confirmed against their real
+// source — an optional setting, not part of the default add flow, but a
+// real gap found during an API-parity audit since AcerviNode had no way to
+// change an already-tracked row's category at all before this).
+func (db *DB) UpdateDownloadCategory(ctx context.Context, id, category string) error {
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET category = ?, updated_at = ?
+		WHERE id = ?`,
+		nullable(category), time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update download category %s: %w", id, err)
+	}
+	return checkRowsAffected(res, id)
+}
+
 // UpdateMissingCount records how many consecutive successful provider
 // listings a tracked AddedViaManual download has been absent from — see
 // RefreshFromProvider, the only caller (both to increment it on a miss and

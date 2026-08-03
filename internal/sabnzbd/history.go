@@ -13,6 +13,14 @@ type historySlot struct {
 	Status      string `json:"status"`
 	Storage     string `json:"storage"`
 	FailMessage string `json:"fail_message"`
+	// Bytes is real SABnzbd's own history size field — confirmed against
+	// Sonarr's real source (SabnzbdHistoryItem/Sabnzbd.cs's GetHistory) that
+	// it's directly read into the download item's own TotalSize, not just
+	// cosmetic, unlike nzb_name/download_time (present on the real schema
+	// too, but confirmed unused by Sonarr's parsing — not worth adding).
+	// Missing entirely until an API-parity audit found it: every completed
+	// or failed item was reporting size 0 in Sonarr/Radarr's Activity view.
+	Bytes int64 `json:"bytes"`
 }
 
 // handleHistory implements mode=history: only downloads that are actually
@@ -40,12 +48,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		case database.StateReadyForImport:
 			slots = append(slots, historySlot{
 				NzoID: d.ID, Name: d.Name, Category: d.Category,
-				Status: "Completed", Storage: d.SavePath,
+				Status: "Completed", Storage: d.SavePath, Bytes: d.SizeBytes,
 			})
 		case database.StateError:
 			slots = append(slots, historySlot{
 				NzoID: d.ID, Name: d.Name, Category: d.Category,
-				Status: "Failed", FailMessage: d.ErrorMessage,
+				Status: "Failed", FailMessage: d.ErrorMessage, Bytes: d.SizeBytes,
 			})
 		}
 	}

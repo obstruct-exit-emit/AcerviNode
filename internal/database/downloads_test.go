@@ -295,6 +295,37 @@ func TestUpdateDownloadStatus_SetsCachedAtOnceOnFirstProviderCompleted(t *testin
 	}
 }
 
+func TestUpdateDownloadCategory(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Category = "tv-sonarr"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	if err := db.UpdateDownloadCategory(ctx, d.ID, "tv-sonarr-imported"); err != nil {
+		t.Fatalf("UpdateDownloadCategory() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.Category != "tv-sonarr-imported" {
+		t.Errorf("Category = %q, want tv-sonarr-imported", got.Category)
+	}
+}
+
+func TestUpdateDownloadCategory_UnknownID(t *testing.T) {
+	db := openTestDB(t)
+	err := db.UpdateDownloadCategory(context.Background(), "does-not-exist", "tv")
+	if err == nil {
+		t.Error("UpdateDownloadCategory() expected error for unknown id, got nil")
+	}
+}
+
 func TestUpdateDownloadStatus_UnknownID(t *testing.T) {
 	db := openTestDB(t)
 	err := db.UpdateDownloadStatus(context.Background(), "does-not-exist", "error", 0, 0, nil, "boom")

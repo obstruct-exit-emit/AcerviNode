@@ -8,6 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A brand new category typed into Radarr's SABnzbd download client got
+  rejected outright by Radarr's own "Test" step.** Real SABnzbd (and this
+  shim, faithfully) has no API to create a category on the fly — Sonarr/
+  Radarr's `TestCategory()` (confirmed against their real source) explicitly
+  requires a category to already exist server-side before accepting it, and
+  AcerviNode's only category tracking was reactive (populated the moment
+  something used it), which can't help since Test runs *before* anything is
+  ever added — a real chicken-and-egg gap, not something a user could work
+  around from Radarr's side at all. Fixed: the web UI's Settings →
+  Categories section (`PUT /api/v1/settings/categories/path`) now registers
+  a category with both compat shims as a side effect of saving it, even with
+  no path override (now optional) — the AcerviNode-side equivalent of
+  pre-creating the category in real SABnzbd's own admin UI first. Every
+  registration is also now persisted and re-seeded into both shims on
+  startup (previously only a path override survived a restart at all, and
+  even that never made it back into the shims' own category lists — a bare
+  registration would have silently reverted on the very next restart). See
+  docs/sabnzbd-api.md#categories.
+- **SABnzbd `mode=history` was missing `bytes` (size)**, a field Sonarr's
+  real source (`SabnzbdHistoryItem`/`Sabnzbd.cs`'s `GetHistory`) reads
+  directly into a download's reported size — every completed/failed item
+  showed size `0` in Sonarr/Radarr's Activity view. Found during a full
+  qBittorrent/SABnzbd API-parity audit against both real API docs and
+  Sonarr/Radarr's actual download-client source.
+
+### Added
+
+- **Four more real qBittorrent endpoints Sonarr/Radarr call under specific
+  optional client settings**: `POST /api/v2/torrents/setCategory` (a
+  separate "post-import category," different from the add-time one),
+  `setShareLimits` (per-release seed ratio/time criteria), `topPrio`
+  ("Recent/Older Priority" set to "First"), and `setForceStart` ("Initial
+  State" set to "Force Start") — confirmed against Sonarr/Radarr's real
+  source that none of these are called on a default setup, but a user who
+  enables one would have hit a 404 before this. `setCategory` actually
+  updates the tracked download's category (and auto-registers the name,
+  matching this shim's existing permissive philosophy rather than real
+  qBittorrent's stricter "category must already exist" 409); the other
+  three are accepted as no-ops — AcerviNode has no seeding, priority-queue,
+  or paused-state concept for them to apply to.
+
 - **A usenet download that genuinely failed (e.g. TorBox's own "failed
   (Repair failed, not enough repair blocks (165 short))") could still show
   as "Repairing" in the web UI.** The user supplied a real NZB specifically

@@ -87,11 +87,26 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 
 // SetShimServers wires in the compat shim servers built in buildHandler,
 // once they exist — see Categories/AddCategory.
+//
+// Also re-seeds both shims' category stores from the persisted
+// category_paths keys — those stores are purely in-memory bookkeeping (see
+// qbittorrent/sabnzbd's own categoryStore), so without this, a category
+// registered via SetCategoryPath (the fix for Radarr's SABnzbd "category
+// missing" validation — see docs/sabnzbd-api.md#categories) would vanish on
+// every restart, even though its path override survived in config.yaml —
+// putting the user right back where they started until something else
+// happened to re-declare it.
 func (s *liveSettings) SetShimServers(qbt *qbittorrent.Server, sab *sabnzbd.Server) {
 	s.mu.Lock()
 	s.qbt = qbt
 	s.sab = sab
+	categories := copyCategoryPaths(s.cfg.CategoryPaths)
 	s.mu.Unlock()
+
+	for category := range categories {
+		qbt.AddCategory(category)
+		sab.AddCategory(category)
+	}
 }
 
 func (s *liveSettings) TorBoxConfigured() bool {
@@ -353,6 +368,28 @@ func (s *liveSettings) CategoryPaths() map[string]string {
 // SetCategoryPath sets or clears (path == "") category's override
 // destination directory, applies it live via the Importer, and persists it
 // to config.yaml — the same live-swap-then-save pattern as SetTorBoxAPIKey.
+//
+// The category itself is always persisted in CategoryPaths, even with an
+// empty path — deliberately not deleted the way it used to be when path ==
+// "": internal/importer's own categoryPath already treats an empty value
+// identically to an absent key (dir != "" is required either way for an
+// override to actually apply), so this costs nothing functionally, but it's
+// what makes a bare "just register this category" registration (no override
+// wanted) survive a restart, the same as one with a real override always
+// did — CategoryPaths is the only thing SetShimServers has to re-seed both
+// compat shims' in-memory category stores from at startup (see its own doc
+// comment). Also registers category with both shims live, right now, not
+// just at the next startup — the only way to pre-declare one from the web
+// UI without a real Sonarr/Radarr connection ever having done so first.
+// This matters specifically for the SABnzbd shim: real SABnzbd has no API
+// to create a category on the fly (unlike qBittorrent's createCategory,
+// which Sonarr/Radarr's own Test() already calls automatically for a
+// missing one — see internal/qbittorrent's handleCreateCategory), so
+// Sonarr/Radarr's SABnzbd TestCategory() genuinely requires the category to
+// already exist server-side, exactly like it would against a real SABnzbd
+// install — found live: a user configuring a brand new category in
+// Radarr's SABnzbd client got rejected outright, since nothing had ever
+// told AcerviNode about it yet (see docs/sabnzbd-api.md#categories).
 func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string) error {
 	category = strings.TrimSpace(category)
 	if category == "" {
@@ -365,17 +402,19 @@ func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string)
 	if s.cfg.CategoryPaths == nil {
 		s.cfg.CategoryPaths = map[string]string{}
 	}
-	if path == "" {
-		delete(s.cfg.CategoryPaths, category)
-	} else {
-		s.cfg.CategoryPaths[category] = path
-	}
+	s.cfg.CategoryPaths[category] = path
 	if err := s.cfg.Save(s.configPath); err != nil {
 		return fmt.Errorf("persist config: %w", err)
 	}
 
 	if s.imp != nil {
 		s.imp.SetCategoryPaths(copyCategoryPaths(s.cfg.CategoryPaths))
+	}
+	if s.qbt != nil {
+		s.qbt.AddCategory(category)
+	}
+	if s.sab != nil {
+		s.sab.AddCategory(category)
 	}
 	return nil
 }

@@ -86,6 +86,41 @@ entirely while auditing what information AcerviNode passes through: TorBox
 reports `download_speed` on every usenet download too, but nothing captured
 or summed it before.
 
+`mode=history`'s slots report `bytes` (the download's total size) —
+confirmed against Sonarr's real source (`SabnzbdHistoryItem`/`Sabnzbd.cs`'s
+`GetHistory`) that it's read directly into the download item's own
+`TotalSize`, not just cosmetic. Found missing during an API-parity audit:
+every completed/failed item was reporting size `0` in Sonarr/Radarr's
+Activity view. `nzb_name` and `download_time` are also real fields on this
+response but confirmed unused by Sonarr's parsing — not added.
+
+## Categories
+
+Unlike qBittorrent's `createCategory`, **real SABnzbd has no API to create a
+category on the fly** — categories can only be pre-configured through
+SABnzbd's own admin interface, and Sonarr/Radarr's own `TestCategory()`
+(confirmed against their real source) explicitly rejects a category that
+doesn't already exist there, with a `DownloadClientValidationCategoryMissing`
+validation error. AcerviNode's SABnzbd shim faithfully has the same
+limitation — reactive category tracking (`addfile`/`addurl`'s own `cat=`
+parameter registers a category the moment something uses it) can't help
+here, since Sonarr/Radarr's Test step runs *before* anything is ever added.
+
+Found live: a user configuring a brand new category in Radarr's SABnzbd
+client got rejected outright on a fresh instance, since nothing had ever
+told AcerviNode about that category name yet. The fix is the web UI's
+Settings → Categories section: registering a category there (even with no
+save-path override — the path field is optional) calls
+`POST /api/v1/settings/categories` under the hood for *both* compat shims,
+so it's immediately visible to `mode=get_config` and passes Radarr/Sonarr's
+Test — the AcerviNode-side equivalent of pre-creating the category in real
+SABnzbd's own admin UI first.
+
+The qBittorrent shim doesn't have this problem: Sonarr/Radarr's own
+`TestCategory()` for qBittorrent calls `createCategory` automatically for a
+missing category (confirmed against their real source) before failing — see
+[qBittorrent API compatibility](qbittorrent-api.md).
+
 ## What's not emulated
 
 RSS, server switching/priorities, speed limits, and the rest of SABnzbd's full

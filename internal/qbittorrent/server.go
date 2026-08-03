@@ -76,6 +76,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v2/torrents/properties", s.requireAuth(s.handleProperties))
 	s.mux.HandleFunc("GET /api/v2/torrents/files", s.requireAuth(s.handleFiles))
 	s.mux.HandleFunc("POST /api/v2/torrents/delete", s.requireAuth(s.handleDelete))
+	s.mux.HandleFunc("POST /api/v2/torrents/setCategory", s.requireAuth(s.handleSetCategory))
+	s.mux.HandleFunc("POST /api/v2/torrents/setShareLimits", s.requireAuth(s.handleSetShareLimits))
+	s.mux.HandleFunc("POST /api/v2/torrents/topPrio", s.requireAuth(s.handleTopPrio))
+	s.mux.HandleFunc("POST /api/v2/torrents/setForceStart", s.requireAuth(s.handleSetForceStart))
 
 	s.mux.HandleFunc("GET /api/v2/torrents/categories", s.requireAuth(s.handleCategories))
 	s.mux.HandleFunc("POST /api/v2/torrents/createCategory", s.requireAuth(s.handleCreateCategory))
