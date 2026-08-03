@@ -186,6 +186,15 @@ nothing else AcerviNode manages. See
 for the alternative (matching AcerviNode's own systemd `User=`/`Group=` to
 your stack) if `0777` doesn't fit your threat model.
 
+**The torrent copy-only inefficiency mentioned above is now also fixed** —
+see [qBittorrent API compatibility](qbittorrent-api.md#state-mapping)'s
+`pausedUP` state and `ratio`/`ratio_limit` fields: both of Sonarr/Radarr's
+`CanMoveFiles`/`CanBeRemoved` conditions are now satisfied for a completed
+torrent, the same as SABnzbd's already were, so an *arr app can hardlink
+(not copy) a completed torrent's files, and — with its own "Remove
+completed downloads" setting enabled — clean up the source automatically
+afterward via this shim's existing delete endpoint.
+
 ### Live fetch progress
 
 A Managed download's progress previously froze the instant the provider

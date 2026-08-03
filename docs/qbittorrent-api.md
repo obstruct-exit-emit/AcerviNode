@@ -47,8 +47,8 @@ specific vocabulary:
 |---|---|---|
 | `queued` | `queuedDL` | Not yet accepted by the provider |
 | `downloading` | `downloading` | Provider is fetching it |
-| `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — reporting `uploading` here would send Sonarr's import step looking for files that don't exist yet |
-| `ready_for_import` | `uploading` | Files are actually on disk; safe to report as complete/seeding |
+| `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — reporting `pausedUP` here would send Sonarr's import step looking for files that don't exist yet |
+| `ready_for_import` | `pausedUP` | Files are actually on disk. Not `uploading` — AcerviNode never actually seeds locally at all (TorBox handles that server-side), and `pausedUP`/`stoppedUP` are the only states that let Sonarr/Radarr's own `CanMoveFiles`/`CanBeRemoved` become true (confirmed against their real source), unlocking a real hardlink/move instead of always falling back to copy-only, and letting "Remove completed downloads" actually clean up afterward |
 | `error` | `error` | Either the provider itself reported a failure (e.g. TorBox's own "Error" state, or a stalled/no-seeds torrent — see [Providers](providers.md#state-mapping)) or Completed Download Handling gave up after exhausting its own fetch retries |
 
 `GET /api/v2/torrents/info`'s `eta` field reports the provider's live ETA
@@ -73,6 +73,18 @@ instant-cache path never shows meaningful swarm data at all). Sonarr/
 Radarr's own `QBittorrentTorrent` model doesn't read these fields, so this
 is for direct API inspection or a real qBittorrent-compatible client, not
 something that changes *arr behavior.
+
+`GET /api/v2/torrents/info` also reports `ratio`/`ratio_limit`, always `0`
+— AcerviNode never actually seeds a torrent locally at all (TorBox handles
+that server-side), so there's no real ratio to report, and `0`/`0` is the
+honest answer. Unlike swarm info above, this *does* change real *arr
+behavior: Sonarr/Radarr's own `HasReachedSeedLimit` (confirmed against
+their real source) treats `ratio_limit >= 0 && ratio_limit - ratio <=
+0.001` as "done seeding," one of the two conditions gating whether they'll
+actually hardlink/move a completed torrent's files (see `state`'s own
+`pausedUP` entry above) instead of always falling back to copy-only.
+`0`/`0` satisfies this unconditionally, regardless of a user's own
+configured seed-ratio settings.
 
 `GET /api/v2/torrents/info`'s `save_path` and `content_path` are deliberately
 different values, not a typo — this is real qBittorrent's own split (`save_path`

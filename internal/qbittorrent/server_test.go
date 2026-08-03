@@ -484,6 +484,39 @@ func TestToTorrentInfo_ReportsSwarmInfo(t *testing.T) {
 	}
 }
 
+// TestQbtState_ReadyForImportReportsPausedUP proves the fix for a real
+// inefficiency found live: a completed Managed torrent used to report
+// "uploading," which — confirmed against Sonarr/Radarr's real source —
+// never satisfies CanMoveFiles/CanBeRemoved, so every torrent import fell
+// back to copy-only (doubling disk usage) and was never auto-removed even
+// with "Remove completed downloads" enabled. Only "pausedUP"/"stoppedUP"
+// (still mapped to DownloadItemStatus.Completed, confirmed against the
+// same source — this doesn't change how "done" is reported) unlock either.
+func TestQbtState_ReadyForImportReportsPausedUP(t *testing.T) {
+	if got := qbtState(database.StateReadyForImport); got != "pausedUP" {
+		t.Errorf("qbtState(ready_for_import) = %q, want pausedUP", got)
+	}
+}
+
+// TestToTorrentInfo_ReportsZeroRatioAlwaysSatisfyingSeedLimit proves the
+// other half of the same fix: Sonarr/Radarr's HasReachedSeedLimit
+// (confirmed against their real source) also gates CanMoveFiles/
+// CanBeRemoved, requiring ratio_limit >= 0 && ratio_limit - ratio <= 0.001.
+// AcerviNode never seeds a torrent locally at all, so reporting 0/0 is the
+// honest answer and satisfies this unconditionally, regardless of a user's
+// own configured seed-ratio settings in Sonarr/Radarr.
+func TestToTorrentInfo_ReportsZeroRatioAlwaysSatisfyingSeedLimit(t *testing.T) {
+	d := &database.Download{}
+	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+
+	if info.Ratio != 0 {
+		t.Errorf("ratio = %v, want 0", info.Ratio)
+	}
+	if info.RatioLimit != 0 {
+		t.Errorf("ratio_limit = %v, want 0", info.RatioLimit)
+	}
+}
+
 // TestToTorrentInfo_SubstitutesFetchProgressWhileProviderCompleted proves
 // the fix for a real UX gap: an *arr app's "Fetching" phase (provider_
 // completed reported as "downloading" — see qbtState) previously showed

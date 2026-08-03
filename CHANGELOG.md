@@ -39,6 +39,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is a plain override, matching your stack's PUID/PGID the same way
   linuxserver.io-style containers do.)
 
+- **A completed torrent import always silently copied the file instead of
+  hardlinking it — doubling disk usage on every single Managed torrent
+  download — and "Remove completed downloads" never actually cleaned one
+  up, even with that Sonarr/Radarr setting enabled.** The follow-up flagged
+  (but not yet fixed) alongside the directory-permissions fix above.
+  Confirmed against Sonarr/Radarr's real source: `CanMoveFiles`/
+  `CanBeRemoved` only become true for a qBittorrent item reported as
+  `pausedUP`/`stoppedUP` with its seed limit reached — AcerviNode was
+  reporting a completed torrent as `uploading` (never actually true; it has
+  no real local seeding at all — TorBox handles that server-side) and
+  never reported `ratio`/`ratio_limit` at all. Fixed: `GET
+  /api/v2/torrents/info` now reports `pausedUP` for a completed torrent
+  (still `DownloadItemStatus.Completed` either way — this doesn't change
+  whether Sonarr/Radarr consider it done) and `ratio`/`ratio_limit` as an
+  explicit `0`/`0`, which unconditionally satisfies Sonarr/Radarr's own
+  seed-limit check regardless of a user's configured seed-ratio settings.
+  SABnzbd-sourced downloads already had both conditions satisfied
+  unconditionally on Sonarr/Radarr's side — this closes the matching gap
+  for torrents.
+
 - **A brand new category typed into Radarr's SABnzbd download client got
   rejected outright by Radarr's own "Test" step.** Real SABnzbd (and this
   shim, faithfully) has no API to create a category on the fly — Sonarr/

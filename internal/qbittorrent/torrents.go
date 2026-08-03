@@ -336,6 +336,19 @@ type torrentInfo struct {
 	NumSeeds  int64 `json:"num_seeds"`
 	NumLeechs int64 `json:"num_leechs"`
 	DlSpeed   int64 `json:"dlspeed"`
+	// Ratio/RatioLimit are always 0 — AcerviNode never actually seeds a
+	// torrent locally (TorBox handles that server-side), so there's no
+	// real ratio to report. Sent as an explicit, deliberate 0/0 rather than
+	// omitted: Sonarr/Radarr's own HasReachedSeedLimit check (confirmed
+	// against their real source) treats ratio_limit >= 0 && ratio_limit -
+	// ratio <= 0.001 as "done seeding" — 0/0 satisfies that unconditionally,
+	// which is the semantically honest answer here (AcerviNode is always
+	// "done seeding," having never started) and is what actually lets
+	// Sonarr/Radarr hardlink/clean up a completed torrent instead of always
+	// falling back to copy-only — see qbtState's own doc comment for the
+	// other half of this (the reported state string itself).
+	Ratio      float64 `json:"ratio"`
+	RatioLimit float64 `json:"ratio_limit"`
 }
 
 type torrentProperties struct {
@@ -380,12 +393,12 @@ func toTorrentInfo(d *database.Download, live liveTorrentInfo, fetchProgress flo
 		savePath = filepath.Dir(d.SavePath)
 	}
 	return torrentInfo{
-		Hash:         d.Hash,
-		Name:         d.Name,
-		Category:     d.Category,
-		SavePath:     savePath,
-		ContentPath:  d.SavePath,
-		Size:         d.SizeBytes,
+		Hash:        d.Hash,
+		Name:        d.Name,
+		Category:    d.Category,
+		SavePath:    savePath,
+		ContentPath: d.SavePath,
+		Size:        d.SizeBytes,
 		// EffectiveProgress substitutes internal/importer's own live local-
 		// transfer progress in for d.Progress (already 1.0 by this point)
 		// while the download is provider_completed — see its own doc
@@ -393,14 +406,16 @@ func toTorrentInfo(d *database.Download, live liveTorrentInfo, fetchProgress flo
 		// "downloading" (this shim's own reported state for
 		// provider_completed — see qbtState below) would see progress
 		// frozen at 100% for however long the actual local copy takes.
-		Progress: database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
-		State:    qbtState(d.State),
+		Progress:     database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
+		State:        qbtState(d.State),
 		Eta:          live.ETASeconds,
 		AddedOn:      d.AddedAt.Unix(),
 		CompletionOn: completionOn,
 		NumSeeds:     live.Seeders,
 		NumLeechs:    live.Leechers,
 		DlSpeed:      live.DownloadSpeedBytes,
+		Ratio:        0,
+		RatioLimit:   0,
 	}
 }
 
@@ -410,7 +425,23 @@ func toTorrentInfo(d *database.Download, live liveTorrentInfo, fetchProgress flo
 // provider_completed deliberately still reports as "downloading" — the
 // provider is done, but internal/importer hasn't fetched the files to local
 // disk yet, and Sonarr's import step would find nothing if told otherwise.
-// Only ready_for_import (files actually on disk) is a real "uploading".
+//
+// ready_for_import reports "pausedUP", not "uploading" — AcerviNode never
+// actually seeds a torrent locally at all (TorBox handles that
+// server-side), so "uploading" was never really true; "paused after
+// finishing" is the honest state. It matters beyond cosmetics: confirmed
+// against Sonarr/Radarr's real source, only "pausedUP"/"stoppedUP" (never
+// "uploading") lets CanMoveFiles/CanBeRemoved become true — the two
+// conditions gating whether Sonarr/Radarr will actually hardlink/move a
+// completed torrent's files instead of always falling back to copy-only
+// (silently doubling disk usage on every single torrent import, found live
+// investigating a real Radarr "Access ... is denied" NZB bug — see
+// docs/providers.md#directory-permissions) and whether it'll call this
+// shim's own delete endpoint to clean up afterward once import succeeds
+// (gated on top by the user's own "Remove completed downloads" setting in
+// their qBittorrent client config — nothing AcerviNode controls). Both
+// still require HasReachedSeedLimit too — see torrentInfo's own Ratio/
+// RatioLimit fields for how that's satisfied unconditionally.
 func qbtState(local string) string {
 	switch local {
 	case database.StateQueued:
@@ -418,7 +449,7 @@ func qbtState(local string) string {
 	case database.StateDownloading, database.StateProviderCompleted:
 		return "downloading"
 	case database.StateReadyForImport:
-		return "uploading"
+		return "pausedUP"
 	case database.StateError:
 		return "error"
 	default:
