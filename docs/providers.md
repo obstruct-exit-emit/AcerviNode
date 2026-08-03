@@ -830,6 +830,61 @@ without paying for the file bytes on every poll. The actual bytes are only
 ever fetched via a dedicated `GetSourceFile`, called exactly once, the moment
 `handleReAddDownload` actually needs to resubmit them.
 
+### Status monitoring (`GET /api/v1/status`)
+
+Requested by the roadmap's own "Path to daily-driver parity" punch list
+(ROADMAP.md), as the cheapest of two discussed shapes for closing a real gap:
+the only way to know the importer's tick loop was stuck, before this, was
+manually tailing the log. Built directly on top of state the importer
+already tracked or nearly tracked for other reasons — no new subsystem, no
+new config, nothing an operator has to opt into.
+
+Three signals, each answering a different question:
+
+- **`last_tick_at`** (global): when `Importer.Tick` last *ran*, recorded at
+  the very top of `Tick` regardless of what happens once inside. Proves the
+  background loop itself is alive — if this stops advancing by more than a
+  tick or two's worth of `import_interval_seconds`, the process has hung or
+  the goroutine has died, a different failure mode than any one provider
+  kind having trouble.
+- **`kinds.<kind>.last_successful_list_at`**: when that kind's provider last
+  answered a bulk `List()` call *without erroring*. Deliberately doesn't mean
+  "found something new" — a `List()` call that succeeds but returns nothing
+  changed still counts as successful. This is the one genuinely subtle part:
+  during the real TorBox `cooldown_until` incident (see
+  [`cooldown_until`](#cooldown_until--a-real-undocumented-account-restriction)
+  above), every listing call kept returning `200 OK` with zero items — not an
+  error — so `last_successful_list_at` would have kept advancing the entire
+  time, offering no signal that anything was wrong. That's why
+  `cooldown_until` is surfaced as its own separate field on the account
+  status endpoint rather than folded into this one: they answer genuinely
+  different questions ("is polling itself working" vs. "is the provider
+  account restricted"), and conflating them would have hidden exactly the
+  incident that prompted both features.
+- **`kinds.<kind>.rate_limited_until`** / **`kinds.<kind>.error_count`**:
+  direct reads of state the importer already had for its own purposes —
+  `Importer.RateLimitCooldownUntil` (see
+  [rate-limit backoff](#provider-rate-limit-backoff) above, previously
+  exported only for a test to assert against, now also read for real here)
+  and a new `database.CountDownloadsByState`/`Importer.ErrorCounts` pass-
+  through, respectively.
+
+Deliberately unauthenticated-adjacent but not fully open: routed through
+`requireAuth` (the same tier as `/api/v1/version`/`/api/v1/providers`), not
+`requireAdmin` and not the fully-open `/api/v1/health` — it reveals
+operational detail (timestamps, error counts) beyond a bare liveness check,
+but an external monitor is expected to already carry the same API key used
+for everything else, not to be a fully anonymous prober.
+
+Verified with unit tests at every layer (`database.CountDownloadsByState`'s
+grouping/omission behavior, `Importer.LastTickAt`/`LastSuccessfulListAt`/
+`ErrorCounts`, the handler's success/error/auth-required paths) and live
+against the real WSL dev instance: `curl` against `/api/v1/status` returned
+`last_tick_at` within one interval of the request, `kinds.torrent`/
+`kinds.usenet` showing recent `last_successful_list_at` values, and
+`error_count` matching what the Managed downloads table showed for that kind
+at the time.
+
 ## TorBox (`internal/debrid/torbox`)
 
 The first, and so far only, concrete provider. TorBox exposes both a torrent

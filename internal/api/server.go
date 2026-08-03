@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -19,6 +20,39 @@ type ProviderStatus struct {
 	TorrentCapable bool   `json:"torrent_capable"`
 	UsenetCapable  bool   `json:"usenet_capable"`
 	WebDLCapable   bool   `json:"webdl_capable"`
+}
+
+// StatusInfo is internal/importer's own health snapshot for
+// GET /api/v1/status — meant for an external monitor (Uptime Kuma,
+// Healthchecks.io, ...) to poll and alert on, distinct from both
+// AccountStatus (the provider's own account state, e.g. TorBox's
+// cooldown_until) and ProviderStatus (what's configured). This is about
+// whether AcerviNode's own background polling is alive and making progress.
+type StatusInfo struct {
+	// LastTickAt is when the tick loop last ran, regardless of what it found
+	// once inside — proves the loop itself hasn't stalled or crashed, as
+	// opposed to one specific kind failing to list (see KindStatus). Omitted
+	// if the importer has never ticked yet.
+	LastTickAt *time.Time `json:"last_tick_at,omitempty"`
+	// Kinds is always keyed "torrent"/"usenet"/"webdl", regardless of
+	// whether a provider is actually configured for each — an unconfigured
+	// kind just reports zero values throughout.
+	Kinds map[string]KindStatus `json:"kinds"`
+}
+
+// KindStatus is one kind's (torrent/usenet/webdl) own health signals within
+// StatusInfo.
+type KindStatus struct {
+	// LastSuccessfulListAt is when this kind's provider last answered a bulk
+	// listing call without erroring. Omitted if it never has.
+	LastSuccessfulListAt *time.Time `json:"last_successful_list_at,omitempty"`
+	// RateLimitedUntil is set when this kind is currently backing off after
+	// a provider rate-limit (429) response — see internal/importer's
+	// rate-limit backoff. Omitted when not currently rate-limited.
+	RateLimitedUntil *time.Time `json:"rate_limited_until,omitempty"`
+	// ErrorCount is how many downloads of this kind currently sit in
+	// AcerviNode's own StateError.
+	ErrorCount int `json:"error_count"`
 }
 
 // deleter is the subset of debrid.TorrentProvider/debrid.UsenetProvider that
@@ -181,6 +215,10 @@ type Settings interface {
 	// error here (e.g. not configured yet, or the provider doesn't support
 	// this) is routine and shown as "unavailable" rather than a hard failure.
 	AccountStatus(ctx context.Context) (debrid.AccountStatus, error)
+	// Status reports internal/importer's own health signals (tick liveness,
+	// per-kind rate-limit cooldowns, per-kind error counts) for
+	// GET /api/v1/status — see StatusInfo.
+	Status(ctx context.Context) (StatusInfo, error)
 
 	// --- Auth: optional login accounts on top of the API key, which keeps
 	// working unaffected by any of this (see internal/api/auth.go) ---------
@@ -296,6 +334,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/v1/version", s.requireAuth(s.handleVersion))
 	s.mux.HandleFunc("GET /api/v1/providers", s.requireAuth(s.handleProviders))
+	s.mux.HandleFunc("GET /api/v1/status", s.requireAuth(s.handleStatus))
 	// Downloads: any authenticated user (admin or member) can reach these —
 	// handleListDownloads/downloadByID are what actually scope a member to
 	// Manual downloads only (see their own doc comments and
@@ -342,6 +381,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"version": s.version})
+}
+
+// handleStatus reports internal/importer's own health signals — see
+// StatusInfo. Authenticated (same tier as /providers and /version) rather
+// than open like /health, since it surfaces operational detail (error
+// counts, timestamps) beyond a bare liveness check; an external monitor is
+// expected to poll it with the same API key already used for everything
+// else.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.settings.Status(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, status)
 }
 
 // handleProviders reports providers as currently configured — computed live

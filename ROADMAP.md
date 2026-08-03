@@ -80,19 +80,35 @@ this unattended. Recommendations first.
   lose database") — re-discovery would eventually re-adopt anything still on
   the provider anyway, so the actual cost of losing it is lower than it
   first looks. Revisit if that changes.
-- 💡 **Alerting/observability.** The only way to know the importer's stuck
-  today is manually tailing the log. Two real shapes discussed and neither
-  started yet: (a) a richer `/api/v1/status` endpoint exposing last
-  successful tick time, per-kind rate-limit cooldown state, and error-state
-  download counts, for an external monitor (Uptime Kuma, Healthchecks.io) to
-  poll and alert on — small, low-risk, AcerviNode stays passive; or (b) an
-  outbound webhook AcerviNode itself fires on specific events (a download
-  reaching `error`, sustained rate-limiting, the tick loop going quiet,
-  auth failure) — matches the *arr "Connect" pattern, more flexible, but
-  real new surface (event scoping, retry semantics, per-event config) this
-  project already passed on once for a similar reason (TorBox's own
-  Notifications API, skipped in Phase 8). (a) first if this gets picked back
-  up — it's nearly free relative to (b).
+- ✅ **Alerting/observability, part (a).** Built proactively, picked directly
+  off this list's own "(a) first ... it's nearly free" note, while the user
+  was away — the only way to know the importer's stuck used to be manually
+  tailing the log, exactly the gap this closes. `GET /api/v1/status` now
+  reports `last_tick_at` (the tick loop's own liveness — proves it hasn't
+  stalled/crashed, full stop), per-kind `last_successful_list_at`, per-kind
+  `rate_limited_until` (`Importer.RateLimitCooldownUntil`, previously
+  exported only for tests, now read for real), and per-kind `error_count`
+  (new `database.CountDownloadsByState`). Deliberately doesn't fold in
+  TorBox's own `cooldown_until` (a separate, earlier fix — see
+  [CHANGELOG](CHANGELOG.md) and
+  [Providers](docs/providers.md#cooldown_until--a-real-undocumented-account-restriction))
+  even though both were motivated by the same incident — a listing
+  call that succeeds but finds nothing new still advances
+  `last_successful_list_at`, so the two fields answer genuinely different
+  questions ("is polling itself working" vs. "is the provider account
+  restricted") and conflating them would have hidden the very incident that
+  prompted both. `requireAuth`, same tier as `/version`/`/providers` — not
+  admin-only, not fully open like `/health`. See
+  [Providers](docs/providers.md#status-monitoring-get-apiv1status).
+- 💡 **Alerting/observability, part (b).** Still not started: an outbound
+  webhook AcerviNode itself fires on specific events (a download reaching
+  `error`, sustained rate-limiting, the tick loop going quiet, auth
+  failure) — matches the *arr "Connect" pattern, more flexible than polling
+  (a) above, but real new surface (event scoping, retry semantics,
+  per-event config) this project already passed on once for a similar
+  reason (TorBox's own Notifications API, skipped in Phase 8). Revisit only
+  if (a) genuinely turns out insufficient in practice — polling one cheap
+  endpoint covers most of the same ground for a lot less complexity.
 
 **Structural, blocking, and honestly big:**
 

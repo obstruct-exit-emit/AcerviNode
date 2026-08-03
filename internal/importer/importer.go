@@ -97,6 +97,16 @@ type Importer struct {
 	// this, not AcerviNode's memory of it).
 	rateLimitMu    sync.Mutex
 	rateLimitState map[database.Kind]*kindBackoff
+
+	// statsMu guards tickAt/successfulListAt — passive health-signal
+	// bookkeeping for GET /api/v1/status (see LastTickAt/
+	// LastSuccessfulListAt), never read by any of the importer's own logic.
+	// Deliberately in-memory only, same reasoning as rateLimitState: a
+	// restart just means these start reporting zero again until the next
+	// tick/list, which is fine for a liveness signal.
+	statsMu          sync.Mutex
+	tickAt           time.Time
+	successfulListAt map[database.Kind]time.Time
 }
 
 // kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
@@ -171,9 +181,9 @@ const ensureWritableDirModeDefault = os.FileMode(0o777)
 // how it already does for category paths — see SetCategoryPaths).
 func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
 	return &Importer{
-		db:              db,
-		torrentProvider: torrentProvider,
-		usenetProvider:  usenetProvider,
+		db:                      db,
+		torrentProvider:         torrentProvider,
+		usenetProvider:          usenetProvider,
 		downloadDir:             downloadDir,
 		interval:                interval,
 		maxRetries:              maxRetries,
@@ -186,6 +196,7 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		intervalChanged:         make(chan time.Duration, 1),
 		fastPollIntervalChanged: make(chan time.Duration, 1),
 		rateLimitState:          map[database.Kind]*kindBackoff{},
+		successfulListAt:        map[database.Kind]time.Time{},
 	}
 }
 
@@ -477,6 +488,10 @@ func (im *Importer) runFastPoll(ctx context.Context) {
 // ready_for_import this same tick isn't somehow considered for cleanup
 // before its completed_at has even had a chance to age past the cutoff.
 func (im *Importer) Tick(ctx context.Context) error {
+	im.statsMu.Lock()
+	im.tickAt = time.Now()
+	im.statsMu.Unlock()
+
 	im.refreshStatuses(ctx)
 
 	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
@@ -575,6 +590,9 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		return
 	}
 	im.clearRateLimitHit(kind)
+	im.statsMu.Lock()
+	im.successfulListAt[kind] = fetchedAt
+	im.statsMu.Unlock()
 	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }
@@ -669,10 +687,43 @@ func (im *Importer) clearRateLimitHit(kind database.Kind) {
 	delete(im.rateLimitState, kind)
 }
 
-// RateLimitCooldownUntil is the exported counterpart of rateLimitCooldown,
-// for tests confirming a rate-limit hit actually set a cooldown.
+// RateLimitCooldownUntil is the exported counterpart of rateLimitCooldown —
+// originally added for tests confirming a rate-limit hit actually set a
+// cooldown, now also read for real by GET /api/v1/status (see
+// cmd/acervinode's liveSettings.Status).
 func (im *Importer) RateLimitCooldownUntil(kind database.Kind) (time.Time, bool) {
 	return im.rateLimitCooldown(kind)
+}
+
+// LastTickAt reports when Tick last ran, regardless of what it found once
+// inside — a liveness signal for GET /api/v1/status: if this stops
+// advancing, the tick loop itself has stalled or crashed, as opposed to one
+// specific provider kind failing to list (see LastSuccessfulListAt). false
+// if Tick has never run yet.
+func (im *Importer) LastTickAt() (time.Time, bool) {
+	im.statsMu.Lock()
+	defer im.statsMu.Unlock()
+	if im.tickAt.IsZero() {
+		return time.Time{}, false
+	}
+	return im.tickAt, true
+}
+
+// LastSuccessfulListAt reports when kind's provider last answered a bulk
+// List() call without erroring — see refreshKind. false if it never has
+// (including if no provider is configured for kind at all).
+func (im *Importer) LastSuccessfulListAt(kind database.Kind) (time.Time, bool) {
+	im.statsMu.Lock()
+	defer im.statsMu.Unlock()
+	t, ok := im.successfulListAt[kind]
+	return t, ok
+}
+
+// ErrorCounts reports how many downloads currently sit in StateError, keyed
+// by kind — see database.CountDownloadsByState. Backs GET /api/v1/status;
+// nothing in the importer's own logic reads this.
+func (im *Importer) ErrorCounts(ctx context.Context) (map[database.Kind]int, error) {
+	return im.db.CountDownloadsByState(ctx, database.StateError)
 }
 
 // rateLimitBackoffDuration returns rateLimitBackoffBase*2^consecutiveHits,

@@ -237,6 +237,32 @@ func (db *DB) ListDownloads(ctx context.Context, kind Kind) ([]*Download, error)
 	return out, rows.Err()
 }
 
+// CountDownloadsByState returns how many downloads currently sit in state,
+// grouped by kind — backs internal/importer's health-status reporting (see
+// Importer.ErrorCounts) for GET /api/v1/status, so a monitor can tell how
+// many downloads are stuck in error without listing every row. A kind with
+// no matching rows simply doesn't appear in the returned map at all, rather
+// than an explicit 0 — a caller that needs every kind represented should
+// default to zero itself.
+func (db *DB) CountDownloadsByState(ctx context.Context, state string) (map[Kind]int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT kind, COUNT(*) FROM downloads WHERE state = ? GROUP BY kind`, state)
+	if err != nil {
+		return nil, fmt.Errorf("count downloads by state: %w", err)
+	}
+	defer rows.Close()
+
+	counts := map[Kind]int{}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return nil, fmt.Errorf("count downloads by state: %w", err)
+		}
+		counts[Kind(kind)] = n
+	}
+	return counts, rows.Err()
+}
+
 // ListAllDownloads returns every download regardless of kind, most recently
 // added first — backs the native API's GET /api/v1/downloads (see
 // internal/api), which is kind-agnostic unlike either compat shim.

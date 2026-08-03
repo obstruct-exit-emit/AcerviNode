@@ -475,6 +475,52 @@ func (s *liveSettings) AccountStatus(ctx context.Context) (debrid.AccountStatus,
 	return s.torrentDyn.Account(ctx)
 }
 
+// Status assembles api.StatusInfo from the Importer's own live health
+// signals — see api.StatusInfo's doc comment for what each field means. A
+// nil imp (tests, or a moment before run() finishes wiring it in) reports an
+// empty status rather than erroring, matching DeleteLocalFiles' nil-guard
+// convention.
+func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
+	s.mu.Lock()
+	imp := s.imp
+	s.mu.Unlock()
+
+	kinds := map[string]api.KindStatus{}
+	for _, kind := range []database.Kind{database.KindTorrent, database.KindUsenet, database.KindWebDL} {
+		kinds[string(kind)] = api.KindStatus{}
+	}
+	if imp == nil {
+		return api.StatusInfo{Kinds: kinds}, nil
+	}
+
+	for _, kind := range []database.Kind{database.KindTorrent, database.KindUsenet, database.KindWebDL} {
+		ks := kinds[string(kind)]
+		if t, ok := imp.LastSuccessfulListAt(kind); ok {
+			ks.LastSuccessfulListAt = &t
+		}
+		if t, ok := imp.RateLimitCooldownUntil(kind); ok {
+			ks.RateLimitedUntil = &t
+		}
+		kinds[string(kind)] = ks
+	}
+
+	counts, err := imp.ErrorCounts(ctx)
+	if err != nil {
+		return api.StatusInfo{}, fmt.Errorf("status: count error downloads: %w", err)
+	}
+	for kind, n := range counts {
+		ks := kinds[string(kind)]
+		ks.ErrorCount = n
+		kinds[string(kind)] = ks
+	}
+
+	status := api.StatusInfo{Kinds: kinds}
+	if t, ok := imp.LastTickAt(); ok {
+		status.LastTickAt = &t
+	}
+	return status, nil
+}
+
 // --- Auth: optional login accounts (see internal/api/auth.go for the
 // password hashing/session logic — this file only ever handles already-
 // hashed passwords, matching how internal/config itself never sees a

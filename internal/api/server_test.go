@@ -167,6 +167,9 @@ type fakeSettings struct {
 	accountStatus debrid.AccountStatus
 	accountErr    error
 
+	statusResult StatusInfo
+	statusErr    error
+
 	// Auth: a simple in-memory user list — enough to exercise
 	// requireAuth/requireAdmin/downloadByID's role checks and the user-
 	// management handlers without needing a real config.Config.
@@ -382,6 +385,13 @@ func (f *fakeSettings) AccountStatus(_ context.Context) (debrid.AccountStatus, e
 		return debrid.AccountStatus{}, f.accountErr
 	}
 	return f.accountStatus, nil
+}
+
+func (f *fakeSettings) Status(_ context.Context) (StatusInfo, error) {
+	if f.statusErr != nil {
+		return StatusInfo{}, f.statusErr
+	}
+	return f.statusResult, nil
 }
 
 func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
@@ -2424,6 +2434,60 @@ func TestHandleGetAccountStatus_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/account", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleStatus_ReturnsSettingsStatus(t *testing.T) {
+	tick := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	rateLimited := tick.Add(5 * time.Minute)
+	settings := &fakeSettings{statusResult: StatusInfo{
+		LastTickAt: &tick,
+		Kinds: map[string]KindStatus{
+			"torrent": {LastSuccessfulListAt: &tick, ErrorCount: 2},
+			"usenet":  {RateLimitedUntil: &rateLimited},
+			"webdl":   {},
+		},
+	}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/status"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got StatusInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.LastTickAt == nil || !got.LastTickAt.Equal(tick) {
+		t.Errorf("LastTickAt = %v, want %v", got.LastTickAt, tick)
+	}
+	if got.Kinds["torrent"].ErrorCount != 2 {
+		t.Errorf("torrent ErrorCount = %d, want 2", got.Kinds["torrent"].ErrorCount)
+	}
+	if got.Kinds["usenet"].RateLimitedUntil == nil || !got.Kinds["usenet"].RateLimitedUntil.Equal(rateLimited) {
+		t.Errorf("usenet RateLimitedUntil = %v, want %v", got.Kinds["usenet"].RateLimitedUntil, rateLimited)
+	}
+}
+
+func TestHandleStatus_PropagatesError(t *testing.T) {
+	settings := &fakeSettings{statusErr: errors.New("count downloads by state: db locked")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/status"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleStatus_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

@@ -86,6 +86,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **New `GET /api/v1/status` endpoint** reports whether AcerviNode's own
+  background polling is actually alive and making progress — built
+  proactively, picked directly off the roadmap's own "Path to daily-driver
+  parity" list, since the only way to know the tick loop was stuck before
+  this was manually tailing the log. Reports `last_tick_at` (proves the tick
+  loop itself hasn't stalled or crashed, regardless of what any single
+  provider kind found), plus per-kind (`torrent`/`usenet`/`webdl`)
+  `last_successful_list_at`, `rate_limited_until`, and `error_count`.
+  Deliberately doesn't fold in TorBox's own `cooldown_until` even though
+  both were motivated by the same incident: a listing call that succeeds
+  but finds nothing new still advances `last_successful_list_at`, so the
+  two answer genuinely different questions ("is polling itself working" vs.
+  "is the provider account restricted") — see
+  docs/providers.md#status-monitoring-get-apiv1status. Meant for an external
+  monitor (Uptime Kuma, Healthchecks.io, ...) to poll and alert on;
+  authenticated the same as `/version`/`/providers`, not admin-only and not
+  fully open like `/health`.
+
 - **`download_dir_mode` and `fast_poll_interval_seconds` are now real,
   live-configurable settings** (`config.yaml`/env var/`PUT
   /api/v1/settings/general`/the web UI's General tab), not fixed

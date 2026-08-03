@@ -934,6 +934,85 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	}
 }
 
+// TestLastTickAt_UnsetBeforeFirstTick_SetOnTick proves the GET
+// /api/v1/status liveness signal: unset before Tick has ever run, and set to
+// a recent time immediately after one runs.
+func TestLastTickAt_UnsetBeforeFirstTick_SetOnTick(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	if _, ok := im.LastTickAt(); ok {
+		t.Fatal("expected no LastTickAt before Tick has ever run")
+	}
+
+	before := time.Now()
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	after := time.Now()
+
+	got, ok := im.LastTickAt()
+	if !ok {
+		t.Fatal("expected LastTickAt to be set after Tick ran")
+	}
+	if got.Before(before) || got.After(after) {
+		t.Errorf("LastTickAt() = %v, want between %v and %v", got, before, after)
+	}
+}
+
+// TestLastSuccessfulListAt_SetOnSuccessOnly proves refreshKind records a
+// per-kind timestamp only when List() actually succeeds — unset for a kind
+// whose List() call fails, and unaffected by a different kind's own result.
+func TestLastSuccessfulListAt_SetOnSuccessOnly(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	torrentProvider := &fakeProvider{}
+	usenetProvider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list failed")}
+	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+
+	if _, ok := im.LastSuccessfulListAt(database.KindTorrent); ok {
+		t.Fatal("expected no LastSuccessfulListAt before any List() call")
+	}
+
+	im.refreshKind(ctx, database.KindTorrent, torrentProvider, false)
+	im.refreshKind(ctx, database.KindUsenet, usenetProvider, false)
+
+	if _, ok := im.LastSuccessfulListAt(database.KindTorrent); !ok {
+		t.Error("expected LastSuccessfulListAt to be set for torrent after a successful List()")
+	}
+	if _, ok := im.LastSuccessfulListAt(database.KindUsenet); ok {
+		t.Error("expected no LastSuccessfulListAt for usenet after a failed List()")
+	}
+}
+
+// TestErrorCounts_ReflectsPersistedErrorRows proves ErrorCounts is a thin,
+// correctly-wired pass-through to database.CountDownloadsByState — full
+// grouping/filtering behavior is covered there.
+func TestErrorCounts_ReflectsPersistedErrorRows(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+
+	errored := &database.Download{
+		ID: "errored", Provider: "faketorbox", ProviderDownloadID: "errored-id",
+		Kind: database.KindTorrent, Name: "Errored.Release", State: database.StateError,
+	}
+	if err := db.InsertDownload(ctx, errored); err != nil {
+		t.Fatalf("InsertDownload(errored) error = %v", err)
+	}
+
+	counts, err := im.ErrorCounts(ctx)
+	if err != nil {
+		t.Fatalf("ErrorCounts() error = %v", err)
+	}
+	if counts[database.KindTorrent] != 1 {
+		t.Errorf("counts[KindTorrent] = %d, want 1", counts[database.KindTorrent])
+	}
+}
+
 // TestRefreshActiveKind_OnlyChecksActiveManagedDownloads proves the fast
 // path's scoping: it calls Status() (not List()) exactly once per
 // queued/downloading Managed download, leaves a Manual download and an

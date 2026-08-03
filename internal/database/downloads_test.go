@@ -789,6 +789,53 @@ func TestListDownloadsEligibleForCleanup(t *testing.T) {
 	}
 }
 
+func TestCountDownloadsByState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	torrentErr1 := newTestDownload(KindTorrent)
+	torrentErr1.ProviderDownloadID = "torrent-err-1"
+	torrentErr1.State = StateError
+	if err := db.InsertDownload(ctx, torrentErr1); err != nil {
+		t.Fatalf("InsertDownload(torrentErr1) error = %v", err)
+	}
+
+	torrentErr2 := newTestDownload(KindTorrent)
+	torrentErr2.ProviderDownloadID = "torrent-err-2"
+	torrentErr2.State = StateError
+	if err := db.InsertDownload(ctx, torrentErr2); err != nil {
+		t.Fatalf("InsertDownload(torrentErr2) error = %v", err)
+	}
+
+	usenetErr := newTestDownload(KindUsenet)
+	usenetErr.ProviderDownloadID = "usenet-err"
+	usenetErr.State = StateError
+	if err := db.InsertDownload(ctx, usenetErr); err != nil {
+		t.Fatalf("InsertDownload(usenetErr) error = %v", err)
+	}
+
+	torrentQueued := newTestDownload(KindTorrent)
+	torrentQueued.ProviderDownloadID = "torrent-queued"
+	torrentQueued.State = StateQueued
+	if err := db.InsertDownload(ctx, torrentQueued); err != nil {
+		t.Fatalf("InsertDownload(torrentQueued) error = %v", err)
+	}
+
+	counts, err := db.CountDownloadsByState(ctx, StateError)
+	if err != nil {
+		t.Fatalf("CountDownloadsByState() error = %v", err)
+	}
+	if counts[KindTorrent] != 2 {
+		t.Errorf("counts[KindTorrent] = %d, want 2", counts[KindTorrent])
+	}
+	if counts[KindUsenet] != 1 {
+		t.Errorf("counts[KindUsenet] = %d, want 1", counts[KindUsenet])
+	}
+	if _, ok := counts[KindWebDL]; ok {
+		t.Errorf("counts[KindWebDL] = %d, want kind absent entirely (no error rows)", counts[KindWebDL])
+	}
+}
+
 func TestLocalStateFromProvider(t *testing.T) {
 	tests := []struct {
 		in   debrid.DownloadState
