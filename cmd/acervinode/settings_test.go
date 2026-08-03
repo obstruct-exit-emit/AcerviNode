@@ -301,8 +301,8 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
 		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
 		CleanupAfterDays: 14,
-		DownloadDirMode: "0750", FastPollIntervalSeconds: 5,
-		TLSPort:          cfg.TLSPort, // unchanged — no restart needed
+		DownloadDirMode:  "0750", FastPollIntervalSeconds: 5,
+		TLSPort: cfg.TLSPort, // unchanged — no restart needed
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -643,6 +643,11 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 // defaultArrCategories) is already known to both compat shims the moment
 // they're wired up — no visit to AcerviNode's own Settings → Categories
 // page needed first, unlike a fully custom category name.
+//
+// SeedDefaultCategoriesOnce is called explicitly here, matching main.go's
+// real startup order (it must run before buildHandler/SetShimServers so
+// what it seeds into CategoryPaths is already there for SetShimServers' own
+// normal re-seed to pick up — see both functions' doc comments).
 func TestLiveSettings_SetShimServers_SeedsDefaultArrCategories(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg, err := config.Load(configPath)
@@ -656,6 +661,9 @@ func TestLiveSettings_SetShimServers_SeedsDefaultArrCategories(t *testing.T) {
 	defer db.Close()
 
 	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
+		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
+	}
 	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 
 	torrentCats, usenetCats := settings.Categories()
@@ -844,6 +852,149 @@ func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
 		if !foundUsenet {
 			t.Errorf("usenet categories after restart = %v, want it to include %s", usenetCats, want)
 		}
+	}
+}
+
+// TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects
+// proves the actual fix requested: a pre-seeded default (e.g. Radarr's own
+// "movies") is now indistinguishable from a category a user registered by
+// hand — persisted in CategoryPaths, not just force-applied to both shims'
+// in-memory stores on every startup — and, critically, once removed it
+// genuinely stays removed across a simulated restart instead of silently
+// reappearing, which is exactly what the old unconditional every-startup
+// seeding made impossible.
+func TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
+		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
+	}
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+
+	// Persisted exactly as if a user had called SetCategoryPath themselves —
+	// present in CategoryPaths, not just the shims' in-memory lists.
+	paths := settings.CategoryPaths()
+	if _, ok := paths["movies"]; !ok {
+		t.Errorf("CategoryPaths() = %v, want a \"movies\" entry (empty path) after seeding", paths)
+	}
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() reload error = %v", err)
+	}
+	if _, ok := reloaded.CategoryPaths["movies"]; !ok {
+		t.Errorf("persisted config category_paths = %v, want a \"movies\" entry", reloaded.CategoryPaths)
+	}
+	if !reloaded.DefaultCategoriesSeeded {
+		t.Error("persisted config DefaultCategoriesSeeded = false, want true after seeding")
+	}
+
+	// Delete it, then simulate a restart (fresh liveSettings from the same
+	// persisted config.yaml) — a second SeedDefaultCategoriesOnce call must
+	// be a no-op now, so "movies" stays gone.
+	ctx := context.Background()
+	if err := settings.RemoveCategory(ctx, "movies"); err != nil {
+		t.Fatalf("RemoveCategory() error = %v", err)
+	}
+
+	reloadedCfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() reload error = %v", err)
+	}
+	torrentDyn2, usenetDyn2, webDownloadDyn2, settings2 := setupProviders(reloadedCfg, configPath)
+	if err := settings2.SeedDefaultCategoriesOnce(); err != nil {
+		t.Fatalf("SeedDefaultCategoriesOnce() (post-restart) error = %v", err)
+	}
+	buildHandler(db, torrentDyn2, usenetDyn2, webDownloadDyn2, settings2)
+
+	pathsAfterRestart := settings2.CategoryPaths()
+	if _, ok := pathsAfterRestart["movies"]; ok {
+		t.Errorf("CategoryPaths() after restart = %v, want no \"movies\" entry — it was explicitly deleted", pathsAfterRestart)
+	}
+	torrentCats, usenetCats := settings2.Categories()
+	for _, c := range torrentCats {
+		if c == "movies" {
+			t.Errorf("torrent categories after restart = %v, want \"movies\" to stay deleted, not silently reappear", torrentCats)
+		}
+	}
+	for _, c := range usenetCats {
+		if c == "movies" {
+			t.Errorf("usenet categories after restart = %v, want \"movies\" to stay deleted, not silently reappear", usenetCats)
+		}
+	}
+
+	// Every other default is unaffected by deleting just one.
+	for _, want := range []string{"radarr", "tv", "tv-sonarr"} {
+		found := false
+		for _, c := range torrentCats {
+			if c == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("torrent categories after restart = %v, want it to still include %s", torrentCats, want)
+		}
+	}
+}
+
+func TestLiveSettings_RemoveCategory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+
+	ctx := context.Background()
+	if err := settings.SetCategoryPath(ctx, "movies", "/mnt/movies"); err != nil {
+		t.Fatalf("SetCategoryPath() error = %v", err)
+	}
+	if err := settings.RemoveCategory(ctx, ""); err == nil {
+		t.Error("RemoveCategory with an empty name: expected an error, got nil")
+	}
+
+	if err := settings.RemoveCategory(ctx, "movies"); err != nil {
+		t.Fatalf("RemoveCategory() error = %v", err)
+	}
+
+	pathsAfterRemove := settings.CategoryPaths()
+	if _, ok := pathsAfterRemove["movies"]; ok {
+		t.Errorf("CategoryPaths() after RemoveCategory = %v, want no \"movies\" entry", pathsAfterRemove)
+	}
+	torrentCats, usenetCats := settings.Categories()
+	for _, c := range torrentCats {
+		if c == "movies" {
+			t.Errorf("torrent categories after RemoveCategory = %v, want \"movies\" gone", torrentCats)
+		}
+	}
+	for _, c := range usenetCats {
+		if c == "movies" {
+			t.Errorf("usenet categories after RemoveCategory = %v, want \"movies\" gone", usenetCats)
+		}
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() reload error = %v", err)
+	}
+	if _, ok := reloaded.CategoryPaths["movies"]; ok {
+		t.Errorf("persisted config category_paths = %v, want no \"movies\" entry", reloaded.CategoryPaths)
 	}
 }
 

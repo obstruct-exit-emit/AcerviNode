@@ -166,6 +166,19 @@ func (s *Server) handleSetCategoryPath(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleRemoveCategory implements DELETE /api/v1/settings/categories/{category}
+// — forgets the category entirely (path override and registration with both
+// compat shims), unlike handleSetCategoryPath with an empty path, which only
+// clears the override. See Settings.RemoveCategory.
+func (s *Server) handleRemoveCategory(w http.ResponseWriter, r *http.Request) {
+	category := r.PathValue("category")
+	if err := s.settings.RemoveCategory(r.Context(), category); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type accountStatusResponse struct {
 	Available            bool   `json:"available"`
 	Error                string `json:"error,omitempty"`

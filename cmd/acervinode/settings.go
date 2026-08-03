@@ -109,13 +109,13 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 // missing" validation — see docs/sabnzbd-api.md#categories) would vanish on
 // every restart, even though its path override survived in config.yaml —
 // putting the user right back where they started until something else
-// happened to re-declare it.
-//
-// Also seeds every well-known *arr-app default category name
-// (defaultArrCategories) unconditionally, every startup — unlike the
-// config.yaml-backed ones above, these aren't something a user configured;
-// they're what closes the gap for a user who never customizes an *arr app's
-// own default category field at all, with zero AcerviNode-side setup.
+// happened to re-declare it. This is also what makes every well-known
+// *arr-app default category name show up here with zero extra code: see
+// SeedDefaultCategoriesOnce, called once at startup (main.go's run(), before
+// this), which folds defaultArrCategories into CategoryPaths itself exactly
+// as if a user had registered each one by hand — this loop then re-seeds
+// them into both shims' in-memory stores the same as anything else in
+// CategoryPaths, no separate special-casing needed here anymore.
 func (s *liveSettings) SetShimServers(qbt *qbittorrent.Server, sab *sabnzbd.Server) {
 	s.mu.Lock()
 	s.qbt = qbt
@@ -127,10 +127,50 @@ func (s *liveSettings) SetShimServers(qbt *qbittorrent.Server, sab *sabnzbd.Serv
 		qbt.AddCategory(category)
 		sab.AddCategory(category)
 	}
-	for _, category := range defaultArrCategories {
-		qbt.AddCategory(category)
-		sab.AddCategory(category)
+}
+
+// SeedDefaultCategoriesOnce folds every well-known *arr-app default category
+// name (defaultArrCategories) into CategoryPaths, with an empty path
+// override — exactly as if a user had registered each one by hand via
+// SetCategoryPath — but only the very first time this has ever run for this
+// instance (guarded by DefaultCategoriesSeeded). Every later startup is a
+// no-op.
+//
+// This used to be unconditional, every single startup, applied straight to
+// both compat shims' in-memory category stores — meaning a default a user
+// explicitly deleted would always silently come back on the next restart,
+// with no way to actually get rid of one. Persisting them into CategoryPaths
+// exactly once makes them indistinguishable from anything else a user has
+// registered from here on: editable, deletable, and — once deleted — gone
+// for good, the same "seed once, never resurrect" shape as
+// database.discoverySeeded uses for Manual-download discovery.
+//
+// Called once from main.go's run(), before buildHandler/SetShimServers, so
+// whatever this seeds is already in CategoryPaths by the time
+// SetShimServers does its own normal re-seed of both shims from it — no
+// separate seeding path needed there anymore.
+func (s *liveSettings) SeedDefaultCategoriesOnce() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cfg.DefaultCategoriesSeeded {
+		return nil
 	}
+
+	if s.cfg.CategoryPaths == nil {
+		s.cfg.CategoryPaths = map[string]string{}
+	}
+	for _, category := range defaultArrCategories {
+		if _, exists := s.cfg.CategoryPaths[category]; !exists {
+			s.cfg.CategoryPaths[category] = ""
+		}
+	}
+	s.cfg.DefaultCategoriesSeeded = true
+
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
 }
 
 func (s *liveSettings) TorBoxConfigured() bool {
@@ -447,6 +487,41 @@ func (s *liveSettings) SetCategoryPath(_ context.Context, category, path string)
 	}
 	if s.sab != nil {
 		s.sab.AddCategory(category)
+	}
+	return nil
+}
+
+// RemoveCategory forgets a category entirely — its path override (if any)
+// and its registration with both compat shims — so it stops showing up
+// anywhere and, unlike clearing an override's path (SetCategoryPath's own
+// "clear it but stay registered" behavior), a deleted pre-seeded default
+// (see SeedDefaultCategoriesOnce) genuinely won't come back on its own. If
+// Sonarr/Radarr is still actively configured with this category, declaring
+// it again (e.g. its own "Test" step, or a later add) re-registers it with
+// the compat shims exactly the same as it would against a real install —
+// this only forgets what's known right now, it doesn't block it forever.
+func (s *liveSettings) RemoveCategory(_ context.Context, category string) error {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return fmt.Errorf("category must not be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.cfg.CategoryPaths, category)
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+
+	if s.imp != nil {
+		s.imp.SetCategoryPaths(copyCategoryPaths(s.cfg.CategoryPaths))
+	}
+	if s.qbt != nil {
+		s.qbt.RemoveCategory(category)
+	}
+	if s.sab != nil {
+		s.sab.RemoveCategory(category)
 	}
 	return nil
 }

@@ -41,3 +41,29 @@ func TestServer_CategoriesAndAddCategory(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_RemoveCategory(t *testing.T) {
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	s := NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey))
+	s.AddCategory("movies")
+	s.AddCategory("tv-sonarr")
+
+	s.RemoveCategory("movies")
+
+	got := s.Categories()
+	if len(got) != 1 || got[0] != "tv-sonarr" {
+		t.Errorf("Categories() after RemoveCategory(movies) = %v, want [tv-sonarr]", got)
+	}
+
+	// "*" is a protocol requirement, never removable — see categoryStore's
+	// doc comment.
+	s.RemoveCategory("*")
+	if raw := s.categories.list(); len(raw) != 2 { // "*" plus tv-sonarr
+		t.Errorf("internal categoryStore.list() after RemoveCategory(*) = %v, want \"*\" to survive", raw)
+	}
+}

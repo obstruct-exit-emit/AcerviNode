@@ -209,6 +209,11 @@ type Settings interface {
 	// SetCategoryPath sets (or, if path is empty, clears) category's
 	// override destination directory, applies it live, and persists it.
 	SetCategoryPath(ctx context.Context, category, path string) error
+	// RemoveCategory forgets a category entirely (its path override and its
+	// registration with both compat shims) — unlike SetCategoryPath with an
+	// empty path, which clears the override but leaves the category
+	// registered, this removes it from the known list outright.
+	RemoveCategory(ctx context.Context, category string) error
 	// AccountStatus reports the configured provider's own account status
 	// (plan tier, premium expiry, lifetime usage) — a live call, not a
 	// snapshot, so it always reflects the actual current TorBox account. An
@@ -361,6 +366,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/categories", s.requireAdmin(s.handleGetCategories))
 	s.mux.HandleFunc("POST /api/v1/settings/categories", s.requireAdmin(s.handleAddCategory))
 	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAdmin(s.handleSetCategoryPath))
+	s.mux.HandleFunc("DELETE /api/v1/settings/categories/{category}", s.requireAdmin(s.handleRemoveCategory))
 	s.mux.HandleFunc("GET /api/v1/settings/account", s.requireAdmin(s.handleGetAccountStatus))
 	s.mux.HandleFunc("GET /api/v1/settings/users", s.requireAdmin(s.handleListUsers))
 	s.mux.HandleFunc("POST /api/v1/settings/users", s.requireAdmin(s.handleAddUser))

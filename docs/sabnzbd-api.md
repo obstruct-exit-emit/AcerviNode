@@ -123,8 +123,8 @@ Test — the AcerviNode-side equivalent of pre-creating the category in real
 SABnzbd's own admin UI first.
 
 Every well-known \*arr-app *default* category is also pre-registered
-automatically, every startup — `cmd/acervinode`'s `defaultArrCategories`,
-confirmed directly against each app's real source
+automatically — `cmd/acervinode`'s `defaultArrCategories`, confirmed
+directly against each app's real source
 (`SabnzbdSettings.cs`/`QBittorrentSettings.cs`): Radarr's SABnzbd default is
 `"movies"`, Sonarr's is `"tv"`, Lidarr's is `"music"`, Readarr's is
 (genuinely, confirmed, not a typo) capitalized `"Readarr"` — category
@@ -132,6 +132,22 @@ comparisons are case-sensitive, matching a plain C# string `==` check in
 `TestCategory()`. A user who never customizes an \*arr app's own default
 category field hits zero setup friction at all; a custom name still needs
 the manual registration step above.
+
+This seeding happens exactly once, ever — the very first time AcerviNode
+starts (`liveSettings.SeedDefaultCategoriesOnce`, guarded by a persisted
+`default_categories_seeded` flag) — not unconditionally on every startup the
+way it originally worked. Each default is folded into `category_paths`
+(with an empty path override) exactly as if a user had registered it by
+hand through the Settings UI, which is what makes it a genuinely normal
+category from that point on: editable and, via `DELETE
+/api/v1/settings/categories/{category}`, actually deletable. The old
+every-startup behavior made deletion pointless — a default a user removed
+would always silently reappear on the very next restart, since nothing
+recorded that it had ever been intentionally removed. Deleting one now
+persists; if the *arr app it belongs to is still actively configured with
+it, it simply gets re-registered the next time it's declared again (e.g.
+its own Test step), same as it would against a real install — deletion
+forgets what's known right now, it doesn't block the name forever.
 
 The qBittorrent shim doesn't have this problem: Sonarr/Radarr's own
 `TestCategory()` for qBittorrent calls `createCategory` automatically for a

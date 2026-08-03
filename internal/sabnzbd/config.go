@@ -35,6 +35,18 @@ func (c *categoryStore) add(name string) {
 	c.mu.Unlock()
 }
 
+// remove forgets name — except "*", the always-present protocol default
+// (see newCategoryStore's doc comment), which is never a candidate for
+// removal since it isn't something anyone registered in the first place.
+func (c *categoryStore) remove(name string) {
+	if name == "*" {
+		return
+	}
+	c.mu.Lock()
+	delete(c.names, name)
+	c.mu.Unlock()
+}
+
 func (c *categoryStore) list() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -70,6 +82,13 @@ func (s *Server) Categories() []string {
 // internal/qbittorrent's identical AddCategory for the rationale.
 func (s *Server) AddCategory(name string) {
 	s.categories.add(name)
+}
+
+// RemoveCategory forgets a category name — see internal/qbittorrent's
+// identical RemoveCategory for the rationale, including why this doesn't
+// permanently block Sonarr/Radarr from re-declaring it later.
+func (s *Server) RemoveCategory(name string) {
+	s.categories.remove(name)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {

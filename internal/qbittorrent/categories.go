@@ -30,6 +30,12 @@ func (c *categoryStore) add(name, savePath string) {
 	c.mu.Unlock()
 }
 
+func (c *categoryStore) remove(name string) {
+	c.mu.Lock()
+	delete(c.names, name)
+	c.mu.Unlock()
+}
+
 // Categories lists every category name currently known — populated
 // reactively as *arr apps declare them (see handleCreateCategory), or
 // manually via AddCategory (see the settings API). Sorted for a stable,
@@ -53,6 +59,16 @@ func (s *Server) Categories() []string {
 // concept AcerviNode itself never interprets (see docs/configuration.md).
 func (s *Server) AddCategory(name string) {
 	s.categories.add(name, "")
+}
+
+// RemoveCategory forgets a category name — see internal/api's settings
+// endpoints. If Sonarr/Radarr is still actively configured with this
+// category, it'll simply come back the next time it's declared again (a
+// createCategory call, or an add with that category set) — same as it
+// would against a real qBittorrent install; this doesn't block it from
+// being re-registered, only removes it from the known list right now.
+func (s *Server) RemoveCategory(name string) {
+	s.categories.remove(name)
 }
 
 type categoryResponse struct {

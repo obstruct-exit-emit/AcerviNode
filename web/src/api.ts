@@ -340,6 +340,16 @@ export function setCategoryPath(apiKey: string, category: string, path: string):
   })
 }
 
+// removeCategory forgets a category entirely (its path override and its
+// registration with both compat shims) — unlike setCategoryPath with an
+// empty path, which only clears the override. If Sonarr/Radarr is still
+// actively configured with this category, it can simply come back the next
+// time it's declared again, same as it would against a real qBittorrent/
+// SABnzbd install.
+export function removeCategory(apiKey: string, category: string): Promise<void> {
+  return request(`/api/v1/settings/categories/${encodeURIComponent(category)}`, apiKey, { method: 'DELETE' })
+}
+
 // TorBoxAccount is GET /api/v1/settings/account's response — a live call to
 // the configured provider, not a cached snapshot. available is false (with a
 // reason in error) whenever nothing's configured yet, or the configured

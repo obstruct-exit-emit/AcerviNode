@@ -35,3 +35,29 @@ func TestServer_CategoriesAndAddCategory(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_RemoveCategory(t *testing.T) {
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	s := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
+	s.AddCategory("movies")
+	s.AddCategory("tv-sonarr")
+
+	s.RemoveCategory("movies")
+
+	got := s.Categories()
+	if len(got) != 1 || got[0] != "tv-sonarr" {
+		t.Errorf("Categories() after RemoveCategory(movies) = %v, want [tv-sonarr]", got)
+	}
+
+	// Removing something never added, or removing twice, is a routine no-op.
+	s.RemoveCategory("movies")
+	s.RemoveCategory("never-added")
+	if got := s.Categories(); len(got) != 1 || got[0] != "tv-sonarr" {
+		t.Errorf("Categories() after redundant removes = %v, want [tv-sonarr]", got)
+	}
+}

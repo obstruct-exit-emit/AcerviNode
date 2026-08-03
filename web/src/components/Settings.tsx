@@ -6,6 +6,7 @@ import {
   getTorBoxAccount,
   regenerateApiKey,
   regenerateCertificate,
+  removeCategory,
   restartServer,
   setCategoryPath,
   setTorBoxApiKey,
@@ -54,13 +55,40 @@ function Section({ title, help, children }: { title: string; help?: ReactNode; c
   )
 }
 
-// One row of the "Save path overrides" list — kept as its own component,
+// allCategoryNames unions every category name AcerviNode knows about from
+// any source — paths (has a save-path override, possibly empty), torrent
+// (known to the qBittorrent shim), usenet (known to the SABnzbd shim) — so
+// a category that's only ever been reactively declared by a real Sonarr/
+// Radarr (never given an override) still gets a full row, same as a
+// pre-seeded default or a manually registered one. Sorted, case-sensitive
+// (Readarr's "Readarr" vs. "readarr" are genuinely distinct — see
+// cmd/acervinode/default_categories.go).
+function allCategoryNames(categories: Categories): string[] {
+  const names = new Set<string>([...Object.keys(categories.paths), ...categories.torrent, ...categories.usenet])
+  return [...names].sort((a, b) => a.localeCompare(b))
+}
+
+// One row of the Categories list — every known category name, however it
+// came to be known (a pre-seeded *arr default, a real Sonarr/Radarr
+// declaring one, or a manual registration), rendered identically: an
+// editable path override plus a Delete action. Kept as its own component,
 // keyed by category name, so an in-progress edit in one row survives a
-// `load()` triggered by saving a different row (see Settings' onSaved).
-function CategoryPathRow({ name, currentPath, apiKey, onSaved }: { name: string; currentPath: string; apiKey: string; onSaved: () => void }) {
+// `load()` triggered by saving or deleting a different row (see Settings'
+// onSaved).
+function CategoryPathRow({
+  name,
+  currentPath,
+  apiKey,
+  onSaved,
+}: {
+  name: string
+  currentPath: string
+  apiKey: string
+  onSaved: () => void
+}) {
   const [path, setPath] = useState(currentPath)
   const [savedPath, setSavedPath] = useState(currentPath)
-  const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
+  const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'deleting' | 'error'; message?: string }>({ kind: 'idle' })
 
   async function handleSave() {
     const trimmed = path.trim()
@@ -70,6 +98,17 @@ function CategoryPathRow({ name, currentPath, apiKey, onSaved }: { name: string;
       setPath(trimmed)
       setSavedPath(trimmed)
       setStatus({ kind: 'saved' })
+      onSaved()
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Remove category "${name}"? If Sonarr/Radarr is still configured with it, it'll simply reappear next time it's used.`)) return
+    setStatus({ kind: 'deleting' })
+    try {
+      await removeCategory(apiKey, name)
       onSaved()
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
@@ -88,8 +127,11 @@ function CategoryPathRow({ name, currentPath, apiKey, onSaved }: { name: string;
           if (status.kind !== 'idle') setStatus({ kind: 'idle' })
         }}
       />
-      <button type="button" onClick={handleSave} disabled={status.kind === 'saving' || path.trim() === savedPath}>
+      <button type="button" onClick={handleSave} disabled={status.kind === 'saving' || status.kind === 'deleting' || path.trim() === savedPath}>
         {status.kind === 'saving' ? 'Saving…' : 'Save'}
+      </button>
+      <button type="button" className="category-delete-btn" onClick={handleDelete} disabled={status.kind === 'deleting'} title="Remove category">
+        {status.kind === 'deleting' ? '…' : '✕'}
       </button>
       {status.kind === 'saved' && <span className="settings-success">Saved</span>}
       {status.kind === 'error' && <span className="settings-error">{status.message}</span>}
@@ -647,18 +689,20 @@ export function Settings({ apiKey }: Props) {
             no way to create a category on the fly, so a brand new category typed into Radarr's SABnzbd client gets
             rejected outright by its own "Test" step unless AcerviNode already knows about it. Every *arr app's own
             <em> default</em> category (Radarr's "movies"/"radarr", Sonarr's "tv"/"tv-sonarr", Lidarr's
-            "music"/"lidarr", Readarr's "Readarr"/"readarr") is already registered automatically — this is only
-            needed for a custom name you've typed in instead. Leave the path blank to just register the name; fill
-            it in to also redirect that category's completed downloads to a specific directory instead of the
-            default <code>download_dir/&lt;category&gt;</code> (e.g. to route it to a different disk or mount). Only
-            affects Managed (Sonarr/Radarr) downloads — category has no effect on Manual ones. Clear an existing
-            override's path and save to remove it (the category itself stays registered).
+            "music"/"lidarr", Readarr's "Readarr"/"readarr") is already registered below, editable and deletable the
+            same as anything you add yourself — this form is only for a custom name you've typed in instead. Leave
+            the path blank to just register the name; fill it in to also redirect that category's completed
+            downloads to a specific directory instead of the default <code>download_dir/&lt;category&gt;</code>{' '}
+            (e.g. to route it to a different disk or mount). Only affects Managed (Sonarr/Radarr) downloads —
+            category has no effect on Manual ones. Deleting a category (✕) removes it entirely; if Sonarr/Radarr is
+            still actively configured with it, it'll simply reappear the next time it's used, same as it would
+            against a real qBittorrent/SABnzbd install.
           </p>
 
           {categories &&
-            Object.entries(categories.paths)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, path]) => <CategoryPathRow key={name} name={name} currentPath={path} apiKey={apiKey} onSaved={load} />)}
+            allCategoryNames(categories).map((name) => (
+              <CategoryPathRow key={name} name={name} currentPath={categories.paths[name] ?? ''} apiKey={apiKey} onSaved={load} />
+            ))}
 
           <form className="add-category-form" onSubmit={handleAddOverride}>
             <input
@@ -678,13 +722,6 @@ export function Settings({ apiKey }: Props) {
             </button>
           </form>
           {newOverrideStatus.kind === 'error' && <p className="settings-error">Failed to add: {newOverrideStatus.message}</p>}
-
-          {categories && (categories.torrent.length > 0 || categories.usenet.length > 0) && (
-            <p className="settings-help">
-              Currently known — torrent (qBittorrent): {categories.torrent.join(', ') || 'none'}; usenet (SABnzbd):{' '}
-              {categories.usenet.join(', ') || 'none'}.
-            </p>
-          )}
         </section>
       )}
 

@@ -86,6 +86,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Every category is now editable and deletable, including the pre-seeded
+  *arr-app defaults.** Previously, `defaultArrCategories` (Radarr's
+  "movies"/"radarr", Sonarr's "tv"/"tv-sonarr", Lidarr's "music"/"lidarr",
+  Readarr's "Readarr"/"readarr") were force-registered directly into both
+  compat shims on *every* startup, bypassing `config.yaml` entirely — a
+  default a user deleted would always silently reappear on the next
+  restart, making deletion pointless. Fixed: this seeding now runs exactly
+  once, ever (a new `default_categories_seeded` flag), folding each default
+  into `category_paths` exactly as if a user had registered it by hand —
+  from that point on it's indistinguishable from any other category. New
+  `DELETE /api/v1/settings/categories/{category}` forgets a category
+  entirely (its path override and its registration with both shims); if an
+  *arr app is still actively configured with it, it simply gets
+  re-registered next time it's declared again, same as a real
+  qBittorrent/SABnzbd install. The Settings → Categories page now shows
+  every known category (defaults, reactively-discovered, and manually
+  registered alike) as a full row with an editable path and a delete (✕)
+  button, instead of only showing categories that already had a path
+  override — a purely reactive or pre-seeded one used to be invisible there
+  except as plain text in a "currently known" summary line. See
+  [SABnzbd API](docs/sabnzbd-api.md#categories).
+
 - **Bulk select/delete/retry in the downloads table.** A checkbox column
   (row + header select-all/indeterminate) and a contextual action bar that
   only appears once something's selected — the table looks identical to

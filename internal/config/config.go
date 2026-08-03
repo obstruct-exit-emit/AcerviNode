@@ -103,6 +103,17 @@ type Config struct {
 	// qBittorrent or SABnzbd compat shim.
 	CategoryPaths map[string]string `yaml:"category_paths"`
 
+	// DefaultCategoriesSeeded is set once, the first time cmd/acervinode
+	// seeds every well-known *arr-app default category name into
+	// CategoryPaths (see cmd/acervinode's seedDefaultCategoriesOnce) —
+	// never again after that, on any later startup. Without this, a default
+	// re-seeded unconditionally on every start could never actually be
+	// deleted: the very next restart would silently bring it back, the same
+	// "seed once, never resurrect" shape as database.discoverySeeded for
+	// Manual-download discovery. Deliberately lives here (config.yaml)
+	// rather than the database — CategoryPaths itself already does.
+	DefaultCategoriesSeeded bool `yaml:"default_categories_seeded,omitempty"`
+
 	// Auth holds the optional login accounts — see auth.go. No accounts
 	// means authentication is disabled entirely, the same API-key-only
 	// model AcerviNode always used before this existed.

@@ -163,6 +163,8 @@ type fakeSettings struct {
 	categoryPaths       map[string]string
 	setCategoryPathCall *setCategoryPathRequest
 	setCategoryPathErr  error
+	removeCategoryCall  string
+	removeCategoryErr   error
 
 	accountStatus debrid.AccountStatus
 	accountErr    error
@@ -377,6 +379,15 @@ func (f *fakeSettings) SetCategoryPath(_ context.Context, category, path string)
 	} else {
 		f.categoryPaths[category] = path
 	}
+	return nil
+}
+
+func (f *fakeSettings) RemoveCategory(_ context.Context, category string) error {
+	f.removeCategoryCall = category
+	if f.removeCategoryErr != nil {
+		return f.removeCategoryErr
+	}
+	delete(f.categoryPaths, category)
 	return nil
 }
 
@@ -994,6 +1005,43 @@ func TestHandleSetCategoryPath_RequiresAuth(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/categories/path", strings.NewReader(`{"category":"movies","path":"/mnt/movies"}`))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleRemoveCategory(t *testing.T) {
+	settings := &fakeSettings{categoryPaths: map[string]string{"movies": "/mnt/movies"}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/settings/categories/movies"))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if settings.removeCategoryCall != "movies" {
+		t.Errorf("RemoveCategory call = %q, want %q", settings.removeCategoryCall, "movies")
+	}
+	if _, ok := settings.categoryPaths["movies"]; ok {
+		t.Errorf("categoryPaths = %v, want no movies entry", settings.categoryPaths)
+	}
+}
+
+func TestHandleRemoveCategory_RejectsInvalid(t *testing.T) {
+	settings := &fakeSettings{removeCategoryErr: errors.New("category must not be empty")}
+	srv, _ := newTestServer(t, nil, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/settings/categories/movies"))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleRemoveCategory_RequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/categories/movies", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

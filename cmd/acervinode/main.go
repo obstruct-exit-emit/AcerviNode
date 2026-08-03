@@ -72,6 +72,13 @@ func run(ctx context.Context) error {
 
 	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
 	settings.SetLevelVar(levelVar)
+	// One-time only (see SeedDefaultCategoriesOnce's own doc comment) —
+	// must run before buildHandler/SetShimServers below, so whatever this
+	// seeds into CategoryPaths is already there for SetShimServers' own
+	// normal re-seed of both compat shims to pick up.
+	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
+		return fmt.Errorf("seed default categories: %w", err)
+	}
 	// stop (from signal.NotifyContext above) marks ctx Done exactly the same
 	// as an actual signal arriving — wiring it in as the restart trigger
 	// means the settings API's restart endpoint needs no shutdown plumbing
