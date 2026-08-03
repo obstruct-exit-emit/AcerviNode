@@ -88,30 +88,37 @@ in `/etc/systemd/system/acervinode.service`, then `sudo systemctl daemon-reload
 
 ### Letting Sonarr/Radarr move files out of `download_dir`
 
-Every directory AcerviNode creates under `download_dir` is group-writable
-(`0775`) specifically so a Managed download's completed-import step can
+Every directory AcerviNode creates under `download_dir` is world-writable
+(`0777`) specifically so a Managed download's completed-import step can
 move or hardlink files out of it — real SABnzbd's own "completed" reporting
 always tells an *arr app it's safe to move a file, and Sonarr/Radarr take
 it up on that (see [Providers](providers.md#completed-download-handling-internalimporter)
 for the full story, including a real bug this was found fixing: NZB
-imports failing outright with "Access ... is denied"). That only actually
-works if your *arr app's own user is a member of AcerviNode's group
-(`acervinode` by default) — otherwise it's still only writable by
-AcerviNode itself, the same problem this section exists to avoid.
+imports failing outright with "Access ... is denied").
 
-- **Native install** (Sonarr/Radarr also run as a plain system user):
-  `sudo usermod -aG acervinode <that user>`, then restart the *arr app's
-  own service so the new group membership takes effect.
-- **Docker** (the common case — AcerviNode itself isn't packaged as a
-  Docker image, but most *arr apps are): find AcerviNode's GID
-  (`getent group acervinode`) and add it to the container, e.g.
-  `docker run --group-add <gid> ...` (or the equivalent `group_add:` entry
-  in a Compose file), alongside whatever bind mount gives the container
-  access to `download_dir` in the first place.
+World-writable, not just writable by AcerviNode's own user, is deliberate:
+an *arr app almost never runs as the same user AcerviNode does — most
+setups have it in a separate Docker container with its own PUID/PGID, and
+even matching group IDs across genuinely separate deployments is real,
+ongoing coordination (worse under Proxmox/NAS setups with LXC UID-namespace
+remapping). The standard self-hosted-media-stack answer to this — giving
+every container the same PUID/PGID, the convention
+[rdt-client](https://github.com/rogerfar/rdt-client)'s own Docker image
+uses — isn't something AcerviNode can ask of apps it doesn't package itself.
+This is the zero-configuration equivalent: nothing to set up on a fresh
+install, and it only loosens these specific per-download directories,
+nothing else AcerviNode manages. A directory created before this fix
+existed is corrected automatically the next time anything is fetched into
+it — no manual `chmod` needed for those.
 
-A directory created before this fix existed is corrected automatically
-the next time anything is fetched into it — no manual `chmod` needed for
-those.
+If you'd rather not have these directories world-writable (e.g. a
+genuinely multi-tenant box), the alternative is making AcerviNode run as
+the *same* user/group your `download_dir` and the rest of your media stack
+already use — override `User=`/`Group=` in
+`/etc/systemd/system/acervinode.service` (`sudo systemctl edit acervinode`),
+matching whatever UID/GID your Docker containers' own `PUID`/`PGID` are set
+to. AcerviNode doesn't need anything special for this — plain systemd
+identity, same as any other service.
 
 ## Windows note
 

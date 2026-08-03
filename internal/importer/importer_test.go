@@ -1778,17 +1778,21 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 	}
 }
 
-// TestProcessDownload_MakesDestinationDirectoryGroupWritable proves the fix
+// TestProcessDownload_MakesDestinationDirectoryWorldWritable proves the fix
 // for a real, live-diagnosed bug: Radarr's SABnzbd import path always
 // attempts a genuine move (unlike its qBittorrent path, which only ever
 // copies — see ensureWritableDir's own doc comment for the full story),
 // which failed with "Access ... is denied" against a directory AcerviNode
 // created as 0755 — writable only by its own process user, not whatever
-// user/container Radarr/Sonarr actually runs as. Also proves this corrects
-// a directory that already existed with the old restrictive mode, not just
+// user/container Radarr/Sonarr actually runs as. World-writable (0777),
+// not just group-writable, since matching user/group IDs across genuinely
+// separate deployments (a real Proxmox/NAS setup, live-diagnosed) isn't
+// something a fresh install can be expected to coordinate — see
+// ensureWritableDir's own doc comment. Also proves this corrects a
+// directory that already existed with the old restrictive mode, not just
 // one created fresh by this run — since a real deployment already has
 // directories from before this fix shipped.
-func TestProcessDownload_MakesDestinationDirectoryGroupWritable(t *testing.T) {
+func TestProcessDownload_MakesDestinationDirectoryWorldWritable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission bits don't apply on Windows")
 	}
@@ -1828,16 +1832,16 @@ func TestProcessDownload_MakesDestinationDirectoryGroupWritable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(destDir) error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o775 {
-		t.Errorf("destDir mode = %o, want 0775 (group-writable, so an *arr app running as a different user can move files out)", got)
+	if got := info.Mode().Perm(); got != 0o777 {
+		t.Errorf("destDir mode = %o, want 0777 (world-writable, so an *arr app running as any other user can move files out)", got)
 	}
 
 	categoryInfo, err := os.Stat(categoryDir)
 	if err != nil {
 		t.Fatalf("Stat(categoryDir) error = %v", err)
 	}
-	if got := categoryInfo.Mode().Perm(); got != 0o775 {
-		t.Errorf("categoryDir mode = %o, want 0775 (so a now-empty release folder can be removed too)", got)
+	if got := categoryInfo.Mode().Perm(); got != 0o777 {
+		t.Errorf("categoryDir mode = %o, want 0777 (so a now-empty release folder can be removed too)", got)
 	}
 }
 

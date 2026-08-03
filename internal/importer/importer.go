@@ -880,8 +880,8 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	// import failing outright, which ensureWritableDir(destDir) above
 	// already prevents regardless of whether this succeeds.
 	if parent := filepath.Dir(destDir); parent != destDir {
-		if err := os.Chmod(parent, 0o775); err != nil {
-			slog.Warn("importer: failed to make category directory group-writable, continuing anyway", "dir", parent, "error", err)
+		if err := os.Chmod(parent, 0o777); err != nil {
+			slog.Warn("importer: failed to make category directory world-writable, continuing anyway", "dir", parent, "error", err)
 		}
 	}
 
@@ -1035,12 +1035,12 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 }
 
 // ensureWritableDir creates dir (and any missing parents) then makes sure
-// it — even if it already existed — ends up group-writable (0775), not
+// it — even if it already existed — ends up world-writable (0777), not
 // just requesting that mode from MkdirAll: the process's own umask
-// (typically 022, systemd's default) silently strips the group-write bit
-// at creation time regardless of the mode requested, the same as a plain
+// (typically 022, systemd's default) silently strips the write bits at
+// creation time regardless of the mode requested, the same as a plain
 // `mkdir` would — an explicit Chmod afterward is the only way to guarantee
-// it actually survives. Unconditional, not just for a directory this call
+// they actually survive. Unconditional, not just for a directory this call
 // happens to create fresh, so one left over from before this fix existed
 // gets corrected retroactively too, the next time anything is fetched
 // into it.
@@ -1050,29 +1050,40 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 // file out of wherever this wrote it, which requires write access on
 // whichever directory directly contains it — not just read access to the
 // file itself. AcerviNode's own process (a dedicated systemd user, not
-// root, and not necessarily the same user/group Radarr/Sonarr run as —
-// e.g. a separate Docker container with its own PUID/PGID) previously
-// created these directories as 0755, writable only by that one user.
-// Radarr's real SABnzbd import path always attempts a genuine move
-// (confirmed against its source: CanMoveFiles is unconditionally true for
-// every SABnzbd history item, unlike torrents — see below), so this broke
-// every NZB-sourced Managed import outright with "Access ... is denied."
-// Its qBittorrent import path only silently avoided the very same wall:
-// Radarr only allows a move/hardlink there when the torrent is reported as
-// paused after reaching its own configured seed limit, a state AcerviNode
-// never reports (it has no real local seeding concept at all — TorBox
-// handles that server-side) — so Radarr always fell back to copy-only for
-// a qBittorrent-sourced item, silently doubling disk usage per import
-// rather than erroring. Fixing this permission is what lets Radarr/Sonarr
-// actually move (not just copy) either kind once AcerviNode's own
-// qBittorrent state reporting is also improved to allow it — see
-// docs/providers.md for that follow-up, tracked separately.
+// root) previously created these directories as 0755, writable only by
+// that one user. Radarr's real SABnzbd import path always attempts a
+// genuine move (confirmed against its source: CanMoveFiles is
+// unconditionally true for every SABnzbd history item, unlike torrents —
+// see below), so this broke every NZB-sourced Managed import outright with
+// "Access ... is denied." Its qBittorrent import path only silently
+// avoided the very same wall: Radarr only allows a move/hardlink there
+// when the torrent is reported as paused after reaching its own configured
+// seed limit, a state AcerviNode never reports (it has no real local
+// seeding concept at all — TorBox handles that server-side) — so Radarr
+// always fell back to copy-only for a qBittorrent-sourced item, silently
+// doubling disk usage per import rather than erroring.
+//
+// World-writable, not just group-writable, deliberately: an *arr app
+// almost never runs as the same user/group as AcerviNode's own dedicated
+// systemd user — very commonly a separate Docker container with its own
+// PUID/PGID, or (found live, on a real Proxmox/NAS deployment) AcerviNode
+// itself running under some other ad hoc identity entirely. Matching
+// group/user IDs across genuinely separate deployments (containers, VMs,
+// even LXC UID-namespace remapping) is real, ongoing coordination a user
+// would otherwise have to redo for every fresh install — the standard
+// self-hosted-media-stack answer to this (linuxserver.io's PUID/PGID
+// convention, confirmed live against a real reference client, rdt-client's
+// own Dockerfile/README-DOCKER.md) is to make every container share one
+// identity, which AcerviNode can't ask of apps it doesn't control the
+// packaging of. World-writable download directories are the zero-
+// configuration equivalent, and a narrow one: it only loosens these
+// specific per-download directories, nothing else AcerviNode manages.
 func ensureWritableDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o775); err != nil {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.Chmod(dir, 0o775); err != nil {
-		return fmt.Errorf("make directory group-writable: %w", err)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		return fmt.Errorf("make directory world-writable: %w", err)
 	}
 	return nil
 }

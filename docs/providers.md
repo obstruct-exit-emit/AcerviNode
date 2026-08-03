@@ -140,7 +140,7 @@ provider already has to implement.
 ### Directory permissions
 
 Every directory created under `save_path`/`download_dir` (`ensureWritableDir`)
-is `0775` — group-writable, not just owner-writable — and this is
+is `0777` — world-writable, not just owner-writable — and this is
 deliberately re-applied every time, even to a directory that already
 existed, rather than only at creation. Found live from a real Radarr
 import failure: AcerviNode's own process runs as a dedicated, non-root
@@ -164,10 +164,27 @@ reported as paused after reaching its own configured seed limit — a state
 AcerviNode never reports (it has no real local seeding at all; TorBox
 handles that server-side) — so every qBittorrent-sourced import silently
 fell back to copy-only, which needs only read access, at the cost of
-duplicating the file on disk instead of erroring. See
+duplicating the file on disk instead of erroring.
+
+**World-writable, not group-writable — a deliberate correction made after
+shipping `0775` first.** Group-writable seemed like the more conservative
+choice, but it still requires the user to coordinate matching group
+membership between AcerviNode and every *arr app that needs to write here
+— real friction on a fresh install, and one a live report (a real
+Proxmox/NAS deployment where AcerviNode itself wasn't even running as its
+packaged dedicated user) showed doesn't actually resolve cleanly in every
+real environment (LXC UID-namespace remapping, ad hoc non-systemd
+deployments, etc.). The standard self-hosted-media-stack answer — give
+every container the same PUID/PGID, confirmed live against a real
+reference client's own Docker packaging (rdt-client's
+`ghcr.io/linuxserver/baseimage-alpine` base and its own
+`README-DOCKER.md`) — isn't something AcerviNode can ask of apps it
+doesn't package itself. `0777` is the zero-configuration equivalent, and a
+narrow one: it only loosens these specific per-download directories,
+nothing else AcerviNode manages. See
 [Installation](installation.md#letting-sonarrradarr-move-files-out-of-download_dir)
-for the group-membership step this fix still needs from you to actually
-take effect.
+for the alternative (matching AcerviNode's own systemd `User=`/`Group=` to
+your stack) if `0777` doesn't fit your threat model.
 
 ### Live fetch progress
 

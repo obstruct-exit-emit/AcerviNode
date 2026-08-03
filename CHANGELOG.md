@@ -27,11 +27,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   handles that server-side), so every torrent import fell back to
   copy-only — needing only read access, but silently doubling disk usage
   per import in the process. Fixed: every directory AcerviNode creates for
-  a download is now `0775` (group-writable), and an already-existing
+  a download is now `0777` (world-writable), and an already-existing
   directory from before this fix gets corrected retroactively the next
-  time anything is fetched into it. You'll need to add your *arr app's
-  user (or its container, e.g. `--group-add`) to AcerviNode's group for
-  this to actually take effect — see docs/installation.md.
+  time anything is fetched into it — zero configuration needed on a fresh
+  install. (Shipped as `0775`/group-writable first, requiring the user to
+  add their *arr app's user to AcerviNode's group — corrected to `0777`
+  after a live report showed that coordination doesn't hold up cleanly
+  across every real deployment, e.g. Proxmox/NAS setups with LXC UID-
+  namespace remapping. See docs/installation.md if you'd rather use the
+  group-based approach instead — AcerviNode's own systemd `User=`/`Group=`
+  is a plain override, matching your stack's PUID/PGID the same way
+  linuxserver.io-style containers do.)
 
 - **A brand new category typed into Radarr's SABnzbd download client got
   rejected outright by Radarr's own "Test" step.** Real SABnzbd (and this
