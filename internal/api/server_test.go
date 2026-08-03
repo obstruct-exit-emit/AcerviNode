@@ -1175,6 +1175,45 @@ func TestHandleGetDownload_ExposesCachedAt(t *testing.T) {
 	}
 }
 
+// TestHandleGetDownload_ReportsLiveFetchProgress proves the fix for a real
+// UX gap: a Managed download's reported progress used to freeze at 1.0 the
+// moment the provider itself finished, for however long
+// internal/importer's own local file transfer to disk actually took — see
+// database.DB.SetFetchProgress's own doc comment. A live fetch progress
+// substitutes for d.Progress in the response while provider_completed;
+// falls back to d.Progress once nothing's being tracked (e.g. before the
+// fetch starts, or once ready_for_import).
+func TestHandleGetDownload_ReportsLiveFetchProgress(t *testing.T) {
+	srv, db := newTestServer(t, nil, nil, nil)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+	ctx := context.Background()
+	if err := db.UpdateDownloadStatus(ctx, d.ID, database.StateProviderCompleted, 1.0, d.SizeBytes, nil, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+
+	db.SetFetchProgress(d.ID, 0.35)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	var withFetchProgress downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &withFetchProgress); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if withFetchProgress.Progress != 0.35 {
+		t.Errorf("progress = %v, want 0.35 (live fetch progress substituted in)", withFetchProgress.Progress)
+	}
+
+	db.ClearFetchProgress(d.ID)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads/"+d.ID))
+	var withoutFetchProgress downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &withoutFetchProgress); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if withoutFetchProgress.Progress != 1.0 {
+		t.Errorf("progress = %v, want 1.0 (d.Progress, no fetch progress tracked)", withoutFetchProgress.Progress)
+	}
+}
+
 // TestHandleGetDownload_ExposesHasSource proves has_source reflects whether
 // the row's (never directly exposed) Source is non-empty — what the web UI
 // gates its Re-add button on, since resubmitting requires a stored original

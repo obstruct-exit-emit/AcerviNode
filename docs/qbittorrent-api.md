@@ -57,6 +57,12 @@ refreshes state/progress on every poll, not persisted to the database (it's a
 fast-moving, purely informational value; see `internal/qbittorrent`'s
 `refreshFromProvider`).
 
+`progress` while `state` is `downloading` *and* the local state is
+actually `provider_completed` reports internal/importer's own live local-
+transfer progress (files being fetched to disk), not the provider's own
+download progress — already `1.0` by that point — see
+[Providers](providers.md#live-fetch-progress).
+
 `GET /api/v2/torrents/info` also reports `num_seeds`/`num_leechs`/`dlspeed`
 — real qBittorrent's own field names for swarm visibility — the same fresh,
 never-persisted treatment as `eta`. Found missing live: TorBox reports

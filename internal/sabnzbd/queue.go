@@ -79,7 +79,8 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 	for _, d := range rows {
 		switch d.State {
 		case database.StateQueued, database.StateDownloading, database.StateProviderCompleted:
-			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID], phaseByProviderID[d.ProviderDownloadID]))
+			fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
+			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID], phaseByProviderID[d.ProviderDownloadID], fetchProgress, hasFetchProgress))
 		}
 	}
 	// kbpersec is real SABnzbd's own aggregate-speed field, at the top of
@@ -93,7 +94,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-func toQueueSlot(d *database.Download, etaSeconds int64, phase string) queueSlot {
+func toQueueSlot(d *database.Download, etaSeconds int64, phase string, fetchProgress float64, hasFetchProgress bool) queueSlot {
 	status := "Queued"
 	switch d.State {
 	case database.StateProviderCompleted:
@@ -113,15 +114,22 @@ func toQueueSlot(d *database.Download, etaSeconds int64, phase string) queueSlot
 	case database.StateDownloading:
 		status = sabnzbdPhaseStatus(phase)
 	}
+	// EffectiveProgress substitutes internal/importer's own live local-
+	// transfer progress in for d.Progress (already 1.0 by this point) while
+	// the download is provider_completed ("Moving," above) — see its own
+	// doc comment. Without this, Sonarr/Radarr's Activity view would show
+	// this item frozen at 100% for however long the actual local copy
+	// takes, the exact same gap the qBittorrent shim's Progress field had.
+	progress := database.EffectiveProgress(d, fetchProgress, hasFetchProgress)
 	mb := float64(d.SizeBytes) / 1_000_000
 	return queueSlot{
 		NzoID:      d.ID,
 		Filename:   d.Name,
 		Cat:        d.Category,
 		Status:     status,
-		Percentage: fmt.Sprintf("%.0f", d.Progress*100),
+		Percentage: fmt.Sprintf("%.0f", progress*100),
 		MB:         fmt.Sprintf("%.2f", mb),
-		MBLeft:     fmt.Sprintf("%.2f", mb*(1-d.Progress)),
+		MBLeft:     fmt.Sprintf("%.2f", mb*(1-progress)),
 		TimeLeft:   formatTimeLeft(etaSeconds),
 	}
 }

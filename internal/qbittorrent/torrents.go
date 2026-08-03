@@ -173,7 +173,8 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		if wantCategory != "" && d.Category != wantCategory {
 			continue
 		}
-		items = append(items, toTorrentInfo(d, liveByProviderID[d.ProviderDownloadID]))
+		fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
+		items = append(items, toTorrentInfo(d, liveByProviderID[d.ProviderDownloadID], fetchProgress, hasFetchProgress))
 	}
 
 	writeJSON(w, items)
@@ -369,7 +370,7 @@ type torrentFileInfo struct {
 // save_path either, so GetItems took the "use content_path" branch
 // anyway — using an empty path no completed Managed torrent could ever
 // actually import from.
-func toTorrentInfo(d *database.Download, live liveTorrentInfo) torrentInfo {
+func toTorrentInfo(d *database.Download, live liveTorrentInfo, fetchProgress float64, hasFetchProgress bool) torrentInfo {
 	completionOn := int64(-1)
 	if d.CompletedAt != nil {
 		completionOn = d.CompletedAt.Unix()
@@ -385,8 +386,15 @@ func toTorrentInfo(d *database.Download, live liveTorrentInfo) torrentInfo {
 		SavePath:     savePath,
 		ContentPath:  d.SavePath,
 		Size:         d.SizeBytes,
-		Progress:     d.Progress,
-		State:        qbtState(d.State),
+		// EffectiveProgress substitutes internal/importer's own live local-
+		// transfer progress in for d.Progress (already 1.0 by this point)
+		// while the download is provider_completed — see its own doc
+		// comment. Without this, an *arr app polling this field during
+		// "downloading" (this shim's own reported state for
+		// provider_completed — see qbtState below) would see progress
+		// frozen at 100% for however long the actual local copy takes.
+		Progress: database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
+		State:    qbtState(d.State),
 		Eta:          live.ETASeconds,
 		AddedOn:      d.AddedAt.Unix(),
 		CompletionOn: completionOn,

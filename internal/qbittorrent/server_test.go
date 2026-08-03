@@ -437,7 +437,7 @@ func TestHandleSetShareLimits_TopPrio_SetForceStart_AreAcceptedNoOps(t *testing.
 
 func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 	d := &database.Download{SavePath: "/downloads/tv-sonarr/Some.Release.Name"}
-	info := toTorrentInfo(d, liveTorrentInfo{})
+	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
 
 	if info.ContentPath != "/downloads/tv-sonarr/Some.Release.Name" {
 		t.Errorf("content_path = %q, want the real save path unchanged", info.ContentPath)
@@ -459,7 +459,7 @@ func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 // persists SavePath before marking ready_for_import).
 func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
 	d := &database.Download{SavePath: ""}
-	info := toTorrentInfo(d, liveTorrentInfo{})
+	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
 
 	if info.SavePath != "" || info.ContentPath != "" {
 		t.Errorf("save_path = %q, content_path = %q, want both empty", info.SavePath, info.ContentPath)
@@ -471,7 +471,7 @@ func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
 // live status, found live to be entirely missing before this.
 func TestToTorrentInfo_ReportsSwarmInfo(t *testing.T) {
 	d := &database.Download{}
-	info := toTorrentInfo(d, liveTorrentInfo{Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117})
+	info := toTorrentInfo(d, liveTorrentInfo{Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117}, 0, false)
 
 	if info.NumSeeds != 3 {
 		t.Errorf("num_seeds = %d, want 3", info.NumSeeds)
@@ -481,6 +481,35 @@ func TestToTorrentInfo_ReportsSwarmInfo(t *testing.T) {
 	}
 	if info.DlSpeed != 191117 {
 		t.Errorf("dlspeed = %d, want 191117", info.DlSpeed)
+	}
+}
+
+// TestToTorrentInfo_SubstitutesFetchProgressWhileProviderCompleted proves
+// the fix for a real UX gap: an *arr app's "Fetching" phase (provider_
+// completed reported as "downloading" — see qbtState) previously showed
+// progress frozen at whatever d.Progress last was (usually 1.0, since the
+// provider itself is already done) for however long internal/importer's
+// own local file transfer actually took. EffectiveProgress substitutes a
+// live fetch progress in for that field instead, while every other state
+// keeps reporting d.Progress unchanged.
+func TestToTorrentInfo_SubstitutesFetchProgressWhileProviderCompleted(t *testing.T) {
+	d := &database.Download{State: database.StateProviderCompleted, Progress: 1.0}
+	info := toTorrentInfo(d, liveTorrentInfo{}, 0.42, true)
+	if info.Progress != 0.42 {
+		t.Errorf("Progress = %v, want 0.42 (live fetch progress substituted in)", info.Progress)
+	}
+
+	// No fetch progress currently tracked — falls back to d.Progress unchanged.
+	info = toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+	if info.Progress != 1.0 {
+		t.Errorf("Progress = %v, want 1.0 (d.Progress, no fetch progress tracked yet)", info.Progress)
+	}
+
+	// A different state never substitutes, even with a fetch progress value in hand.
+	downloading := &database.Download{State: database.StateDownloading, Progress: 0.6}
+	info = toTorrentInfo(downloading, liveTorrentInfo{}, 0.9, true)
+	if info.Progress != 0.6 {
+		t.Errorf("Progress = %v, want 0.6 (d.Progress, StateDownloading never substitutes)", info.Progress)
 	}
 }
 

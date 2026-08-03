@@ -60,6 +60,10 @@ type DB struct {
 	// Keyed by database.Download.ID.
 	refreshMu    sync.Mutex
 	refreshState map[string]refreshCacheEntry
+
+	// fetchProgress backs SetFetchProgress/FetchProgress/ClearFetchProgress
+	// — see fetchProgressStore's own doc comment (fetch_progress.go).
+	fetchProgress fetchProgressStore
 }
 
 // refreshCacheEntry is refreshMu/refreshState's value type — see DB's own

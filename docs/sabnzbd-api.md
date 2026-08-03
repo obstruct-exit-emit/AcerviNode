@@ -78,6 +78,12 @@ provider's live ETA for the download — read fresh from the same provider call
 that refreshes state/progress on every poll, not persisted to the database
 (see `internal/sabnzbd`'s `refreshFromProvider`/`formatTimeLeft`).
 
+`percentage`/`mbleft` while `status` is `Moving` (the local state is
+`provider_completed`) report internal/importer's own live local-transfer
+progress (files being fetched to disk), not the provider's own download
+progress — already 100% by that point — see
+[Providers](providers.md#live-fetch-progress).
+
 `mode=queue` also reports a top-level `kbpersec` — real SABnzbd's own
 aggregate download speed, summed across every active download (confirmed
 against SABnzbd's real API docs: there's no per-slot speed field to match

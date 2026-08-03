@@ -137,6 +137,65 @@ This works identically for any future provider, torrent or usenet, with zero
 changes — it only depends on `List`/`Files`/`RequestDownloadLink`, which every
 provider already has to implement.
 
+### Directory permissions
+
+Every directory created under `save_path`/`download_dir` (`ensureWritableDir`)
+is `0775` — group-writable, not just owner-writable — and this is
+deliberately re-applied every time, even to a directory that already
+existed, rather than only at creation. Found live from a real Radarr
+import failure: AcerviNode's own process runs as a dedicated, non-root
+systemd user (see [Installation](installation.md#linux-deployment)), which
+isn't necessarily the same user/group an \*arr app itself runs as — very
+commonly a separate Docker container with its own PUID/PGID. The previous
+`0755` mode meant only AcerviNode's own user could write into (and
+therefore move a file out of) these directories at all.
+
+This broke NZB-sourced imports specifically, not torrents: real SABnzbd's
+own completed-item reporting always tells Sonarr/Radarr it's safe to move
+a file — confirmed against their real source, `Sabnzbd.cs`'s `GetHistory`
+sets `CanMoveFiles = true` unconditionally for every item — so Radarr
+always attempted a genuine move/hardlink, which needs write access on
+whichever directory directly contains the file, not just read access to
+the file itself; that's exactly what `0755` didn't grant a differently-
+privileged Radarr, producing "Access to the path ... is denied." A torrent
+import silently avoided the identical wall instead of hitting it: Radarr's
+qBittorrent client only sets `CanMoveFiles = true` when the torrent is
+reported as paused after reaching its own configured seed limit — a state
+AcerviNode never reports (it has no real local seeding at all; TorBox
+handles that server-side) — so every qBittorrent-sourced import silently
+fell back to copy-only, which needs only read access, at the cost of
+duplicating the file on disk instead of erroring. See
+[Installation](installation.md#letting-sonarrradarr-move-files-out-of-download_dir)
+for the group-membership step this fix still needs from you to actually
+take effect.
+
+### Live fetch progress
+
+A Managed download's progress previously froze the instant the provider
+itself finished (`d.Progress` jumps to `1.0` the moment a row reaches
+`provider_completed`) — including for however long this section's own
+local file transfer to disk then took, which for a large file is real,
+observed time with nothing showing it was still happening at all. Both
+compat shims already reported `provider_completed` as still
+"downloading"/"Moving" for exactly this reason (files aren't actually on
+disk yet), but the *progress value* itself didn't reflect that — it just
+sat at whatever the provider last reported.
+
+`fetchFile` now wraps its file write in a throttled `progressWriter` that
+calls `database.DB.SetFetchProgress` as bytes land on disk (throttled to
+roughly twice a second — frequent enough to feel live against the ~4s poll
+interval both the native API and web UI already use, infrequent enough not
+to contend the tracking map's mutex on every single `io.Copy` buffer
+flush), aggregated across every file in a multi-file release by
+`processDownload`'s own running total. `database.EffectiveProgress`
+substitutes this live value in for `Progress` everywhere a download is
+reported — the native API, the web UI (same field, no frontend changes
+needed), and both compat shims' own progress fields, so Sonarr/Radarr's own
+Activity view reflects real fetch progress too — while every other state
+keeps reporting the persisted `Progress` unchanged. Cleared unconditionally
+once a fetch attempt ends, success or failure, so a stale percentage never
+lingers into a retry attempt or past `ready_for_import`.
+
 ### Proactive status refresh
 
 Both compat shims sync a download's local state against the provider

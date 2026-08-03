@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Every NZB-sourced Managed import failed outright in Radarr/Sonarr** with
+  "Access to the path ... is denied," even though the download showed
+  Completed. Root cause, diagnosed live from a real Radarr log: AcerviNode's
+  own process (a dedicated systemd user, not root, and not necessarily the
+  same user/group an *arr app actually runs as — e.g. a separate Docker
+  container with its own PUID/PGID) created every download directory as
+  `0755` — writable only by that one user. Real SABnzbd's completed-item
+  reporting always tells Radarr/Sonarr it's safe to move a file
+  (`CanMoveFiles` is unconditionally true there, confirmed against their
+  real source), so it always attempted a real move/hardlink out of that
+  directory, which needs *write* access on whichever directory directly
+  contains the file — not just read access to the file itself.
+  **Torrents silently avoided the exact same wall** rather than actually
+  working around it: Radarr only allows a move for a qBittorrent item when
+  it's reported as paused after reaching its own configured seed limit, a
+  state AcerviNode never reports (no real local seeding at all — TorBox
+  handles that server-side), so every torrent import fell back to
+  copy-only — needing only read access, but silently doubling disk usage
+  per import in the process. Fixed: every directory AcerviNode creates for
+  a download is now `0775` (group-writable), and an already-existing
+  directory from before this fix gets corrected retroactively the next
+  time anything is fetched into it. You'll need to add your *arr app's
+  user (or its container, e.g. `--group-add`) to AcerviNode's group for
+  this to actually take effect — see docs/installation.md.
+
 - **A brand new category typed into Radarr's SABnzbd download client got
   rejected outright by Radarr's own "Test" step.** Real SABnzbd (and this
   shim, faithfully) has no API to create a category on the fly — Sonarr/
@@ -35,6 +60,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A Managed download's progress bar now shows real progress while it's
+  being fetched to local disk, instead of freezing at 100%.** Once a
+  provider itself finishes a download, AcerviNode still has to actually
+  copy the file(s) to local disk (Completed Download Handling) before an
+  *arr app can import it — a real, sometimes lengthy step for a large file
+  that previously had no visible progress at all, since the provider's own
+  progress is already 1.0 by that point. `internal/importer` now tracks
+  live bytes-written progress per download (throttled, never persisted —
+  the same "fast-moving, ephemeral" treatment as ETA/speed) and it
+  substitutes in for the reported progress everywhere: the web UI's
+  downloads table and detail view (no frontend changes needed — same
+  field, just a more accurate value during this phase), the native API,
+  and both compat shims' own progress fields — Sonarr/Radarr's Activity
+  view shows real fetch progress too, not just AcerviNode's own UI.
 - **Every well-known \*arr-app default category is now pre-registered with
   both compat shims automatically, on every startup** — closing the
   remaining friction from the category fix above for the common case: a user

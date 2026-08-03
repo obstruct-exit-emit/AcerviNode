@@ -383,6 +383,31 @@ func TestHandleHistory_ReportsBytes(t *testing.T) {
 	}
 }
 
+// TestToQueueSlot_SubstitutesFetchProgressWhileProviderCompleted proves the
+// fix for a real UX gap: mode=queue's percentage/mbleft previously stayed
+// frozen at whatever d.Progress last was (usually 100%/0, since the
+// provider itself is already done) for however long internal/importer's
+// own local file transfer to disk actually took, during the "Moving"
+// status above. EffectiveProgress substitutes a live fetch progress value
+// in instead, matching the same fix applied to the qBittorrent shim.
+func TestToQueueSlot_SubstitutesFetchProgressWhileProviderCompleted(t *testing.T) {
+	d := &database.Download{ID: "dl-1", Name: "Test", State: database.StateProviderCompleted, Progress: 1.0, SizeBytes: 1_000_000}
+
+	slot := toQueueSlot(d, 0, "", 0.25, true)
+	if slot.Percentage != "25" {
+		t.Errorf("Percentage = %q, want 25 (live fetch progress substituted in)", slot.Percentage)
+	}
+	if slot.MBLeft != "0.75" {
+		t.Errorf("MBLeft = %q, want 0.75 (based on the same substituted progress)", slot.MBLeft)
+	}
+
+	// No fetch progress currently tracked — falls back to d.Progress unchanged.
+	slot = toQueueSlot(d, 0, "", 0, false)
+	if slot.Percentage != "100" {
+		t.Errorf("Percentage = %q, want 100 (d.Progress, no fetch progress tracked yet)", slot.Percentage)
+	}
+}
+
 func getQueue(t *testing.T, baseURL string) queueResponse {
 	t.Helper()
 	resp, err := http.Get(baseURL + "/api?mode=queue&apikey=" + testAPIKey)
@@ -610,7 +635,7 @@ func TestToQueueSlot_UsesPhaseSpecificStatus(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			d := &database.Download{ID: "dl-1", Name: "Test", State: c.state}
-			slot := toQueueSlot(d, 0, c.phase)
+			slot := toQueueSlot(d, 0, c.phase, 0, false)
 			if slot.Status != c.want {
 				t.Errorf("status = %q, want %q", slot.Status, c.want)
 			}

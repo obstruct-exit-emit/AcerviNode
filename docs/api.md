@@ -116,6 +116,14 @@ identifier,
 not the provider's — use it for `/downloads/{id}` calls, not `hash` or a
 provider ID.
 
+`progress` reports internal/importer's own live local-transfer progress
+while `state` is `provider_completed` (files being fetched to local disk),
+not the provider's own download progress — which is already `1` by that
+point, since the provider itself is done. Falls back to the persisted
+value once nothing's currently being fetched (e.g. right before a fetch
+starts, or after one fails and is awaiting retry) — see
+[Providers](providers.md#live-fetch-progress).
+
 `cached_at` is set once, the first time this download is observed as
 `provider_completed` — the provider itself is done, regardless of whether
 files have been fetched to local disk yet. Distinct from `completed_at`,

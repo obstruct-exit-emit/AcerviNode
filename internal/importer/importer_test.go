@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1774,6 +1775,141 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 	}
 	if got.RetryCount != 1 {
 		t.Errorf("RetryCount = %d, want 1 (one failed attempt recorded)", got.RetryCount)
+	}
+}
+
+// TestProcessDownload_MakesDestinationDirectoryGroupWritable proves the fix
+// for a real, live-diagnosed bug: Radarr's SABnzbd import path always
+// attempts a genuine move (unlike its qBittorrent path, which only ever
+// copies — see ensureWritableDir's own doc comment for the full story),
+// which failed with "Access ... is denied" against a directory AcerviNode
+// created as 0755 — writable only by its own process user, not whatever
+// user/container Radarr/Sonarr actually runs as. Also proves this corrects
+// a directory that already existed with the old restrictive mode, not just
+// one created fresh by this run — since a real deployment already has
+// directories from before this fix shipped.
+func TestProcessDownload_MakesDestinationDirectoryGroupWritable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("hello"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{cdn: cdn, files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.bin", SizeBytes: 5}}}
+
+	categoryDir := filepath.Join(t.TempDir(), "category")
+	destDir := filepath.Join(categoryDir, "release-folder")
+	// Simulate directories that already existed with the old restrictive
+	// mode, from before this fix.
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("seed MkdirAll() error = %v", err)
+	}
+
+	d := &database.Download{
+		ID: "dl-perm", Provider: "fake", ProviderDownloadID: "provider-perm", Kind: database.KindTorrent,
+		Hash: "permhash", Name: "Permission Test", Category: "tv", SavePath: destDir,
+		State: database.StateProviderCompleted, SizeBytes: 5,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.processDownload(ctx, d); err != nil {
+		t.Fatalf("processDownload() error = %v", err)
+	}
+
+	info, err := os.Stat(destDir)
+	if err != nil {
+		t.Fatalf("Stat(destDir) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o775 {
+		t.Errorf("destDir mode = %o, want 0775 (group-writable, so an *arr app running as a different user can move files out)", got)
+	}
+
+	categoryInfo, err := os.Stat(categoryDir)
+	if err != nil {
+		t.Fatalf("Stat(categoryDir) error = %v", err)
+	}
+	if got := categoryInfo.Mode().Perm(); got != 0o775 {
+		t.Errorf("categoryDir mode = %o, want 0775 (so a now-empty release folder can be removed too)", got)
+	}
+}
+
+// TestProcessDownload_ReportsLiveFetchProgress proves the fix for a real
+// UX gap: a Managed download's reported progress used to freeze at
+// whatever it was the moment the provider itself finished (usually 1.0),
+// for however long this function's own local file transfer actually took
+// — see database.DB.SetFetchProgress's own doc comment. Drives a real
+// transfer through a deliberately paused httptest server so it can sample
+// database.DB.FetchProgress mid-flight, then confirms it's cleared again
+// once the transfer completes.
+func TestProcessDownload_ReportsLiveFetchProgress(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	firstChunkSent := make(chan struct{})
+	releaseRest := make(chan struct{})
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(make([]byte, 10))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		close(firstChunkSent)
+		<-releaseRest
+		w.Write(make([]byte, 10))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{cdn: cdn, files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.bin", SizeBytes: 20}}}
+
+	d := &database.Download{
+		ID: "dl-progress", Provider: "fake", ProviderDownloadID: "provider-progress", Kind: database.KindTorrent,
+		Hash: "progresshash", Name: "Progress Test", Category: "tv", SavePath: t.TempDir(),
+		State: database.StateProviderCompleted, SizeBytes: 20,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+
+	done := make(chan error, 1)
+	go func() { done <- im.processDownload(ctx, d) }()
+
+	<-firstChunkSent
+	// Poll briefly for the progress to actually register — the client
+	// goroutine reading the response body isn't otherwise synchronized
+	// with the server goroutine that just wrote and flushed.
+	deadline := time.Now().Add(2 * time.Second)
+	var progress float64
+	var ok bool
+	for time.Now().Before(deadline) {
+		progress, ok = db.FetchProgress(d.ID)
+		if ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !ok {
+		t.Fatal("FetchProgress() never reported anything while the transfer was in flight")
+	}
+	if progress <= 0 || progress >= 1 {
+		t.Errorf("FetchProgress() = %v, want strictly between 0 and 1 mid-transfer", progress)
+	}
+
+	close(releaseRest)
+	if err := <-done; err != nil {
+		t.Fatalf("processDownload() error = %v", err)
+	}
+
+	if _, ok := db.FetchProgress(d.ID); ok {
+		t.Error("FetchProgress() still tracked after processDownload finished, want cleared")
 	}
 }
 

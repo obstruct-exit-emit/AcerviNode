@@ -95,10 +95,17 @@ const timeFormat = "2006-01-02T15:04:05Z07:00"
 // toDownloadResponse builds the response shape for d. live is d's current
 // database.LiveStatus — deliberately a parameter rather than something this
 // function looks up itself, so it stays a pure, easily-testable mapping;
-// see handleListDownloads/handleGetDownload, the only callers, for where
-// it's actually read from database.DB's own cache. Pass the zero
+// see handleListDownloads/handleGetDownload and the other callers for
+// where it's actually read from database.DB's own cache. Pass the zero
 // database.LiveStatus for a download nothing's polled yet.
-func toDownloadResponse(d *database.Download, live database.LiveStatus) downloadResponse {
+//
+// fetchProgress/hasFetchProgress are database.DB.FetchProgress's own
+// return values — see database.EffectiveProgress, which this delegates to
+// for the reported Progress field: internal/importer's own live local-
+// transfer progress substitutes for d.Progress while a Managed download is
+// in the "Fetching" phase (StateProviderCompleted), instead of a stale
+// 100% sitting there for however long the actual file copy takes.
+func toDownloadResponse(d *database.Download, live database.LiveStatus, fetchProgress float64, hasFetchProgress bool) downloadResponse {
 	var completedAt *string
 	if d.CompletedAt != nil {
 		s := d.CompletedAt.UTC().Format(timeFormat)
@@ -124,7 +131,7 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus) download
 		SavePath:           d.SavePath,
 		SizeBytes:          d.SizeBytes,
 		State:              d.State,
-		Progress:           d.Progress,
+		Progress:           database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
 		AddedAt:            d.AddedAt.UTC().Format(timeFormat),
 		UpdatedAt:          d.UpdatedAt.UTC().Format(timeFormat),
 		CompletedAt:        completedAt,
@@ -174,7 +181,8 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		live, _ := s.db.LiveStatus(d.ID)
-		out = append(out, toDownloadResponse(d, live))
+		fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
+		out = append(out, toDownloadResponse(d, live, fetchProgress, hasFetchProgress))
 	}
 	writeJSON(w, out)
 }
@@ -209,11 +217,12 @@ func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 		fileResp[i] = downloadFileResponse{Path: f.Path, SizeBytes: f.SizeBytes, ProviderFileID: f.ProviderFileID}
 	}
 	live, _ := s.db.LiveStatus(d.ID)
+	fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
 	writeJSON(w, struct {
 		downloadResponse
 		Files      []downloadFileResponse `json:"files"`
 		FilesError string                 `json:"files_error,omitempty"`
-	}{toDownloadResponse(d, live), fileResp, filesError})
+	}{toDownloadResponse(d, live, fetchProgress, hasFetchProgress), fileResp, filesError})
 }
 
 // filesForDownload queries the provider for a download's current file list —
@@ -414,7 +423,8 @@ func (s *Server) handleRetryDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live, _ := s.db.LiveStatus(updated.ID)
-	writeJSON(w, toDownloadResponse(updated, live))
+	fetchProgress, hasFetchProgress := s.db.FetchProgress(updated.ID)
+	writeJSON(w, toDownloadResponse(updated, live, fetchProgress, hasFetchProgress))
 }
 
 // downloadByID resolves the {id} path value, and is the single choke point

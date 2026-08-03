@@ -360,7 +360,8 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live, _ := s.db.LiveStatus(updated.ID)
-	writeJSON(w, toDownloadResponse(updated, live))
+	fetchProgress, hasFetchProgress := s.db.FetchProgress(updated.ID)
+	writeJSON(w, toDownloadResponse(updated, live, fetchProgress, hasFetchProgress))
 }
 
 // deleterForKind returns the deleter for a download's kind, mirroring
@@ -406,7 +407,8 @@ func (s *Server) writeAddResponse(w http.ResponseWriter, d *database.Download, e
 	}
 	w.WriteHeader(status)
 	live, _ := s.db.LiveStatus(d.ID)
-	writeJSON(w, toDownloadResponse(d, live))
+	fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
+	writeJSON(w, toDownloadResponse(d, live, fetchProgress, hasFetchProgress))
 }
 
 // writeProviderError maps a provider Add* failure to an HTTP response —

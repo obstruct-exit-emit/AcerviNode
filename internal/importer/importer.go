@@ -844,6 +844,20 @@ func (im *Importer) resolveDestDir(d *database.Download) string {
 }
 
 func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
+	// Live fetch progress — see database.DB.SetFetchProgress's own doc
+	// comment for why this is a separate concern from d.Progress (already
+	// 1.0 the moment this function starts running: the provider itself
+	// considers the download done the instant it entered
+	// StateProviderCompleted, well before anything about this local
+	// transfer has happened). Cleared unconditionally on every exit path
+	// below — success, a fetch failure destined for retry, or an early
+	// return above that failure — so a stale percentage never lingers into
+	// the next retry attempt or past ready_for_import. Found live: a
+	// 7.9GB movie sat at "Fetching 100%" (the provider's own progress,
+	// frozen) for however long the actual local copy took, with nothing
+	// telling the user or an *arr app it was still doing anything at all.
+	defer im.db.ClearFetchProgress(d.ID)
+
 	p := im.providerForKind(d.Kind)
 	if p == nil {
 		return fmt.Errorf("no provider configured for kind %q", d.Kind)
@@ -856,10 +870,35 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 
 	destDir := im.resolveDestDir(d)
+	if err := ensureWritableDir(destDir); err != nil {
+		return fmt.Errorf("prepare destination directory: %w", err)
+	}
+	// destDir's own parent (the category folder) isn't something
+	// AcerviNode necessarily created itself — best-effort only, not a hard
+	// failure: an *arr app that can't remove the (hopefully now-empty)
+	// release folder afterward is a real but much smaller problem than the
+	// import failing outright, which ensureWritableDir(destDir) above
+	// already prevents regardless of whether this succeeds.
+	if parent := filepath.Dir(destDir); parent != destDir {
+		if err := os.Chmod(parent, 0o775); err != nil {
+			slog.Warn("importer: failed to make category directory group-writable, continuing anyway", "dir", parent, "error", err)
+		}
+	}
+
+	var doneBytes int64
 	for _, f := range files {
-		if err := im.fetchFile(ctx, p, id, f, destDir); err != nil {
+		fileDoneBytes := doneBytes // captured per-iteration, not the loop variable
+		onProgress := func(fileWritten int64) {
+			if d.SizeBytes <= 0 {
+				return // nothing sane to divide by
+			}
+			im.db.SetFetchProgress(d.ID, float64(fileDoneBytes+fileWritten)/float64(d.SizeBytes))
+		}
+		if err := im.fetchFile(ctx, p, id, f, destDir, onProgress); err != nil {
 			return fmt.Errorf("fetch file %q: %w", f.Path, err)
 		}
+		doneBytes += f.SizeBytes
+		onProgress(0) // exact boundary update, not just whatever the throttled in-flight calls last happened to land on
 	}
 
 	// resolveDestDir returning something other than d.SavePath means it fell
@@ -965,11 +1004,89 @@ func (im *Importer) cleanupDownload(ctx context.Context, d *database.Download) {
 	slog.Info("importer: cleaned up old download", "id", d.ID, "name", d.Name, "dest", destDir)
 }
 
+// progressReportInterval throttles how often progressWriter calls
+// onProgress — frequent enough to feel live against the ~4s poll interval
+// the native API/web UI already use, infrequent enough that it doesn't
+// contend SetFetchProgress's mutex on every single Write call from
+// io.Copy's default 32KB buffer (thousands of times a second for a large,
+// fast transfer).
+const progressReportInterval = 500 * time.Millisecond
+
+// progressWriter wraps an io.Writer, invoking onProgress with the running
+// total of bytes written so far — throttled by progressReportInterval. The
+// very first Write always reports immediately (the zero-value lastReport
+// makes time.Since huge), so progress shows up right away rather than
+// waiting out the first interval.
+type progressWriter struct {
+	w          io.Writer
+	written    int64
+	onProgress func(written int64)
+	lastReport time.Time
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if time.Since(p.lastReport) >= progressReportInterval {
+		p.onProgress(p.written)
+		p.lastReport = time.Now()
+	}
+	return n, err
+}
+
+// ensureWritableDir creates dir (and any missing parents) then makes sure
+// it — even if it already existed — ends up group-writable (0775), not
+// just requesting that mode from MkdirAll: the process's own umask
+// (typically 022, systemd's default) silently strips the group-write bit
+// at creation time regardless of the mode requested, the same as a plain
+// `mkdir` would — an explicit Chmod afterward is the only way to guarantee
+// it actually survives. Unconditional, not just for a directory this call
+// happens to create fresh, so one left over from before this fix existed
+// gets corrected retroactively too, the next time anything is fetched
+// into it.
+//
+// This matters because of a real, live-diagnosed asymmetry: an *arr app
+// importing a completed Managed download needs to move or hardlink the
+// file out of wherever this wrote it, which requires write access on
+// whichever directory directly contains it — not just read access to the
+// file itself. AcerviNode's own process (a dedicated systemd user, not
+// root, and not necessarily the same user/group Radarr/Sonarr run as —
+// e.g. a separate Docker container with its own PUID/PGID) previously
+// created these directories as 0755, writable only by that one user.
+// Radarr's real SABnzbd import path always attempts a genuine move
+// (confirmed against its source: CanMoveFiles is unconditionally true for
+// every SABnzbd history item, unlike torrents — see below), so this broke
+// every NZB-sourced Managed import outright with "Access ... is denied."
+// Its qBittorrent import path only silently avoided the very same wall:
+// Radarr only allows a move/hardlink there when the torrent is reported as
+// paused after reaching its own configured seed limit, a state AcerviNode
+// never reports (it has no real local seeding concept at all — TorBox
+// handles that server-side) — so Radarr always fell back to copy-only for
+// a qBittorrent-sourced item, silently doubling disk usage per import
+// rather than erroring. Fixing this permission is what lets Radarr/Sonarr
+// actually move (not just copy) either kind once AcerviNode's own
+// qBittorrent state reporting is also improved to allow it — see
+// docs/providers.md for that follow-up, tracked separately.
+func ensureWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o775); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o775); err != nil {
+		return fmt.Errorf("make directory group-writable: %w", err)
+	}
+	return nil
+}
+
 // fetchFile resolves a real download link and streams it to destDir/f.Path,
 // skipping files already present at the expected size (the idempotency
 // story for this version — a resumed download re-fetches a partial file
-// from scratch rather than range-resuming it).
-func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.ProviderDownloadID, f debrid.DownloadFile, destDir string) error {
+// from scratch rather than range-resuming it). onProgress is called
+// (throttled — see progressWriter) with cumulative bytes written for this
+// file as the transfer proceeds; not called at all for an already-fetched
+// file skipped above — processDownload accounts for that file's full size
+// in its own running total regardless, via its own boundary update after
+// this returns.
+func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.ProviderDownloadID, f debrid.DownloadFile, destDir string, onProgress func(written int64)) error {
 	destPath, err := safeJoin(destDir, f.Path)
 	if err != nil {
 		return err
@@ -979,8 +1096,8 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return nil // already fetched
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
+	if err := ensureWritableDir(filepath.Dir(destPath)); err != nil {
+		return err
 	}
 
 	link, err := p.RequestDownloadLink(ctx, id, f.ProviderFileID)
@@ -1017,7 +1134,8 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	pw := &progressWriter{w: out, onProgress: onProgress}
+	if _, err := io.Copy(pw, resp.Body); err != nil {
 		out.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write file: %w", err)
