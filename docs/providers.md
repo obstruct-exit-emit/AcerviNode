@@ -184,7 +184,10 @@ narrow one: it only loosens these specific per-download directories,
 nothing else AcerviNode manages. See
 [Installation](installation.md#letting-sonarrradarr-move-files-out-of-download_dir)
 for the alternative (matching AcerviNode's own systemd `User=`/`Group=` to
-your stack) if `0777` doesn't fit your threat model.
+your stack) if `0777` doesn't fit your threat model — or just change
+`download_dir_mode` (`internal/importer.SetDirMode`, live, no restart, see
+[Configuration](configuration.md)) to whatever mode you'd rather use;
+`0777` is only the default, not hardcoded.
 
 **The torrent copy-only inefficiency mentioned above is now also fixed** —
 see [qBittorrent API compatibility](qbittorrent-api.md#state-mapping)'s
@@ -361,9 +364,13 @@ does, closing the gap at the source instead of leaning on retry to paper
 over it.
 
 `Importer.runFastPoll` runs `refreshActiveDownloads` on its own goroutine and
-its own ticker (`fastPollInterval`, 3s — deliberately not a config knob, see
-its doc comment), independent of `Run`'s own bulk-tick loop so a slow file
-fetch mid-`Tick` never delays noticing a *different* download's completion.
+its own ticker (`fastPollInterval`, 3s by default — `fast_poll_interval_seconds`,
+live-configurable, no restart, see [Configuration](configuration.md); the
+default was tuned live against a real provider to stay responsive without
+risking a rate limit, but a user with many downloads active at once may
+want to widen it themselves), independent of `Run`'s own bulk-tick loop so
+a slow file fetch mid-`Tick` never delays noticing a *different* download's
+completion.
 Each tick, for every kind, it fetches only the Managed (`arr`) downloads
 currently `queued`/`downloading` (`database.ListActiveManagedDownloads` —
 manual downloads and anything already past those states are never fast-polled,

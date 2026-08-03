@@ -301,6 +301,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		ImportIntervalSeconds: 42, ImportMaxRetries: 9,
 		MaxConcurrentDownloads: 7, ImportFetchTimeoutSeconds: 120,
 		CleanupAfterDays: 14,
+		DownloadDirMode: "0750", FastPollIntervalSeconds: 5,
 		TLSPort:          cfg.TLSPort, // unchanged — no restart needed
 	})
 	if err != nil {
@@ -332,6 +333,12 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if got := imp.CleanupAfterDays(); got != 14 {
 		t.Errorf("importer CleanupAfterDays() = %d, want 14 applied live", got)
 	}
+	if got := imp.DirMode(); got != 0o750 {
+		t.Errorf("importer DirMode() = %o, want 0750 applied live", got)
+	}
+	if got := imp.FastPollInterval(); got != 5*time.Second {
+		t.Errorf("importer FastPollInterval() = %v, want 5s applied live", got)
+	}
 
 	reloaded, err := config.Load(configPath)
 	if err != nil {
@@ -340,7 +347,8 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if reloaded.DownloadDir != newDownloadDir || reloaded.LogLevel != "debug" ||
 		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 ||
 		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 ||
-		reloaded.CleanupAfterDays != 14 {
+		reloaded.CleanupAfterDays != 14 || reloaded.DownloadDirMode != "0750" ||
+		reloaded.FastPollIntervalSeconds != 5 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
 	}
 }
@@ -360,6 +368,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.
 		Port: cfg.Port + 1, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
 		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
 		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
+		DownloadDirMode: cfg.DownloadDirMode, FastPollIntervalSeconds: cfg.FastPollIntervalSeconds,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -409,6 +418,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForTLSChanges(t *testing.T) {
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
 		LogLevel: cfg.LogLevel, ImportIntervalSeconds: cfg.ImportIntervalSeconds, ImportMaxRetries: cfg.ImportMaxRetries,
 		MaxConcurrentDownloads: cfg.MaxConcurrentDownloads, ImportFetchTimeoutSeconds: cfg.ImportFetchTimeoutSeconds,
+		DownloadDirMode: cfg.DownloadDirMode, FastPollIntervalSeconds: cfg.FastPollIntervalSeconds,
 		TLSEnabled: true, TLSPort: cfg.TLSPort,
 	})
 	if err != nil {

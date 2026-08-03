@@ -156,6 +156,8 @@ export function Settings({ apiKey }: Props) {
         max_concurrent_downloads: generalSettings.max_concurrent_downloads,
         import_fetch_timeout_seconds: generalSettings.import_fetch_timeout_seconds,
         cleanup_after_days: generalSettings.cleanup_after_days,
+        download_dir_mode: generalSettings.download_dir_mode,
+        fast_poll_interval_seconds: generalSettings.fast_poll_interval_seconds,
         tls_enabled: generalSettings.tls_enabled,
         tls_port: generalSettings.tls_port,
         // Round-tripped unchanged, same as data_dir — neither has an
@@ -387,6 +389,15 @@ export function Settings({ apiKey }: Props) {
                     />
                   </label>
                   <label>
+                    Fast poll interval (seconds)
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.fast_poll_interval_seconds}
+                      onChange={(e) => setForm({ ...form, fast_poll_interval_seconds: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
                     Import max retries
                     <input
                       type="number"
@@ -424,12 +435,17 @@ export function Settings({ apiKey }: Props) {
                   </label>
                 </div>
                 <p className="settings-help">
-                  Max concurrent downloads bounds how many provider_completed downloads are fetched to disk at once
-                  (previously always strictly one at a time). The fetch timeout covers a single file's whole
-                  transfer, not just connecting — raise it if large files on a slow connection are failing partway
-                  through. Cleanup only ever touches a Managed download once it's reached "ready for import"
-                  (already handed off to Sonarr/Radarr) and stayed there this long — a Manual download is never
-                  auto-deleted. 0 disables cleanup entirely (the default).
+                  The fast poll interval checks each actively downloading Managed download individually, so a
+                  finished download is noticed within a few seconds instead of waiting for the next full import
+                  interval — separate from (and much cheaper than) the import interval above, since it only ever
+                  checks downloads already known to be in progress. The default (3s) was tuned against a real
+                  provider to stay responsive without risking a rate limit; raise it if you routinely have many
+                  downloads active at once. Max concurrent downloads bounds how many provider_completed downloads
+                  are fetched to disk at once (previously always strictly one at a time). The fetch timeout covers a
+                  single file's whole transfer, not just connecting — raise it if large files on a slow connection
+                  are failing partway through. Cleanup only ever touches a Managed download once it's reached "ready
+                  for import" (already handed off to Sonarr/Radarr) and stayed there this long — a Manual download
+                  is never auto-deleted. 0 disables cleanup entirely (the default).
                 </p>
               </Section>
 
@@ -438,6 +454,16 @@ export function Settings({ apiKey }: Props) {
                   <label>
                     Download dir
                     <input type="text" value={form.download_dir} onChange={(e) => setForm({ ...form, download_dir: e.target.value })} />
+                  </label>
+                  <label>
+                    Download directory permissions
+                    <input
+                      type="text"
+                      placeholder="0777"
+                      pattern="[0-7]{3,4}"
+                      value={form.download_dir_mode}
+                      onChange={(e) => setForm({ ...form, download_dir_mode: e.target.value })}
+                    />
                   </label>
                   <label>
                     Log level
@@ -462,11 +488,15 @@ export function Settings({ apiKey }: Props) {
                 </div>
                 <p className="settings-help">
                   Download dir applies immediately (no restart) and is the fallback destination when a Managed
-                  download's *arr app didn't supply its own path. Port needs a restart to take effect — edit it here
-                  to save the new value for next time. Data dir isn't shown here at all — changing it doesn't move
-                  your existing database, so editing it in this form would look like everything vanished after a
-                  restart. Set it via <code>config.yaml</code> or <code>ACERVINODE_DATA_DIR</code> instead, and move
-                  the database file yourself first.
+                  download's *arr app didn't supply its own path. Download directory permissions (octal, e.g.
+                  "0777") control who can move or delete files AcerviNode fetches — world-writable by default, so
+                  Sonarr/Radarr can hardlink or clean up a completed download regardless of what user/container they
+                  run as; tighten this (e.g. "0755") only if AcerviNode's own user already matches the rest of your
+                  stack. Applies immediately, including retroactively to a directory that already exists. Port needs
+                  a restart to take effect — edit it here to save the new value for next time. Data dir isn't shown
+                  here at all — changing it doesn't move your existing database, so editing it in this form would
+                  look like everything vanished after a restart. Set it via <code>config.yaml</code> or{' '}
+                  <code>ACERVINODE_DATA_DIR</code> instead, and move the database file yourself first.
                 </p>
               </Section>
 

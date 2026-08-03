@@ -60,11 +60,12 @@ type Importer struct {
 	httpClient      *http.Client
 
 	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
-	// fetchTimeout/webDownloadProvider/cleanupAfterDays, which SetConfig/
-	// SetCategoryPaths/SetMaxConcurrent/SetFetchTimeout/
-	// SetWebDownloadProvider/SetCleanupAfterDays can change live (see
-	// cmd/acervinode's liveSettings) — everything else on Importer is set
-	// once at construction and never mutated afterward.
+	// fetchTimeout/webDownloadProvider/cleanupAfterDays/dirMode/
+	// fastPollInterval, which SetConfig/SetCategoryPaths/SetMaxConcurrent/
+	// SetFetchTimeout/SetWebDownloadProvider/SetCleanupAfterDays/SetDirMode/
+	// SetFastPollInterval can change live (see cmd/acervinode's
+	// liveSettings) — everything else on Importer is set once at
+	// construction and never mutated afterward.
 	mu                  sync.Mutex
 	downloadDir         string
 	interval            time.Duration // also the backoff base: attempt N waits ~interval*2^N
@@ -74,6 +75,8 @@ type Importer struct {
 	fetchTimeout        time.Duration     // per-file fetch deadline — see fetchFile
 	cleanupAfterDays    int               // 0 disables the retention/cleanup policy — see cleanupOldDownloads
 	webDownloadProvider provider          // nil if no web-download-capable provider is configured — see SetWebDownloadProvider
+	dirMode             os.FileMode       // permission mode every download directory is created with — see ensureWritableDir
+	fastPollInterval    time.Duration     // see fastPollIntervalDefault's own doc comment
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
 	// live SetConfig call can reset the ticker without Run having to poll
@@ -81,6 +84,9 @@ type Importer struct {
 	// consumed the previous change just overwrites it — only the latest
 	// interval matters.
 	intervalChanged chan time.Duration
+	// fastPollIntervalChanged is intervalChanged's exact counterpart for
+	// runFastPoll's own ticker — see SetFastPollInterval.
+	fastPollIntervalChanged chan time.Duration
 
 	// rateLimitMu guards rateLimitState — see refreshKind's cooldown check
 	// and recordRateLimitHit/clearRateLimitHit. Purely in-memory,
@@ -118,25 +124,35 @@ const (
 	rateLimitBackoffMax  = 5 * time.Minute
 )
 
-// fastPollInterval is how often refreshActiveDownloads checks each actively
-// in-flight (queued/downloading) Managed download individually, via a single
-// targeted per-ID Status() call rather than waiting for the next bulk List()
-// tick (im.interval, 10s by default) to notice it. A live, controlled,
-// same-account comparison against rogerfar/rdt-client (a reference debrid
-// download client) found AcerviNode taking ~2x longer to notice an
-// already-cached file was ready via an equivalent auto-fetch path — traced to
-// exactly this: nothing polled more often than the bulk interval, so a
-// download that finished moments after a tick simply waited for the next one.
-// A targeted per-ID lookup is dramatically cheaper against a provider's rate
-// limit than shortening the bulk interval itself would be — confirmed live
-// the hard way (a 2s bulk interval, still listing every download on the
-// account three times over, tripped TorBox's real rate limit immediately) —
-// the same principle a reference implementation (decypharr) applies for its
-// own active-download polling, see docs/providers.md. Deliberately not a live
-// config knob: this only ever touches downloads already known to be actively
-// in flight (typically very few for a personal-use instance), unlike im.interval
-// which governs every kind's full-account listing.
-const fastPollInterval = 3 * time.Second
+// fastPollInterval (im.fastPollInterval) is how often refreshActiveDownloads
+// checks each actively in-flight (queued/downloading) Managed download
+// individually, via a single targeted per-ID Status() call rather than
+// waiting for the next bulk List() tick (im.interval, 10s by default) to
+// notice it. A live, controlled, same-account comparison against
+// rogerfar/rdt-client (a reference debrid download client) found AcerviNode
+// taking ~2x longer to notice an already-cached file was ready via an
+// equivalent auto-fetch path — traced to exactly this: nothing polled more
+// often than the bulk interval, so a download that finished moments after a
+// tick simply waited for the next one. A targeted per-ID lookup is
+// dramatically cheaper against a provider's rate limit than shortening the
+// bulk interval itself would be — confirmed live the hard way (a 2s bulk
+// interval, still listing every download on the account three times over,
+// tripped TorBox's real rate limit immediately) — the same principle a
+// reference implementation (decypharr) applies for its own active-download
+// polling, see docs/providers.md.
+//
+// fastPollIntervalDefault is New's starting value — live-changeable
+// afterward via SetFastPollInterval (see config.Config.FastPollIntervalSeconds),
+// unlike when this was a fixed const: a user with many downloads actively
+// in flight at once might want to widen it themselves to stay further
+// from a rate limit than the default already does, without needing a
+// code change to do it.
+const fastPollIntervalDefault = 3 * time.Second
+
+// ensureWritableDirModeDefault is the fallback dirMode New() starts with —
+// see config.Config.DownloadDirMode's own doc comment for why 0777 is the
+// default.
+const ensureWritableDirModeDefault = os.FileMode(0o777)
 
 // New builds an Importer. Either provider may be nil if that capability
 // isn't configured (see cmd/acervinode's buildProviders) — downloads of that
@@ -158,15 +174,18 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		db:              db,
 		torrentProvider: torrentProvider,
 		usenetProvider:  usenetProvider,
-		downloadDir:     downloadDir,
-		interval:        interval,
-		maxRetries:      maxRetries,
-		categoryPaths:   map[string]string{},
-		maxConcurrent:   1,
-		fetchTimeout:    10 * time.Minute,
-		httpClient:      &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
-		intervalChanged: make(chan time.Duration, 1),
-		rateLimitState:  map[database.Kind]*kindBackoff{},
+		downloadDir:             downloadDir,
+		interval:                interval,
+		maxRetries:              maxRetries,
+		categoryPaths:           map[string]string{},
+		maxConcurrent:           1,
+		fetchTimeout:            10 * time.Minute,
+		dirMode:                 ensureWritableDirModeDefault,
+		fastPollInterval:        fastPollIntervalDefault,
+		httpClient:              &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
+		intervalChanged:         make(chan time.Duration, 1),
+		fastPollIntervalChanged: make(chan time.Duration, 1),
+		rateLimitState:          map[database.Kind]*kindBackoff{},
 	}
 }
 
@@ -300,6 +319,64 @@ func (im *Importer) getFetchTimeout() time.Duration {
 	return im.fetchTimeout
 }
 
+// SetDirMode updates the permission mode every download directory is
+// created with, live — the next directory ensureWritableDir touches (new
+// or already existing) uses the new mode immediately.
+func (im *Importer) SetDirMode(mode os.FileMode) {
+	im.mu.Lock()
+	im.dirMode = mode
+	im.mu.Unlock()
+}
+
+func (im *Importer) getDirMode() os.FileMode {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.dirMode
+}
+
+// DirMode is the exported counterpart of getDirMode, for callers outside
+// this package confirming a SetDirMode call took (see cmd/acervinode's
+// settings tests).
+func (im *Importer) DirMode() os.FileMode {
+	return im.getDirMode()
+}
+
+// SetFastPollInterval updates the fast per-download poll interval live —
+// runFastPoll's ticker is reset to the new value right away rather than
+// waiting out whatever's left of the old one, the same treatment SetConfig
+// already gives im.interval.
+func (im *Importer) SetFastPollInterval(d time.Duration) {
+	im.mu.Lock()
+	changed := d != im.fastPollInterval
+	im.fastPollInterval = d
+	im.mu.Unlock()
+
+	if !changed {
+		return
+	}
+	select {
+	case im.fastPollIntervalChanged <- d:
+	default:
+		select {
+		case <-im.fastPollIntervalChanged:
+		default:
+		}
+		im.fastPollIntervalChanged <- d
+	}
+}
+
+func (im *Importer) getFastPollInterval() time.Duration {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.fastPollInterval
+}
+
+// FastPollInterval is the exported counterpart of getFastPollInterval, for
+// callers outside this package confirming a SetFastPollInterval call took.
+func (im *Importer) FastPollInterval() time.Duration {
+	return im.getFastPollInterval()
+}
+
 // FetchTimeout is the exported counterpart of getFetchTimeout, for callers
 // outside this package confirming a SetFetchTimeout call took.
 func (im *Importer) FetchTimeout() time.Duration {
@@ -367,12 +444,14 @@ func (im *Importer) Run(ctx context.Context) {
 // done — see Run's doc comment for why this is a separate goroutine rather
 // than another case in Run's own select loop.
 func (im *Importer) runFastPoll(ctx context.Context) {
-	ticker := time.NewTicker(fastPollInterval)
+	ticker := time.NewTicker(im.getFastPollInterval())
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case newInterval := <-im.fastPollIntervalChanged:
+			ticker.Reset(newInterval)
 		case <-ticker.C:
 			im.refreshActiveDownloads(ctx)
 		}
@@ -870,18 +949,18 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 
 	destDir := im.resolveDestDir(d)
-	if err := ensureWritableDir(destDir); err != nil {
+	if err := im.ensureWritableDir(destDir); err != nil {
 		return fmt.Errorf("prepare destination directory: %w", err)
 	}
 	// destDir's own parent (the category folder) isn't something
 	// AcerviNode necessarily created itself — best-effort only, not a hard
 	// failure: an *arr app that can't remove the (hopefully now-empty)
 	// release folder afterward is a real but much smaller problem than the
-	// import failing outright, which ensureWritableDir(destDir) above
+	// import failing outright, which im.ensureWritableDir(destDir) above
 	// already prevents regardless of whether this succeeds.
 	if parent := filepath.Dir(destDir); parent != destDir {
-		if err := os.Chmod(parent, 0o777); err != nil {
-			slog.Warn("importer: failed to make category directory world-writable, continuing anyway", "dir", parent, "error", err)
+		if err := os.Chmod(parent, im.getDirMode()); err != nil {
+			slog.Warn("importer: failed to set category directory mode, continuing anyway", "dir", parent, "error", err)
 		}
 	}
 
@@ -1078,12 +1157,18 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 // packaging of. World-writable download directories are the zero-
 // configuration equivalent, and a narrow one: it only loosens these
 // specific per-download directories, nothing else AcerviNode manages.
-func ensureWritableDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+//
+// The actual mode is live-configurable (config.Config.DownloadDirMode, see
+// SetDirMode) — 0777 is only the default, not hardcoded — for a user who'd
+// rather tighten this back down (e.g. AcerviNode's own systemd
+// User=/Group= already matches their *arr stack).
+func (im *Importer) ensureWritableDir(dir string) error {
+	mode := im.getDirMode()
+	if err := os.MkdirAll(dir, mode); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.Chmod(dir, 0o777); err != nil {
-		return fmt.Errorf("make directory world-writable: %w", err)
+	if err := os.Chmod(dir, mode); err != nil {
+		return fmt.Errorf("set directory mode: %w", err)
 	}
 	return nil
 }
@@ -1107,7 +1192,7 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return nil // already fetched
 	}
 
-	if err := ensureWritableDir(filepath.Dir(destPath)); err != nil {
+	if err := im.ensureWritableDir(filepath.Dir(destPath)); err != nil {
 		return err
 	}
 

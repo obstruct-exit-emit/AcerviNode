@@ -68,9 +68,10 @@ func (s *liveSettings) SetRestartTrigger(trigger func()) {
 // UpdateGeneral, which calls its SetConfig to apply download_dir/
 // import_interval_seconds/import_max_retries changes live. Also pushes
 // whatever category path overrides, max_concurrent_downloads,
-// import_fetch_timeout_seconds, and cleanup_after_days config.yaml already
-// had at startup, so a value set through the UI on a previous run is live
-// again immediately, without waiting for another settings call.
+// import_fetch_timeout_seconds, cleanup_after_days, download_dir_mode, and
+// fast_poll_interval_seconds config.yaml already had at startup, so a value
+// set through the UI on a previous run is live again immediately, without
+// waiting for another settings call.
 func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	s.mu.Lock()
 	s.imp = imp
@@ -78,11 +79,24 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	maxConcurrent := s.cfg.MaxConcurrentDownloads
 	fetchTimeout := time.Duration(s.cfg.ImportFetchTimeoutSeconds) * time.Second
 	cleanupAfterDays := s.cfg.CleanupAfterDays
+	// ParseDirMode was already validated by config.Load/Validate before
+	// this could ever be reached — an error here would mean config.yaml was
+	// hand-edited to something invalid after that, or a bug in Validate
+	// itself; falling back to the compiled-in default rather than panicking
+	// keeps a fresh install-adjacent, easily-recoverable failure mode.
+	dirMode, err := config.ParseDirMode(s.cfg.DownloadDirMode)
+	if err != nil {
+		slog.Error("settings: invalid persisted download_dir_mode, falling back to default", "value", s.cfg.DownloadDirMode, "error", err)
+		dirMode = 0o777
+	}
+	fastPollInterval := time.Duration(s.cfg.FastPollIntervalSeconds) * time.Second
 	s.mu.Unlock()
 	imp.SetCategoryPaths(categoryPaths)
 	imp.SetMaxConcurrent(maxConcurrent)
 	imp.SetFetchTimeout(fetchTimeout)
 	imp.SetCleanupAfterDays(cleanupAfterDays)
+	imp.SetDirMode(dirMode)
+	imp.SetFastPollInterval(fastPollInterval)
 }
 
 // SetShimServers wires in the compat shim servers built in buildHandler,
@@ -216,6 +230,8 @@ func (s *liveSettings) General() api.GeneralInfo {
 		MaxConcurrentDownloads:    s.cfg.MaxConcurrentDownloads,
 		ImportFetchTimeoutSeconds: s.cfg.ImportFetchTimeoutSeconds,
 		CleanupAfterDays:          s.cfg.CleanupAfterDays,
+		DownloadDirMode:           s.cfg.DownloadDirMode,
+		FastPollIntervalSeconds:   s.cfg.FastPollIntervalSeconds,
 		TLSEnabled:                s.cfg.TLSEnabled,
 		TLSPort:                   s.cfg.TLSPort,
 		TLSCertFile:               s.cfg.TLSCertFile,
@@ -246,6 +262,8 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.MaxConcurrentDownloads = update.MaxConcurrentDownloads
 	candidate.ImportFetchTimeoutSeconds = update.ImportFetchTimeoutSeconds
 	candidate.CleanupAfterDays = update.CleanupAfterDays
+	candidate.DownloadDirMode = update.DownloadDirMode
+	candidate.FastPollIntervalSeconds = update.FastPollIntervalSeconds
 	candidate.TLSEnabled = update.TLSEnabled
 	candidate.TLSPort = update.TLSPort
 	candidate.TLSCertFile = update.TLSCertFile
@@ -271,6 +289,10 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 		s.imp.SetMaxConcurrent(candidate.MaxConcurrentDownloads)
 		s.imp.SetFetchTimeout(time.Duration(candidate.ImportFetchTimeoutSeconds) * time.Second)
 		s.imp.SetCleanupAfterDays(candidate.CleanupAfterDays)
+		if dirMode, err := config.ParseDirMode(candidate.DownloadDirMode); err == nil {
+			s.imp.SetDirMode(dirMode)
+		}
+		s.imp.SetFastPollInterval(time.Duration(candidate.FastPollIntervalSeconds) * time.Second)
 	}
 
 	return restartRequired, nil

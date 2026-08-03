@@ -231,6 +231,15 @@ export interface GeneralSettings {
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
   cleanup_after_days: number
+  // download_dir_mode is the octal permission string (e.g. "0777") every
+  // download directory gets — see docs/providers.md#directory-permissions
+  // for why the default is world-writable.
+  download_dir_mode: string
+  // fast_poll_interval_seconds is how often an actively in-flight Managed
+  // download is checked individually, independent of
+  // import_interval_seconds's own full-account listing — see
+  // docs/providers.md.
+  fast_poll_interval_seconds: number
   // tls_cert_file/tls_key_file are config/env-only (no editable UI field —
   // same treatment data_dir already gets) but still reported here for
   // transparency, the same way data_dir is.
@@ -261,6 +270,8 @@ export interface GeneralUpdateInput {
   max_concurrent_downloads: number
   import_fetch_timeout_seconds: number
   cleanup_after_days: number
+  download_dir_mode: string
+  fast_poll_interval_seconds: number
   tls_enabled: boolean
   tls_port: number
   tls_cert_file: string

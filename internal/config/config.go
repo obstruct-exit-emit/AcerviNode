@@ -66,6 +66,31 @@ type Config struct {
 	// meaningful "off" value, since every other numeric setting here is
 	// always-on and just tunes how it behaves.
 	CleanupAfterDays int `yaml:"cleanup_after_days"`
+	// DownloadDirMode is the permission mode (octal string, e.g. "0777")
+	// internal/importer creates every download directory with — see its own
+	// ensureWritableDir. Defaults to "0777" (world-writable): an *arr app
+	// almost never runs as the same user/group AcerviNode's own dedicated
+	// systemd user does (very commonly a separate Docker container with its
+	// own PUID/PGID), and its completed-import step needs write access on
+	// whichever directory contains a finished download's files to actually
+	// move or hardlink them out — found live from a real Radarr "Access ...
+	// is denied" bug (see docs/providers.md#directory-permissions).
+	// World-writable is the zero-configuration answer; a user who'd rather
+	// not have that (e.g. AcerviNode's own systemd User=/Group= already
+	// matches their *arr stack) can tighten this back down, e.g. "0755" or
+	// "0775".
+	DownloadDirMode string `yaml:"download_dir_mode"`
+	// FastPollIntervalSeconds controls internal/importer's fast per-download
+	// poll (see its own fastPollInterval doc comment) — how often an
+	// actively in-flight Managed download is checked individually via a
+	// single targeted per-ID provider call, independent of
+	// ImportIntervalSeconds's own full-account listing. Defaults to 3
+	// seconds — confirmed live against a real debrid provider (TorBox) to
+	// be fast enough to stay responsive without tripping its rate limit,
+	// since a targeted per-ID lookup is dramatically cheaper than a bulk
+	// listing; going much lower risks rate-limiting once more than a
+	// handful of downloads are actively in flight at once.
+	FastPollIntervalSeconds int `yaml:"fast_poll_interval_seconds"`
 
 	// CategoryPaths overrides DownloadDir on a per-category basis: a download
 	// in category "movies" mapped to "/mnt/movies" lands directly under that
@@ -120,6 +145,8 @@ func defaults() *Config {
 		MaxConcurrentDownloads:    3,
 		ImportFetchTimeoutSeconds: 600,
 		CleanupAfterDays:          0,
+		DownloadDirMode:           "0777",
+		FastPollIntervalSeconds:   3,
 		CategoryPaths:             map[string]string{},
 		TLSPort:                   8443,
 	}
@@ -212,6 +239,14 @@ func applyEnv(cfg *Config) {
 			cfg.CleanupAfterDays = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_DOWNLOAD_DIR_MODE"); v != "" {
+		cfg.DownloadDirMode = v
+	}
+	if v := os.Getenv("ACERVINODE_FAST_POLL_INTERVAL_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.FastPollIntervalSeconds = n
+		}
+	}
 	if v := os.Getenv("ACERVINODE_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLSEnabled = b
@@ -279,6 +314,12 @@ func (c *Config) Validate() error {
 	if c.CleanupAfterDays < 0 {
 		return fmt.Errorf("cleanup_after_days must not be negative")
 	}
+	if _, err := ParseDirMode(c.DownloadDirMode); err != nil {
+		return fmt.Errorf("invalid download_dir_mode %q: %w", c.DownloadDirMode, err)
+	}
+	if c.FastPollIntervalSeconds < 1 {
+		return fmt.Errorf("fast_poll_interval_seconds must be at least 1")
+	}
 	if c.TLSEnabled {
 		if c.TLSPort < 1 || c.TLSPort > 65535 {
 			return fmt.Errorf("invalid tls_port %d: must be between 1 and 65535", c.TLSPort)
@@ -291,6 +332,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tls_cert_file and tls_key_file must be set together, or not at all")
 	}
 	return nil
+}
+
+// ParseDirMode parses a download_dir_mode string (e.g. "0777", "777",
+// "0755") into a plain Unix directory permission — the standard
+// rwxrwxrwx bits only (0000-0777); setuid/setgid/sticky are out of scope
+// for a plain download directory, so anything above 0777 is rejected
+// rather than silently accepted and misinterpreted.
+func ParseDirMode(s string) (os.FileMode, error) {
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("must be an octal permission string, e.g. \"0777\": %w", err)
+	}
+	if n > 0o777 {
+		return 0, fmt.Errorf("must be between 0000 and 0777")
+	}
+	return os.FileMode(n), nil
 }
 
 // Save writes the full config back to path as YAML (0600 — it contains

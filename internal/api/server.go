@@ -91,6 +91,15 @@ type GeneralInfo struct {
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 	CleanupAfterDays          int    `json:"cleanup_after_days"`
+	// DownloadDirMode is the octal permission string (e.g. "0777") every
+	// download directory internal/importer creates gets — see
+	// config.Config.DownloadDirMode's own doc comment for why the default
+	// is world-writable.
+	DownloadDirMode string `json:"download_dir_mode"`
+	// FastPollIntervalSeconds is internal/importer's own active-download
+	// poll cadence — see config.Config.FastPollIntervalSeconds's own doc
+	// comment.
+	FastPollIntervalSeconds int `json:"fast_poll_interval_seconds"`
 	// TLSEnabled/TLSPort/TLSCertFile/TLSKeyFile mirror config.Config's own
 	// TLS fields exactly — see docs/providers.md's TLS section. Cert/key
 	// file overrides are config/env-only (no editable UI field), the same
@@ -118,6 +127,8 @@ type GeneralUpdate struct {
 	MaxConcurrentDownloads    int    `json:"max_concurrent_downloads"`
 	ImportFetchTimeoutSeconds int    `json:"import_fetch_timeout_seconds"`
 	CleanupAfterDays          int    `json:"cleanup_after_days"`
+	DownloadDirMode           string `json:"download_dir_mode"`
+	FastPollIntervalSeconds   int    `json:"fast_poll_interval_seconds"`
 	TLSEnabled                bool   `json:"tls_enabled"`
 	TLSPort                   int    `json:"tls_port"`
 	TLSCertFile               string `json:"tls_cert_file"`

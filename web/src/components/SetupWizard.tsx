@@ -105,6 +105,8 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
           max_concurrent_downloads: g.max_concurrent_downloads,
           import_fetch_timeout_seconds: g.import_fetch_timeout_seconds,
           cleanup_after_days: g.cleanup_after_days,
+          download_dir_mode: g.download_dir_mode,
+          fast_poll_interval_seconds: g.fast_poll_interval_seconds,
           tls_enabled: true,
           tls_port: g.tls_port,
           tls_cert_file: g.tls_cert_file,

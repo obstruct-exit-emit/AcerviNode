@@ -1518,9 +1518,9 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 
 // TestRun_FastPollRunsIndependentlyOfBulkInterval proves runFastPoll is
 // actually wired into Run(): with the bulk interval set far longer than
-// fastPollInterval, an active Managed download's Status() still gets called
+// fastPollIntervalDefault, an active Managed download's Status() still gets called
 // on its own, faster cadence — the real-world bug this whole mechanism
-// exists to fix (see fastPollInterval's doc comment).
+// exists to fix (see fastPollIntervalDefault's doc comment).
 func TestRun_FastPollRunsIndependentlyOfBulkInterval(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -1535,16 +1535,16 @@ func TestRun_FastPollRunsIndependentlyOfBulkInterval(t *testing.T) {
 	}
 
 	provider := &fakeProvider{}
-	// A bulk interval much longer than fastPollInterval — if runFastPoll
+	// A bulk interval much longer than fastPollIntervalDefault — if runFastPoll
 	// weren't wired in at all, statusCalls would still be 0 well after
-	// fastPollInterval has elapsed.
+	// fastPollIntervalDefault has elapsed.
 	im := New(db, provider, nil, t.TempDir(), time.Hour, 5)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go im.Run(runCtx)
 
-	deadline := time.After(fastPollInterval + 2*time.Second)
+	deadline := time.After(fastPollIntervalDefault + 2*time.Second)
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1554,7 +1554,7 @@ func TestRun_FastPollRunsIndependentlyOfBulkInterval(t *testing.T) {
 				return // fast poll fired — success
 			}
 		case <-deadline:
-			t.Fatalf("Status() was never called within %v of Run() starting — fast poll isn't wired in", fastPollInterval+2*time.Second)
+			t.Fatalf("Status() was never called within %v of Run() starting — fast poll isn't wired in", fastPollIntervalDefault+2*time.Second)
 		}
 	}
 }
@@ -1990,6 +1990,100 @@ func TestSetConfig_ResetsTickerInterval(t *testing.T) {
 			t.Fatal("ticker did not reset to the new (much shorter) interval in time")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// TestSetFastPollInterval_ResetsTicker mirrors
+// TestSetConfig_ResetsTickerInterval exactly, but for runFastPoll's own
+// ticker — proves a live SetFastPollInterval call actually takes effect
+// immediately rather than waiting out whatever's left of the old interval.
+func TestSetFastPollInterval_ResetsTicker(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	active := &database.Download{
+		ID: "dl-fastpoll-reset", Provider: "faketorbox", ProviderDownloadID: "provider-fastpoll-reset",
+		Kind: database.KindTorrent, Name: "Fast Poll Reset Test", State: database.StateDownloading,
+		AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, active); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	provider := &fakeProvider{}
+	// Both the bulk interval and the starting fast-poll interval are long
+	// enough that neither would fire within this test's timeout on their
+	// own — only the SetFastPollInterval reset below should make
+	// statusCalls move.
+	im := New(db, provider, nil, t.TempDir(), time.Hour, 5)
+	im.SetFastPollInterval(time.Hour)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go im.Run(runCtx)
+
+	im.SetFastPollInterval(20 * time.Millisecond)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if provider.statusCalls.Load() > 0 {
+			return // fast poll fired — the reset took effect
+		}
+		select {
+		case <-deadline:
+			t.Fatal("fast-poll ticker did not reset to the new (much shorter) interval in time")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestSetDirMode_AppliesLive proves a directory permission mode change
+// from SetDirMode takes effect on the very next directory
+// ensureWritableDir touches — no restart, no re-fetch of anything already
+// in progress needed.
+func TestSetDirMode_AppliesLive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("hello"))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{cdn: cdn, files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.bin", SizeBytes: 5}}}
+
+	destDir := filepath.Join(t.TempDir(), "release-folder")
+	d := &database.Download{
+		ID: "dl-dirmode", Provider: "fake", ProviderDownloadID: "provider-dirmode", Kind: database.KindTorrent,
+		Hash: "dirmodehash", Name: "Dir Mode Test", Category: "tv", SavePath: destDir,
+		State: database.StateProviderCompleted, SizeBytes: 5,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if got := im.DirMode(); got != 0o777 {
+		t.Fatalf("DirMode() before SetDirMode = %o, want default 0777", got)
+	}
+	im.SetDirMode(0o750)
+	if got := im.DirMode(); got != 0o750 {
+		t.Fatalf("DirMode() after SetDirMode = %o, want 0750", got)
+	}
+
+	if err := im.processDownload(ctx, d); err != nil {
+		t.Fatalf("processDownload() error = %v", err)
+	}
+
+	info, err := os.Stat(destDir)
+	if err != nil {
+		t.Fatalf("Stat(destDir) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Errorf("destDir mode = %o, want 0750 (the live-configured mode, not the 0777 default)", got)
 	}
 }
 

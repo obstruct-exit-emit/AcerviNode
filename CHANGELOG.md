@@ -86,6 +86,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`download_dir_mode` and `fast_poll_interval_seconds` are now real,
+  live-configurable settings** (`config.yaml`/env var/`PUT
+  /api/v1/settings/general`/the web UI's General tab), not fixed
+  behavior. `download_dir_mode` (default `"0777"`, matching the fix above)
+  lets you tighten download directory permissions back down if `0777`
+  doesn't fit your setup — e.g. AcerviNode's own systemd `User=`/`Group=`
+  already matches your *arr stack. `fast_poll_interval_seconds` (default
+  `3`, unchanged from its previous hardcoded value — tuned live against a
+  real provider to stay responsive without risking a rate limit) exposes
+  `internal/importer`'s active-download poll cadence, previously a fixed
+  constant, for a user who wants to widen it themselves (e.g. routinely
+  many downloads active at once). Both apply immediately, no restart
+  needed.
+
 - **A Managed download's progress bar now shows real progress while it's
   being fetched to local disk, instead of freezing at 100%.** Once a
   provider itself finishes a download, AcerviNode still has to actually

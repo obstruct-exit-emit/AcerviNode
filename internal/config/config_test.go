@@ -196,6 +196,96 @@ func TestLoad_InvalidNegativeCleanupAfterDays(t *testing.T) {
 	}
 }
 
+func TestLoad_DownloadDirModeDefaultsToWorldWritable(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DownloadDirMode != "0777" {
+		t.Errorf("DownloadDirMode default = %q, want \"0777\"", cfg.DownloadDirMode)
+	}
+}
+
+func TestLoad_DownloadDirModeEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_DOWNLOAD_DIR_MODE", "0750")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DownloadDirMode != "0750" {
+		t.Errorf("DownloadDirMode = %q, want \"0750\"", cfg.DownloadDirMode)
+	}
+}
+
+func TestLoad_InvalidDownloadDirMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "download_dir_mode: \"not-octal\"\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid download_dir_mode, got nil")
+	}
+}
+
+func TestParseDirMode(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    os.FileMode
+		wantErr bool
+	}{
+		{"0777", 0o777, false},
+		{"777", 0o777, false}, // no leading zero required
+		{"0755", 0o755, false},
+		{"0000", 0, false},
+		{"", 0, true},
+		{"not-octal", 0, true},
+		{"0888", 0, true},  // 8/9 aren't valid octal digits
+		{"01000", 0, true}, // above 0777 — setuid/setgid/sticky out of scope
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseDirMode(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseDirMode(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Errorf("ParseDirMode(%q) = %o, want %o", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_FastPollIntervalDefaultsTo3Seconds(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.FastPollIntervalSeconds != 3 {
+		t.Errorf("FastPollIntervalSeconds default = %d, want 3", cfg.FastPollIntervalSeconds)
+	}
+}
+
+func TestLoad_FastPollIntervalEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_FAST_POLL_INTERVAL_SECONDS", "7")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.FastPollIntervalSeconds != 7 {
+		t.Errorf("FastPollIntervalSeconds = %d, want 7", cfg.FastPollIntervalSeconds)
+	}
+}
+
+func TestLoad_InvalidFastPollInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "fast_poll_interval_seconds: 0\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for fast_poll_interval_seconds < 1, got nil")
+	}
+}
+
 // TestLoad_TLSPortDefaultsTo8443 proves TLSPort gets a real default even
 // though tls_enabled defaults to false — so simply flipping tls_enabled on
 // later (without also having to set tls_port) lands on a sane port instead
