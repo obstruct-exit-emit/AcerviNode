@@ -9,7 +9,7 @@ import {
   type DownloadDetail as DownloadDetailData,
 } from '../api'
 import { forceDownload } from '../fsAccess'
-import { formatBytes, formatDuration, formatRelativeTime, formatSpeed, PHASE_LABELS } from '../format'
+import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
 import { StateBadge } from './StateBadge'
 
 const POLL_INTERVAL_MS = 4000
@@ -149,17 +149,12 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
               <div>
                 <dt>State</dt>
                 <dd>
-                  <StateBadge state={detail.state} addedVia={detail.added_via} />
+                  <StateBadge state={detail.state} addedVia={detail.added_via} phase={detail.phase} />
                 </dd>
               </div>
               <div>
                 <dt>Progress</dt>
-                <dd>
-                  {Math.round(detail.progress * 100)}%
-                  {detail.phase && PHASE_LABELS[detail.phase] && (
-                    <span className="text-muted"> · {PHASE_LABELS[detail.phase]}</span>
-                  )}
-                </dd>
+                <dd>{Math.round(detail.progress * 100)}%</dd>
               </div>
               {/* ETA/speed/swarm info are only meaningful while actually
                   downloading — a queued, completed, or errored download's

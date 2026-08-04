@@ -8,15 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **The downloads table never showed a usenet download's phase**
-  (verifying/repairing/extracting/processing) — only the detail view did.
-  Found live: a real Sonarr-driven usenet download stayed at a plain
-  "Downloading" badge in the table the entire time TorBox was actually
-  processing it, while Radarr's own queue view (via the SABnzbd shim, a
-  separate code path) correctly showed "Processing". The API already
-  returned `phase` to the list endpoint too — `PHASE_LABELS` moved from
-  `DownloadDetail` into `format.ts` and the table's progress cell now shows
-  it the same way the detail view already did.
+- **Neither the downloads table nor the detail view's state badge showed a
+  usenet download's phase** (verifying/repairing/extracting/processing) —
+  only a small, easy-to-miss inline annotation next to the progress percentage
+  did, and the table didn't even have that. Found live, in two stages: a real
+  Sonarr-driven usenet download stayed at a plain "Downloading" badge in the
+  table the entire time TorBox was actually processing it, while Radarr's own
+  queue view (via the SABnzbd shim, a separate code path) correctly showed
+  "Processing" — then, after adding the same inline annotation the detail
+  view already had, a second real download made it obvious the badge itself
+  should say it too, not just a muted aside next to the progress bar.
+  `PHASE_LABELS` moved from `DownloadDetail` into `format.ts`, and
+  `StateBadge` now takes an optional `phase` prop: while `state` is
+  `downloading`, it shows the phase label (e.g. "Processing") instead of a
+  generic "Downloading", with no change to the underlying coarse state
+  machine — `phase` stays a deliberately separate, non-persisted signal (see
+  `debrid.DownloadStatus.Phase`'s own doc comment for why), this only changes
+  what the badge displays. Verified live end to end: watched a real ~25GB
+  usenet download's badge go from "Downloading" to "Processing" the moment
+  TorBox finished the transfer and started post-processing, in both the
+  table and the detail view.
 
 - **A download whose very first observed status was already
   `provider_completed` (TorBox's common instant-cache case) never got a
