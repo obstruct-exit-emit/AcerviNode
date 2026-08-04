@@ -516,9 +516,11 @@ export default function App() {
             Settings
           </button>
         )}
-        <button className="add-download-btn" onClick={() => setAddOpen(true)}>
-          {isAdmin && view === 'managed' ? '+ Add to Managed' : '+ Add to Manual'}
-        </button>
+        {view !== 'settings' && (
+          <button className="add-download-btn" onClick={() => setAddOpen(true)}>
+            {isAdmin && view === 'managed' ? '+ Add to Managed' : '+ Add to Manual'}
+          </button>
+        )}
       </nav>
 
       <main>

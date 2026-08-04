@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Deleting a download while `internal/importer` was still fetching it to
+  disk had no way to interrupt that fetch.** Identified by code inspection
+  while reviewing the Add-to-Managed feature above: the fetch goroutine held
+  its own snapshot of the download row for the whole transfer with no
+  awareness of a concurrent delete, so it could keep writing after the row
+  (and, with `deleteFiles=true`, the local files `RemoveLocalFiles` had just
+  removed) was already gone — recreating exactly what the delete was
+  supposed to clean up. Fixed: a new `Importer.CancelFetch(id)`, tracked via
+  a per-download registry (`Importer.activeFetches`), interrupts the
+  in-flight fetch and blocks until it has genuinely stopped before
+  `handleDeleteDownload` touches anything else. The same registry closes a
+  related hazard as a side effect: a fetch outliving one
+  `import_interval_seconds` tick (a large multi-file torrent) could
+  otherwise get picked up a second time by the next tick, running two
+  concurrent fetches into the same directory. Live-verified: deleted a
+  2.4GB Managed torrent partway through its fetch with `deleteFiles=true` —
+  no orphaned files remained and the row disappeared from the API
+  immediately. See docs/providers.md#canceling-an-in-flight-fetch-on-delete.
+
+- **The nav bar's "+ Add"/"+ Add to Manual" button stayed visible on the
+  Settings tab**, where opening its modal made no sense (there's no download
+  list to add into). Now hidden whenever the Settings tab is active.
+
 - **The nav bar's "+ Add" button relabeled "+ Add to Manual"** (and its
   modal's heading to match) — it's always visible regardless of which tab
   is active and always creates a Manual download, never a Managed one

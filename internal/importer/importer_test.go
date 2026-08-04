@@ -1857,6 +1857,159 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 	}
 }
 
+// TestCancelFetch_StopsInFlightFetch proves CancelFetch actually interrupts
+// a currently-running processDownload and blocks until it has genuinely
+// stopped — see handleDeleteDownload in internal/api, the only real caller.
+// SetFetchTimeout is deliberately set to a full minute here, far longer than
+// this test's own timeout budget below: if Tick() returns quickly anyway,
+// it can only be because CancelFetch actually did something, not because
+// the ordinary fetch timeout happened to fire first.
+func TestCancelFetch_StopsInFlightFetch(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	started := make(chan struct{})
+	blockForever := make(chan struct{})
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-blockForever // never responds — only CancelFetch should end this
+	}))
+	// Cleanups run LIFO: unblock the handler (registered second, so it runs
+	// first) before cdn.Close (registered first, runs last) waits for that
+	// same handler goroutine to return — otherwise Close blocks forever.
+	t.Cleanup(cdn.Close)
+	t.Cleanup(func() { close(blockForever) })
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: 5}},
+	}
+
+	d := &database.Download{
+		ID: "dl-cancel", Provider: "fake", ProviderDownloadID: "provider-cancel", Kind: database.KindTorrent,
+		Hash: "cancelhash", Name: "Cancel Me", Category: "tv", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFetchTimeout(time.Minute)
+
+	tickDone := make(chan error, 1)
+	go func() { tickDone <- im.Tick(ctx) }()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetch never started")
+	}
+
+	im.CancelFetch(d.ID)
+
+	select {
+	case err := <-tickDone:
+		if err != nil {
+			t.Fatalf("Tick() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Tick() didn't return after CancelFetch — the in-flight fetch wasn't actually interrupted")
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateProviderCompleted {
+		t.Errorf("state = %q, want still provider_completed (cancelled, scheduled for retry like any other fetch failure)", got.State)
+	}
+	if got.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1 (the cancellation counted as one failed attempt)", got.RetryCount)
+	}
+}
+
+// TestCancelFetch_NoOpWhenNothingActive proves calling CancelFetch for a
+// download that isn't currently being fetched (the common case — most
+// deletes don't race an in-flight fetch) returns immediately rather than
+// blocking or panicking.
+func TestCancelFetch_NoOpWhenNothingActive(t *testing.T) {
+	db := openTestDB(t)
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+
+	done := make(chan struct{})
+	go func() {
+		im.CancelFetch("no-such-download")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CancelFetch blocked on a download that was never being fetched")
+	}
+}
+
+// TestProcessDownload_SkipsIfAlreadyActivelyFetching proves the same
+// activeFetches tracking also guards against a latent, separate hazard: a
+// fetch that outlives a single Tick (a large multi-file torrent taking
+// longer than import_interval_seconds) would otherwise still be sat in
+// StateProviderCompleted with no next_retry_at set when the *next* Tick's
+// own ListDownloadsDueForRetry runs — handing the same download to a second,
+// fully concurrent processDownload goroutine writing into the same
+// destination directory. A second concurrent call for the same id must
+// return immediately (nil, not an error — this isn't a failure, just
+// nothing to do) rather than actually fetching a second time.
+func TestProcessDownload_SkipsIfAlreadyActivelyFetching(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	started := make(chan struct{})
+	blockForever := make(chan struct{})
+	var callCount atomic.Int32
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		close(started)
+		<-blockForever
+	}))
+	t.Cleanup(cdn.Close)
+	t.Cleanup(func() { close(blockForever) })
+
+	provider := &fakeProvider{
+		cdn:   cdn,
+		files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.mkv", SizeBytes: 5}},
+	}
+
+	d := &database.Download{
+		ID: "dl-overlap", Provider: "fake", ProviderDownloadID: "provider-overlap", Kind: database.KindTorrent,
+		Hash: "overlaphash", Name: "Overlap Me", Category: "tv", State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFetchTimeout(time.Minute)
+
+	go im.processDownload(ctx, d)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first fetch never started")
+	}
+
+	// A second, fully concurrent call for the same download — simulating an
+	// overlapping Tick — must return immediately without touching the
+	// provider at all.
+	if err := im.processDownload(ctx, d); err != nil {
+		t.Errorf("processDownload() (second, overlapping call) error = %v, want nil", err)
+	}
+	if n := callCount.Load(); n != 1 {
+		t.Errorf("provider Files/CDN reached %d times, want exactly 1 — the overlapping call should never have touched the provider", n)
+	}
+
+	im.CancelFetch(d.ID) // let the first call's fetch stop, so the CDN server can close cleanly
+}
+
 // TestFetchFile_SucceedsWithSlowButActiveTransfer proves fetchTimeout is an
 // idle/stall deadline, not a total-transfer one: a transfer that's slow
 // overall but never actually stops making progress must succeed even though

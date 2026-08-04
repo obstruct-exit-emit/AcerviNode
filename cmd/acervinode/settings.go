@@ -562,6 +562,20 @@ func (s *liveSettings) DeleteLocalFiles(d *database.Download) error {
 	return imp.RemoveLocalFiles(d)
 }
 
+// CancelFetch interrupts the Importer's in-flight fetch for id, if any —
+// see api.Settings.CancelFetch's own doc comment. A nil imp (tests, or a
+// moment before run() finishes wiring it in) is a routine no-op, same
+// treatment as DeleteLocalFiles above.
+func (s *liveSettings) CancelFetch(id string) {
+	s.mu.Lock()
+	imp := s.imp
+	s.mu.Unlock()
+	if imp == nil {
+		return
+	}
+	imp.CancelFetch(id)
+}
+
 // AccountStatus reports the configured TorBox account's own plan/usage —
 // see debrid.DynamicTorrentProvider.Account, which this delegates to
 // directly (torrentDyn already holds whichever concrete provider is

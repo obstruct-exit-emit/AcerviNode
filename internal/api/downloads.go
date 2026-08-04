@@ -365,6 +365,20 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Interrupt any in-flight fetch for this download before touching
+	// anything else — internal/importer might be mid-write for it right
+	// now (Completed Download Handling), and without this, its goroutine
+	// has no way to know the row was just deleted: it would keep writing
+	// (recreating whatever DeleteLocalFiles below just removed) and only
+	// notice once its own final status update fails against the
+	// already-gone row, well after the damage is done. Blocks briefly
+	// until the fetch has genuinely stopped, not just been asked to — a
+	// no-op if nothing's actively fetching this download right now. Closes
+	// a theoretically real race identified by code inspection: without it,
+	// deleting a download mid-fetch could leave an orphaned partial file on
+	// disk despite the API/database correctly showing it gone.
+	s.settings.CancelFetch(d.ID)
+
 	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
 	if provider := s.deleterForKind(d.Kind); provider != nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {

@@ -107,6 +107,36 @@ type Importer struct {
 	statsMu          sync.Mutex
 	tickAt           time.Time
 	successfulListAt map[database.Kind]time.Time
+
+	// activeFetchesMu guards activeFetches — one entry per download
+	// currently inside processDownload, keyed by download id. Two jobs:
+	// (1) lets CancelFetch interrupt a specific in-flight fetch and wait
+	// for it to genuinely stop — see handleDeleteDownload in internal/api,
+	// the only caller, added to close a theoretically real race identified
+	// by code inspection: deleting a download while it was still being
+	// fetched could leave an orphaned file on disk, because the fetch
+	// goroutine had no way to know the row it was writing for had just been
+	// deleted and would keep going. (2) doubles as a
+	// guard against processing the same download twice at once — a fetch
+	// that outlives a single Tick (a large multi-file torrent taking
+	// longer than import_interval_seconds) would otherwise still be sat in
+	// StateProviderCompleted with no next_retry_at set when the *next*
+	// Tick's own ListDownloadsDueForRetry runs, and get handed to a second,
+	// fully concurrent processDownload goroutine writing into the same
+	// destination directory — a latent hazard this closes as a side effect
+	// of the same tracking, not a separate mechanism.
+	activeFetchesMu sync.Mutex
+	activeFetches   map[string]*activeFetch
+}
+
+// activeFetch is one entry in Importer.activeFetches — see its own doc
+// comment for why this exists. done is closed (never sent on) the moment
+// processDownload returns, however it returns; CancelFetch waits on it
+// after calling cancel so a caller can be sure the fetch has genuinely
+// stopped, not just been asked to.
+type activeFetch struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
@@ -197,6 +227,7 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		fastPollIntervalChanged: make(chan time.Duration, 1),
 		rateLimitState:          map[database.Kind]*kindBackoff{},
 		successfulListAt:        map[database.Kind]time.Time{},
+		activeFetches:           map[string]*activeFetch{},
 	}
 }
 
@@ -973,7 +1004,64 @@ func (im *Importer) resolveDestDir(d *database.Download) string {
 	return filepath.Join(downloadDir, d.Category, d.Name)
 }
 
+// tryStartFetch registers id as actively fetching and returns the
+// cancellable context processDownload should use for the rest of its work,
+// plus a done func it must call (via defer) exactly once when it returns.
+// ok is false if id is already registered — another goroutine (an
+// overlapping Tick, for a fetch that outlived one import_interval_seconds —
+// see Importer.activeFetches' own doc comment) is already processing this
+// same download; the caller should treat that as "nothing to do this tick",
+// not a failure.
+func (im *Importer) tryStartFetch(ctx context.Context, id string) (fetchCtx context.Context, doneFn func(), ok bool) {
+	im.activeFetchesMu.Lock()
+	defer im.activeFetchesMu.Unlock()
+	if _, exists := im.activeFetches[id]; exists {
+		return nil, nil, false
+	}
+	fetchCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	im.activeFetches[id] = &activeFetch{cancel: cancel, done: done}
+	return fetchCtx, func() {
+		cancel()
+		close(done)
+		im.activeFetchesMu.Lock()
+		delete(im.activeFetches, id)
+		im.activeFetchesMu.Unlock()
+	}, true
+}
+
+// CancelFetch interrupts id's in-flight fetch, if one is currently running,
+// and blocks (up to a generous bound, so a caller — handleDeleteDownload,
+// the only one — never hangs indefinitely on a stuck goroutine) until it has
+// genuinely stopped, not just been asked to. A no-op, returning immediately,
+// if nothing is actively fetching id right now. See Importer.activeFetches'
+// own doc comment for why this exists: without it, deleting a download
+// while it's mid-fetch could leave an orphaned file on disk, since the
+// fetch goroutine had no way to know the row it was writing for had just
+// been deleted and would keep going regardless.
+func (im *Importer) CancelFetch(id string) {
+	im.activeFetchesMu.Lock()
+	fetch, ok := im.activeFetches[id]
+	im.activeFetchesMu.Unlock()
+	if !ok {
+		return
+	}
+	fetch.cancel()
+	select {
+	case <-fetch.done:
+	case <-time.After(10 * time.Second):
+		slog.Warn("importer: timed out waiting for in-flight fetch to stop after cancellation", "id", id)
+	}
+}
+
 func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
+	fetchCtx, doneFetch, ok := im.tryStartFetch(ctx, d.ID)
+	if !ok {
+		return nil // already being fetched by another goroutine this same window — not a failure, nothing to do
+	}
+	defer doneFetch()
+	ctx = fetchCtx
+
 	// Live fetch progress — see database.DB.SetFetchProgress's own doc
 	// comment for why this is a separate concern from d.Progress (already
 	// 1.0 the moment this function starts running: the provider itself

@@ -643,6 +643,34 @@ shared with every other download in it. Best-effort everywhere it's called —
 a failure here logs a warning but never blocks the row itself from being
 deleted, matching how the provider-side delete call is already handled.
 
+### Canceling an in-flight fetch on delete
+
+`Importer.CancelFetch(id string)` interrupts whatever fetch `processDownload`
+is doing for `id` right now, if anything, and blocks until it has genuinely
+stopped — not just been asked to — before returning. `handleDeleteDownload`
+calls it unconditionally, as the very first thing it does, before touching the
+provider, local files, or the database row. Without this, deleting a download
+that `internal/importer` was still mid-write for had no way to interrupt that
+goroutine: it kept writing (potentially recreating whatever
+[local file deletion](#local-file-deletion) above had just removed) and only
+noticed the row was gone once its own final status update failed against an
+already-deleted row — well after the fact. Live-verified: deleting a
+multi-gigabyte Managed torrent partway through its fetch, with
+`deleteFiles=true`, now leaves nothing behind on disk and the row disappears
+from the API immediately, instead of racing an in-flight write.
+
+Tracked via `Importer.activeFetches`, a map of download id to a
+`context.CancelFunc` + a `done` channel, registered by `processDownload` itself
+right before it starts fetching and cleared via `defer` when it returns. This
+doubles as a guard against a second hazard: a fetch that outlives one
+`import_interval_seconds` tick (a large multi-file torrent, same shape as the
+one used for live verification above) would otherwise still be sat in
+`provider_completed` with no `next_retry_at` set when the *next* tick's own
+`ListDownloadsDueForRetry` runs, and get handed to a second, fully concurrent
+`processDownload` goroutine writing into the same destination directory —
+`processDownload` now checks-and-registers atomically at the top and returns
+immediately (not an error) if `id` is already registered.
+
 ### Retention/cleanup policy
 
 Nothing removed a completed download automatically before this — every

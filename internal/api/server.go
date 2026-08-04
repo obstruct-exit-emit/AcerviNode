@@ -292,6 +292,16 @@ type Settings interface {
 	// that knows how to resolve a download's actual destination directory
 	// (download_dir, category overrides, an explicit save_path) live.
 	DeleteLocalFiles(d *database.Download) error
+
+	// CancelFetch interrupts internal/importer's in-flight fetch for id, if
+	// one is currently running, and blocks until it has genuinely stopped
+	// — see handleDeleteDownload, the only caller, called before touching
+	// local files or the provider: without this, a download deleted while
+	// internal/importer was still mid-write for it could leave an orphaned
+	// file on disk, since the fetch goroutine had no way to know the row it
+	// was writing for had just been deleted. A no-op if nothing's actively
+	// fetching id right now.
+	CancelFetch(id string)
 }
 
 // Server is AcerviNode's native API.

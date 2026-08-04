@@ -193,6 +193,7 @@ type fakeSettings struct {
 
 	deleteLocalFilesCalls []string // download IDs passed to DeleteLocalFiles, in order
 	deleteLocalFilesErr   error
+	cancelFetchCalls      []string // download IDs passed to CancelFetch, in order
 }
 
 func (f *fakeSettings) AuthEnabled() bool { return len(f.users) > 0 }
@@ -302,6 +303,10 @@ func (f *fakeSettings) RegenerateCertificate(_ context.Context) error {
 func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
 	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
 	return f.deleteLocalFilesErr
+}
+
+func (f *fakeSettings) CancelFetch(id string) {
+	f.cancelFetchCalls = append(f.cancelFetchCalls, id)
 }
 
 func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
@@ -1904,6 +1909,30 @@ func TestHandleDeleteDownload_DeleteFilesFalseSkipsLocalFileRemoval(t *testing.T
 	}
 	if len(settings.deleteLocalFilesCalls) != 0 {
 		t.Errorf("DeleteLocalFiles calls = %v, want none", settings.deleteLocalFilesCalls)
+	}
+}
+
+// TestHandleDeleteDownload_CancelsInFlightFetch proves a delete always
+// interrupts internal/importer's in-flight fetch for the download first —
+// unconditionally, even when deleteFiles isn't set — before touching
+// anything else. Without this, a fetch goroutine already mid-write for this
+// exact download would have no way to know it was just deleted and would
+// keep writing, potentially recreating whatever local-file cleanup a
+// deleteFiles=true request just performed. See internal/importer's own
+// TestCancelFetch_StopsInFlightFetch for proof CancelFetch itself works;
+// this only proves the handler actually calls it, and calls it first.
+func TestHandleDeleteDownload_CancelsInFlightFetch(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, db := newTestServer(t, &fakeProvider{}, nil, settings)
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if len(settings.cancelFetchCalls) != 1 || settings.cancelFetchCalls[0] != d.ID {
+		t.Errorf("CancelFetch calls = %v, want exactly [%s]", settings.cancelFetchCalls, d.ID)
 	}
 }
 
