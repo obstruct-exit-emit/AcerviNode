@@ -9,19 +9,8 @@ import {
   type DownloadDetail as DownloadDetailData,
 } from '../api'
 import { forceDownload } from '../fsAccess'
-import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
+import { formatBytes, formatDuration, formatRelativeTime, formatSpeed, PHASE_LABELS } from '../format'
 import { StateBadge } from './StateBadge'
-
-// PHASE_LABELS covers internal/debrid/torbox's own usenetPhase values —
-// see debrid.DownloadStatus.Phase — capitalized for display; any value not
-// in this map (or empty) just isn't shown at all, rather than a raw
-// lowercase string leaking into the UI.
-const PHASE_LABELS: Record<string, string> = {
-  verifying: 'Verifying',
-  repairing: 'Repairing',
-  extracting: 'Extracting',
-  processing: 'Processing',
-}
 
 const POLL_INTERVAL_MS = 4000
 

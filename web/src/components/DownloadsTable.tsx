@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { Download } from '../api'
-import { formatBytes, formatDuration, formatRelativeTime, formatSpeed } from '../format'
+import { formatBytes, formatDuration, formatRelativeTime, formatSpeed, PHASE_LABELS } from '../format'
 import { StateBadge } from './StateBadge'
 
 interface Props {
@@ -127,6 +127,13 @@ export function DownloadsTable({
               </div>
               <span className="progress-label">
                 {Math.round(d.progress * 100)}%
+                {/* Usenet-only (see debrid.DownloadStatus.Phase) — without
+                    this the badge above just says "Downloading" the entire
+                    time TorBox is actually verifying/repairing/extracting a
+                    usenet download, same as the detail view already shows. */}
+                {d.phase && PHASE_LABELS[d.phase] && (
+                  <span className="text-muted"> · {PHASE_LABELS[d.phase]}</span>
+                )}
                 {/* Only worth showing while actually moving — a completed,
                     queued, or stalled download's ETA is 0/unknown and would
                     just be noise here (the full breakdown, including why

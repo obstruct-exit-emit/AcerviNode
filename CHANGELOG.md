@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The downloads table never showed a usenet download's phase**
+  (verifying/repairing/extracting/processing) — only the detail view did.
+  Found live: a real Sonarr-driven usenet download stayed at a plain
+  "Downloading" badge in the table the entire time TorBox was actually
+  processing it, while Radarr's own queue view (via the SABnzbd shim, a
+  separate code path) correctly showed "Processing". The API already
+  returned `phase` to the list endpoint too — `PHASE_LABELS` moved from
+  `DownloadDetail` into `format.ts` and the table's progress cell now shows
+  it the same way the detail view already did.
+
 - **A download whose very first observed status was already
   `provider_completed` (TorBox's common instant-cache case) never got a
   `cached_at` timestamp**, showing "Cached —" in the web UI forever despite

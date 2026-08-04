@@ -62,3 +62,17 @@ export const STATE_LABELS: Record<string, string> = {
   ready_for_import: 'Ready',
   error: 'Error',
 }
+
+// PHASE_LABELS covers internal/debrid/torbox's own usenetPhase values — see
+// debrid.DownloadStatus.Phase — capitalized for display; any value not in
+// this map (or empty) just isn't shown at all, rather than a raw lowercase
+// string leaking into the UI. Shared between DownloadDetail and
+// DownloadsTable so both surface the same phase the same way, instead of
+// the table silently staying at a generic "Downloading" badge the entire
+// time TorBox is actually verifying/repairing/extracting a usenet download.
+export const PHASE_LABELS: Record<string, string> = {
+  verifying: 'Verifying',
+  repairing: 'Repairing',
+  extracting: 'Extracting',
+  processing: 'Processing',
+}
