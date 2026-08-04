@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Demoting your own admin account kept full admin access through your
+  already-open browser session, indefinitely.** Found by code inspection
+  while auditing for other bugs: a session's role is cached at login and
+  never re-derived from config on later requests, so `handleSetUserRole`
+  must explicitly revoke an account's existing sessions when its role
+  changes — but it excepted the *caller's own* session token from that
+  revocation, the same way `handleSetUserPassword`/`handleMakeDefaultUser`
+  correctly do (where nothing about the caller's own session actually goes
+  stale). For `handleSetUserRole` specifically, that meant an admin
+  demoting their own non-Default account kept exactly the access the
+  demotion was supposed to remove, contradicting the handler's own comment
+  ("end them so a demoted member can't keep using an admin session it
+  already holds"). Fixed: revokes the target account's sessions
+  unconditionally, including the caller's own if they targeted themselves —
+  the web UI already handles the resulting `401` gracefully (bounces to the
+  login screen within one background poll tick), no frontend change needed.
+  No handler-level test had covered this endpoint at all before now. See
+  docs/providers.md#auth-login-accounts-and-roles.
+
 - **The download detail modal showed nothing but a bare header while
   loading, indistinguishable from a hung/broken modal.** `GET
   /api/v1/downloads/{id}` blocks server-side on a live provider file-list

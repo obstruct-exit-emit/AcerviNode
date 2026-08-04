@@ -1340,6 +1340,30 @@ reads across between the two projects; just consistency within the same
 author's work). Cookie is `acervinode_session`, HttpOnly, `SameSite=Lax`,
 30-day expiry.
 
+**A session's role is cached at login, not re-derived from config on every
+request** (`currentUser` reads `sess.role` straight from the in-memory
+session) — so anything that changes what an account is allowed to do
+(`handleSetUserRole`, `handleRemoveUser`) must explicitly revoke that
+account's existing sessions itself, or they'd keep running under the old,
+now-stale role until they naturally expire. `handleSetUserPassword` and
+`handleMakeDefaultUser` except the *caller's own* session token from that
+revocation on purpose — a password change or being made Default doesn't
+change what the caller's current session is allowed to do, so there's
+nothing stale to fix. `handleSetUserRole` doesn't get to make that
+exception: found by code inspection, it used to except the caller's own
+token the same way, which meant an admin demoting their own (non-Default)
+account kept full admin access through that same already-open session
+indefinitely — exactly the privilege the demotion was supposed to remove.
+Fixed: it revokes all of the target account's sessions unconditionally,
+including the caller's own if they targeted themselves. The web UI's own
+admin session is not exempt from this — it authenticates every call via the
+session cookie, never the raw API key (`activeKey` in `App.tsx` is always
+`''` once signed in) — so a self-demotion through Settings → Security really
+does end the acting admin's own session immediately; the next background
+poll (within `POLL_INTERVAL_MS`) gets a `401`, which `handleUnauthorized`
+already turns into a graceful return to the login screen, no separate
+frontend fix needed.
+
 **Verified live**, not just in tests: a separate scratch instance (own
 `config.yaml`/data dir, never the real one) was taken through the entire
 flow for real — fresh install correctly reported `setup needed: true`,

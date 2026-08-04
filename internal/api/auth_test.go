@@ -423,6 +423,67 @@ func TestHandleSetUserPassword_OtherUserRequiresAdmin(t *testing.T) {
 	}
 }
 
+// TestHandleSetUserRole_RevokesActorsOwnSessionOnSelfDemotion guards against
+// a real bug found by code inspection: a session's role is cached at login
+// and never re-derived from config on later requests (see currentUser).
+// handleSetUserRole used to except the caller's own session token from
+// revocation the same way handleSetUserPassword/handleMakeDefaultUser
+// correctly do — but unlike those two, a role change genuinely invalidates
+// what's cached in an already-open session. Excepting it there let an admin
+// who demoted their own (non-default) account keep full admin access
+// through that same still-open browser session indefinitely, contradicting
+// the handler's own stated intent ("end them so a demoted member can't keep
+// using an admin session it already holds").
+func TestHandleSetUserRole_RevokesActorsOwnSessionOnSelfDemotion(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "alice", Role: RoleAdmin}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	token := srv.sessions.create("alice", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/alice/role", strings.NewReader(`{"role":"member"}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// The exact same session token, reused right after the self-demotion it
+	// just performed, must no longer authenticate at all — not fall back to
+	// member, fully revoked — since its cached role is now stale.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil)
+	req2.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Errorf("status after self-demotion, reusing the same session = %d, want 401 (stale admin session must be revoked)", rec2.Code)
+	}
+}
+
+// TestHandleSetUserRole_RevokesTargetUsersOtherSessions is the ordinary case
+// (an admin demotes a different account) — makes sure the fix above didn't
+// change this already-correct behavior.
+func TestHandleSetUserRole_RevokesTargetUsersOtherSessions(t *testing.T) {
+	settings := &fakeSettings{users: []UserAccount{{Username: "alice", Default: true, Role: RoleAdmin}, {Username: "bob", Role: RoleAdmin}}}
+	srv, _ := newTestServer(t, nil, nil, settings)
+	bobToken := srv.sessions.create("bob", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/bob/role", strings.NewReader(`{"role":"member"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil)
+	req2.AddCookie(&http.Cookie{Name: sessionCookie, Value: bobToken})
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Errorf("status for bob's other session after being demoted = %d, want 401", rec2.Code)
+	}
+}
+
 func TestHandleMakeDefaultUser(t *testing.T) {
 	settings := &fakeSettings{users: []UserAccount{{Username: "alice", Default: true, Role: RoleAdmin}, {Username: "bob", Role: RoleMember}}}
 	srv, _ := newTestServer(t, nil, nil, settings)

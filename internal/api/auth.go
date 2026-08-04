@@ -444,7 +444,7 @@ func (s *Server) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// End the account's other sessions; the browser making the change (which
 	// may be the same account) keeps its own.
-	s.sessions.revokeUser(username, currentToken(r))
+	s.sessions.revokeUser(username, "")
 	slog.Info("api: user password changed", "username", username)
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -457,7 +457,7 @@ func (s *Server) handleMakeDefaultUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.sessions.revokeUser(username, currentToken(r))
+	s.sessions.revokeUser(username, "")
 	slog.Info("api: default user changed", "username", username)
 	writeJSON(w, map[string]any{"users": s.settings.ListUsers()})
 }
@@ -477,9 +477,14 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// The account's sessions were issued under the old role; end them so a
-	// demoted member can't keep using an admin session it already holds.
-	s.sessions.revokeUser(username, currentToken(r))
+	// The account's sessions were issued under the old role; end all of
+	// them, including the caller's own if they targeted their own account —
+	// a session's role is cached at login and never re-derived from config,
+	// so excepting the current token here (as handleSetUserPassword and
+	// handleMakeDefaultUser correctly do, where the cached role doesn't go
+	// stale) would let a demoted admin keep using their already-open
+	// session's stale admin role indefinitely.
+	s.sessions.revokeUser(username, "")
 	slog.Info("api: user role changed", "username", username, "role", req.Role)
 	writeJSON(w, map[string]any{"users": s.settings.ListUsers()})
 }
