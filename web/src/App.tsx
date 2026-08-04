@@ -182,9 +182,25 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return
-    refresh(activeKey)
-    const interval = setInterval(() => refresh(activeKey), POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
+    // A self-rescheduling timeout, not setInterval — see DownloadDetail's
+    // identical fix for why: firing on a fixed cadence regardless of
+    // whether the previous poll finished lets overlapping requests pile up
+    // the moment anything in the chain is briefly slow, instead of the poll
+    // just running late. This one's own calls are normally fast (DB reads
+    // only), but there's no reason to leave the same footgun in place here
+    // too — waiting for refresh() to finish before scheduling the next one
+    // costs nothing in the common case and closes it either way.
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    async function loop() {
+      await refresh(activeKey)
+      if (!cancelled) timer = setTimeout(loop, POLL_INTERVAL_MS)
+    }
+    loop()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [ready, activeKey, refresh])
 
   // Selection is scoped to whichever table is currently visible — switching
@@ -430,6 +446,18 @@ export default function App() {
       let loadedBytes = 0
       setProgressFor(d.id, { loaded: 0, total: totalBytes })
 
+      // A fast connection can deliver a chunk many times a second — updating
+      // React state on every single one flooded the whole app with re-
+      // renders (this component plus the downloads table) for the entire
+      // length of a large download, the actual cause behind reports of the
+      // UI stuttering/lagging while a download was active. Throttled to at
+      // most 5 updates/second; the byte count itself (loadedBytes) still
+      // accumulates every chunk regardless, so nothing is ever lost, and
+      // each file's own loop below still ends with one final, unthrottled
+      // update so the displayed progress is never stale at a file boundary.
+      const PROGRESS_THROTTLE_MS = 200
+      let lastProgressUpdate = 0
+
       const failed: string[] = []
       for (const f of files) {
         try {
@@ -438,8 +466,13 @@ export default function App() {
           if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
           await writeFileToDirectory(folder, f.path, resp, (chunkBytes) => {
             loadedBytes += chunkBytes
-            setProgressFor(d.id, { loaded: loadedBytes, total: totalBytes })
+            const now = Date.now()
+            if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS) {
+              lastProgressUpdate = now
+              setProgressFor(d.id, { loaded: loadedBytes, total: totalBytes })
+            }
           })
+          setProgressFor(d.id, { loaded: loadedBytes, total: totalBytes })
         } catch (err) {
           console.error(`Failed to download ${f.path}`, err)
           failed.push(f.path)

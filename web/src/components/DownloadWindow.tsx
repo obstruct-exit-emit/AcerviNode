@@ -151,6 +151,18 @@ export function DownloadWindow() {
     let filesDone = 0
     const failed: FailedFile[] = []
 
+    // A fast connection can deliver a chunk many times a second — updating
+    // React state (and posting to the main tab) on every single one flooded
+    // both windows with re-renders for the entire length of a large
+    // download, the actual cause behind reports of the UI stuttering/
+    // lagging while a download was active. Throttled to at most 5
+    // updates/second; loaded itself still accumulates every chunk
+    // regardless, so nothing is ever lost, and each file's own loop below
+    // still ends with one final, unthrottled update so the displayed
+    // progress is never stale at a file boundary.
+    const PROGRESS_THROTTLE_MS = 200
+    let lastProgressUpdate = 0
+
     for (const f of batch.files) {
       if (controller.signal.aborted) break
       try {
@@ -160,9 +172,15 @@ export function DownloadWindow() {
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
         await writeFileToDirectory(batch.directoryHandle, f.path, resp, (chunkBytes) => {
           loaded += chunkBytes
-          setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], loaded } } : prev))
-          reportProgress(batch.downloadId, loaded, totalBytes)
+          const now = Date.now()
+          if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS) {
+            lastProgressUpdate = now
+            setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], loaded } } : prev))
+            reportProgress(batch.downloadId, loaded, totalBytes)
+          }
         })
+        setBatches((prev) => (prev[batch.downloadId] ? { ...prev, [batch.downloadId]: { ...prev[batch.downloadId], loaded } } : prev))
+        reportProgress(batch.downloadId, loaded, totalBytes)
       } catch (err) {
         if (controller.signal.aborted) break // deliberate Stop, not a real failure
         const message = err instanceof Error ? err.message : String(err)

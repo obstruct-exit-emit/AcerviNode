@@ -61,11 +61,24 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
       }
     }
 
-    load()
-    const interval = setInterval(load, POLL_INTERVAL_MS)
+    // A self-rescheduling timeout, not setInterval — this endpoint blocks
+    // server-side on a live provider call that can take up to
+    // provider_request_timeout_seconds (30s default) when the provider
+    // itself is slow. setInterval fires on a fixed cadence regardless of
+    // whether the previous call finished, so a single slow poll used to let
+    // several more pile up behind it (each one its own live provider call,
+    // on both the browser and TorBox's own account) instead of just running
+    // late. Waiting for load() to actually finish before scheduling the next
+    // one means a slow poll is at worst late, never compounding.
+    let timer: ReturnType<typeof setTimeout>
+    async function loop() {
+      await load()
+      if (!cancelled) timer = setTimeout(loop, POLL_INTERVAL_MS)
+    }
+    loop()
     return () => {
       cancelled = true
-      clearInterval(interval)
+      clearTimeout(timer)
     }
   }, [apiKey, id])
 

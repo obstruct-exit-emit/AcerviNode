@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **App-wide hanging/stuttering, investigated directly rather than from a
+  specific repro — three compounding causes found and fixed:**
+  - `internal/database` opened SQLite with its own defaults (a rollback
+    journal, `synchronous=FULL`) — a full fsync of the whole database file
+    on every single write. Combined with the single connection every
+    operation already serializes through (`SetMaxOpenConns(1)`, by design —
+    see docs/providers.md), how long any one write took was directly how
+    long *everything else* queued behind it — including the web UI's own
+    list poll — had to wait. Now `journal_mode=WAL` +
+    `synchronous=NORMAL`, which doesn't change the single-connection design
+    at all, just makes each individual write meaningfully faster (measured
+    live: ~0.2ms/write → ~0.06ms/write, single `sqlite3` process, 200
+    writes against a real copy of this project's own database). See
+    docs/providers.md#wal-mode-and-why-every-writes-speed-matters-here-specifically.
+  - The web UI's own list poll and the download detail view's poll both
+    used `setInterval`, which fires on a fixed cadence regardless of
+    whether the previous request finished. The detail view's own endpoint
+    can block for up to `provider_request_timeout_seconds` (30s) when the
+    provider is slow — with `setInterval`, a single slow poll didn't just
+    run late, several more piled up behind it every 4 seconds, each its own
+    live provider call. Both now use a self-rescheduling `setTimeout`
+    instead, so a slow poll is at worst late, never compounding. See
+    docs/providers.md#polling-loops-wait-for-the-previous-request-not-a-fixed-clock-tick.
+  - Every streamed download (both the per-row/detail-view path and the
+    Downloads popup window) updated React state — and, for the popup, also
+    posted a cross-window message — on *every single chunk* received, with
+    no throttling at all. On a fast connection this could fire hundreds of
+    times a second for the whole length of a large download, each one
+    triggering a full re-render (of the downloads table too, for the
+    per-row path). Throttled to at most 5 updates/second, with an
+    unconditional final flush per file so displayed progress is never stale
+    at a file boundary.
+
 - **Demoting your own admin account kept full admin access through your
   already-open browser session, indefinitely.** Found by code inspection
   while auditing for other bugs: a session's role is cached at login and

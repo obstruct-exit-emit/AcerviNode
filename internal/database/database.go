@@ -109,6 +109,34 @@ func Open(dsn string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("enable foreign_keys: %w", err)
 	}
+	// WAL + synchronous=NORMAL instead of SQLite's own defaults (a rollback
+	// journal, synchronous=FULL) — found investigating real "hanging/
+	// stuttering" reports: every write was fsyncing the whole database file
+	// on every single commit, and since SetMaxOpenConns(1) above already
+	// serializes every operation (read or write, from any goroutine) through
+	// this one connection, that fsync latency was directly how long every
+	// *other* pending query — including the web UI's own list poll — had to
+	// wait its turn. Doesn't change the single-connection design at all
+	// (WAL's usual headline benefit, concurrent readers not blocked by a
+	// writer, doesn't even apply here — there's only ever one connection to
+	// begin with); the actual win is that a WAL commit is an append, not a
+	// full-file fsync, so each individual write is faster, which is what
+	// actually shortens everyone else's wait. Measured live, single sqlite3
+	// process, 200 individual-transaction writes against a real copy of this
+	// project's own database: ~0.2ms/write before, ~0.06ms/write after — a
+	// small absolute difference on this dev machine's fast disk, but the
+	// same relative win would matter far more on slower storage, which is
+	// exactly where stuttering would actually become noticeable. A no-op,
+	// not an error, on an in-memory (":memory:") database, e.g. in tests —
+	// SQLite silently keeps "memory" journaling for those, per its own docs.
+	if _, err := sqlDB.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("enable WAL journal mode: %w", err)
+	}
+	if _, err := sqlDB.Exec(`PRAGMA synchronous = NORMAL`); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("set synchronous=NORMAL: %w", err)
+	}
 
 	db := &DB{DB: sqlDB, refreshState: map[string]refreshCacheEntry{}}
 	if err := db.migrate(context.Background()); err != nil {

@@ -416,6 +416,52 @@ restart) recording the `fetchedAt` of the most recently *applied* update.
 A write whose `fetchedAt` is older than what's already recorded is silently
 skipped — the row keeps its fresher value instead of regressing.
 
+### WAL mode, and why every write's speed matters here specifically
+
+`database.DB`'s single connection (`SetMaxOpenConns(1)`, see above) means
+*every* operation against it — a read from the web UI's own list poll
+included, not just the writes discussed above — serializes through that one
+connection, one at a time, regardless of what else is going on. That makes
+how long any single write holds it for directly how long everything else
+queued behind it has to wait — investigated directly off a report of the
+app hanging/stuttering.
+
+SQLite's own defaults are a rollback journal and `synchronous=FULL`, which
+means a full fsync of the whole database file on every single commit.
+`database.Open` now sets `journal_mode=WAL` and `synchronous=NORMAL`
+instead — a WAL commit is an append, not a whole-file fsync, so each
+individual write is meaningfully faster, which is what actually shortens
+everyone else's wait behind the one connection. This doesn't touch the
+single-connection design at all — WAL's usual headline benefit (concurrent
+readers not blocked by a writer) doesn't even apply here, since there's only
+ever one connection to begin with regardless of journal mode; the win is
+purely lower per-write latency. Measured live: 200 individual-transaction
+writes against a real copy of this project's own database, single `sqlite3`
+process to isolate the fsync cost from per-invocation process-spawn
+overhead — roughly 0.2ms/write before, roughly 0.06ms/write after. A silent
+no-op (not an error) on an in-memory (`:memory:`) database, e.g. in tests —
+SQLite keeps "memory" journaling for those regardless, per its own docs.
+
+### Polling loops wait for the previous request, not a fixed clock tick
+
+A second, compounding contributor to the same hanging/stuttering
+investigation: both the web UI's own list poll (`App.tsx`) and the download
+detail view's poll (`DownloadDetail.tsx`) used `setInterval`, which fires on
+a fixed cadence regardless of whether the previous call actually finished.
+`GET /api/v1/downloads/{id}` (what the detail view polls) blocks
+server-side on a live provider call (`handleGetDownload`'s file list) that
+can take up to `provider_request_timeout_seconds` (30s default) when the
+provider itself is slow — the same condition a prior fix already added a
+"Loading…" placeholder for, so the wait itself is visible rather than
+looking hung (see CHANGELOG). With `setInterval`,
+a single 30-second-slow poll didn't just run late — several more fired
+behind it every 4 seconds regardless, each its own live provider call,
+piling up concurrent in-flight requests against both AcerviNode and TorBox
+at exactly the moment either was least able to spare it. Both now use a
+self-rescheduling `setTimeout` instead — the next poll is only ever
+scheduled after the previous one genuinely finishes, so a slow poll is at
+worst late, never compounding.
+
 ### LiveStatus: the same cache, reused for the native API/UI
 
 The ordering guard above needs a per-download entry regardless — extending
