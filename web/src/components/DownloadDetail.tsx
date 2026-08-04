@@ -133,6 +133,14 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
 
         {error && <p className="load-error">Couldn't load this download: {error}</p>}
 
+        {/* The initial GET blocks server-side on a live provider file-list
+            call (see internal/api's handleGetDownload) — normally fast, but
+            it can take up to provider_request_timeout_seconds if the
+            provider itself is slow. Without this, that whole window showed
+            nothing but the bare header, indistinguishable from a hung/broken
+            modal. */}
+        {!detail && !error && <p className="empty">Loading…</p>}
+
         {detail && (
           <>
             <dl className="detail-meta">

@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The download detail modal showed nothing but a bare header while
+  loading, indistinguishable from a hung/broken modal.** `GET
+  /api/v1/downloads/{id}` blocks server-side on a live provider file-list
+  call before responding — normally fast, but it can take up to
+  `provider_request_timeout_seconds` when the provider itself is slow.
+  Noticed live: right after a server restart, TorBox's own `mylist` API was
+  intermittently timing out (confirmed via the log, not a rate limit — no
+  `429`s anywhere), and clicking a download during that window showed an
+  empty box for up to 30 seconds. Fixed: a "Loading…" placeholder now shows
+  while the request is in flight.
+
 - **Deleting a download while `internal/importer` was still fetching it to
   disk had no way to interrupt that fetch.** Identified by code inspection
   while reviewing the Add-to-Managed feature above: the fetch goroutine held
