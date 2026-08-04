@@ -162,16 +162,29 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 	if d.AddedVia == "" {
 		d.AddedVia = AddedViaArr
 	}
+	// CachedAt's own doc comment says it's set "the first time this row is
+	// observed as StateProviderCompleted" — but UpdateDownloadStatus, the
+	// only other place that sets it, only fires on a state *transition*.
+	// A row inserted already in StateProviderCompleted (TorBox's common
+	// instant-cache case: already cached the moment it's added, so the very
+	// first status this row ever has already is "done") never transitions
+	// into that state — it's born there — so without this, cached_at stayed
+	// permanently nil for exactly that case. Found live: a real Manual
+	// download's detail view showed "Cached —" despite sitting at 100%
+	// progress since the moment it was added.
+	if d.State == StateProviderCompleted && d.CachedAt == nil {
+		d.CachedAt = &now
+	}
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO downloads (
 			id, provider, provider_download_id, kind, hash, name, category,
 			save_path, size_bytes, state, progress, added_at, updated_at,
-			completed_at, error_message, source, added_via, source_file, source_file_name
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			completed_at, cached_at, error_message, source, added_via, source_file, source_file_name
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Provider, d.ProviderDownloadID, string(d.Kind), nullable(d.Hash), d.Name,
 		nullable(d.Category), nullable(d.SavePath), d.SizeBytes, d.State, d.Progress,
-		d.AddedAt, d.UpdatedAt, d.CompletedAt, nullable(d.ErrorMessage), nullable(d.Source), string(d.AddedVia),
+		d.AddedAt, d.UpdatedAt, d.CompletedAt, d.CachedAt, nullable(d.ErrorMessage), nullable(d.Source), string(d.AddedVia),
 		nullableBytes(d.SourceFile), nullable(d.SourceFileName),
 	)
 	if err != nil {

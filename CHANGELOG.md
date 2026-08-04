@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A download whose very first observed status was already
+  `provider_completed` (TorBox's common instant-cache case) never got a
+  `cached_at` timestamp**, showing "Cached —" in the web UI forever despite
+  sitting at 100% progress since the moment it was added. Found live via a
+  screenshot of exactly that. `UpdateDownloadStatus` only sets `cached_at`
+  on a state *transition*; a row born already `provider_completed` never
+  transitions into it, so that path never fired. `InsertDownload` now
+  stamps it at insert time too, and a new migration (`0010`) backfills
+  every existing affected row from its `added_at`. See
+  docs/api.md#download-json-shape.
+
 - **App-wide hanging/stuttering, investigated directly rather than from a
   specific repro — three compounding causes found and fixed:**
   - `internal/database` opened SQLite with its own defaults (a rollback

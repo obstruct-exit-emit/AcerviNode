@@ -135,6 +135,19 @@ forever. Omitted (not `null`) until that first observation; cleared by
 `POST .../readd` (a new provider-side download hasn't been observed cached
 yet, whatever the old one's was).
 
+Found live: "first observed as `provider_completed`" has two different
+paths — a row that *transitions* into that state (`UpdateDownloadStatus`
+sets `cached_at` there) and a row that's *born* there (TorBox's common
+instant-cache case: already cached the instant it's added, so its very
+first status ever is already "done" — no transition ever happens).
+`InsertDownload` only started handling the second case recently; every row
+inserted before that fix shipped stayed permanently `cached_at: null` no
+matter how long it sat at `provider_completed`, since nothing ever revisits
+a row whose state/progress/size/error genuinely never change again. A
+one-time migration backfilled every such existing row from its `added_at`
+— the closest true answer available, since a row born already cached was,
+definitionally, cached at or before the moment it was added.
+
 `retry_count` and `next_retry_at` are omitted entirely (not just zero/null) until
 a download has failed at least once — see
 [Providers](providers.md#completed-download-handling-internalimporter) for what sets them.

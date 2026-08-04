@@ -295,6 +295,98 @@ func TestUpdateDownloadStatus_SetsCachedAtOnceOnFirstProviderCompleted(t *testin
 	}
 }
 
+// TestInsertDownload_SetsCachedAtWhenBornProviderCompleted guards a real bug
+// found live: a Manual download whose very first observed status was
+// already StateProviderCompleted (TorBox's common instant-cache case — the
+// content was already cached the moment it was added, so there's no
+// "queued"/"downloading" phase at all) showed "Cached —" in the web UI
+// despite sitting at 100% progress since the moment it was added.
+// UpdateDownloadStatus's own CachedAt logic only fires on a state
+// *transition*, which never happens for a row that's born already in that
+// state rather than moving into it later.
+func TestInsertDownload_SetsCachedAtWhenBornProviderCompleted(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateProviderCompleted
+	d.Progress = 1.0
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.CachedAt == nil {
+		t.Error("got CachedAt=nil for a row inserted already provider_completed, want set")
+	}
+}
+
+// TestInsertDownload_LeavesCachedAtNilForNonCompletedState is the ordinary
+// case (still queued/downloading) — makes sure the fix above didn't start
+// stamping cached_at unconditionally on every insert.
+func TestInsertDownload_LeavesCachedAtNilForNonCompletedState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent) // State: "queued", per newTestDownload
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.CachedAt != nil {
+		t.Errorf("got CachedAt=%v for a row inserted as queued, want nil", got.CachedAt)
+	}
+}
+
+// TestBackfillCachedAtMigration_SQLFixesAStuckRow proves migration 0010's
+// exact statement correctly backfills a row that predates the
+// InsertDownload fix above — one that's sitting in provider_completed with
+// cached_at still NULL, the exact condition 0009's own doc comment wrongly
+// assumed a "future refresh" would always eventually correct. Simulated via
+// a raw INSERT (bypassing InsertDownload, which now prevents new rows from
+// ever reaching this condition) rather than fighting the migration runner's
+// once-only semantics — what's actually being verified is the UPDATE
+// statement's own correctness, not when it happens to run.
+func TestBackfillCachedAtMigration_SQLFixesAStuckRow(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	addedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	id := uuid.NewString()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO downloads (
+			id, provider, provider_download_id, kind, hash, name,
+			size_bytes, state, progress, added_at, updated_at, added_via
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, "torbox", "provider-stuck", "torrent", "abc123", "Stuck Row",
+		1024, StateProviderCompleted, 1.0, addedAt, addedAt, AddedViaManual,
+	)
+	if err != nil {
+		t.Fatalf("seed raw stuck row: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE downloads SET cached_at = added_at WHERE state = 'provider_completed' AND cached_at IS NULL`,
+	); err != nil {
+		t.Fatalf("run backfill: %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.CachedAt == nil || !got.CachedAt.Equal(addedAt) {
+		t.Errorf("CachedAt = %v, want %v (backfilled from added_at)", got.CachedAt, addedAt)
+	}
+}
+
 func TestUpdateDownloadCategory(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
