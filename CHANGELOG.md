@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The nav bar's "+ Add" button relabeled "+ Add to Manual"** (and its
+  modal's heading to match) — it's always visible regardless of which tab
+  is active and always creates a Manual download, never a Managed one
+  (those only ever come from Sonarr/Radarr via the compat shims), which
+  the generic "+ Add" label didn't make clear, especially confusing while
+  looking at the Managed tab.
+
 - **`import_fetch_timeout_seconds` is now an idle/stall deadline, not a
   total-transfer one.** Previously it was a single deadline covering an
   entire file's fetch from start to finish — a large file on a slow

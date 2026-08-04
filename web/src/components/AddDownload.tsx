@@ -87,7 +87,7 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
     <div className="detail-overlay" onClick={onClose}>
       <div className="detail-panel add-download-panel" onClick={(e) => e.stopPropagation()}>
         <div className="detail-header">
-          <h2>Add download</h2>
+          <h2>Add to Manual</h2>
           <button className="detail-close" onClick={onClose} title="Close">
             ✕
           </button>

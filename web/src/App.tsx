@@ -517,7 +517,7 @@ export default function App() {
           </button>
         )}
         <button className="add-download-btn" onClick={() => setAddOpen(true)}>
-          + Add
+          + Add to Manual
         </button>
       </nav>
 
