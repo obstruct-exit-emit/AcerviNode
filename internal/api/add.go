@@ -17,6 +17,29 @@ import (
 	"github.com/acervinode/acervinode/internal/debrid"
 )
 
+// resolveAddedVia determines whether a new download from one of this file's
+// add endpoints should be tracked as Managed (AddedViaArr) or Manual
+// (AddedViaManual, the default) — an admin-only choice, requested via the
+// added_via form field ("arr", or "manual"/omitted for the existing
+// behavior). Rejected outright for a non-admin requesting "arr" rather than
+// silently downgrading to Manual: the web UI never sends this for a member
+// (the option isn't shown at all — see docs/providers.md#roles), so this
+// only ever fires for direct API misuse, and an explicit error is clearer
+// than silently doing something different from what was asked. Once
+// inserted as Managed, a download behaves exactly like one Sonarr/Radarr
+// added — auto-fetched to download_dir/a category override by
+// internal/importer, and admin-only from then on (see downloadByID/
+// handleListDownloads' own added_via scoping).
+func (s *Server) resolveAddedVia(r *http.Request) (database.AddedVia, error) {
+	if r.FormValue("added_via") != string(database.AddedViaArr) {
+		return database.AddedViaManual, nil
+	}
+	if role, _ := s.currentRole(r); role != RoleAdmin {
+		return "", fmt.Errorf("admin access required to add a Managed download")
+	}
+	return database.AddedViaArr, nil
+}
+
 // handleAddTorrent implements POST /api/v1/downloads/torrent — adds a
 // torrent directly (a magnet link or an uploaded .torrent file), without
 // needing to go through an *arr app or fake being one against the
@@ -28,6 +51,11 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	addedVia, err := s.resolveAddedVia(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	ctx := r.Context()
@@ -42,7 +70,6 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		id           debrid.ProviderDownloadID
-		err          error
 		fallbackName string
 		fallbackHash string
 	)
@@ -84,10 +111,11 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		// Source is the magnet itself for a magnet-based add, empty for a
 		// .torrent file upload — see database.Download.Source.
 		Source: magnet,
-		// AddedViaManual: this endpoint is only ever hit directly (the web
-		// UI's own "+ Add" form) — an *arr app has no way to reach it, it
-		// only knows the qBittorrent/SABnzbd shims — see database.AddedVia.
-		AddedVia: database.AddedViaManual,
+		// Manual by default (this endpoint is only ever hit directly — the
+		// web UI's own "+ Add" form, an *arr app has no way to reach it, it
+		// only knows the qBittorrent/SABnzbd shims), but an admin can
+		// explicitly request Managed instead — see resolveAddedVia.
+		AddedVia: addedVia,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash
@@ -112,6 +140,11 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	addedVia, err := s.resolveAddedVia(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	ctx := r.Context()
 	category := r.FormValue("category")
 	nzbURL := strings.TrimSpace(r.FormValue("url"))
@@ -124,7 +157,6 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		id             debrid.ProviderDownloadID
-		err            error
 		fallbackName   string
 		uploadedFile   []byte
 		uploadedFileNm string
@@ -175,10 +207,9 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		Source:         nzbURL,
 		SourceFile:     uploadedFile,
 		SourceFileName: uploadedFileNm,
-		// AddedViaManual: this endpoint is only ever hit directly (the web
-		// UI's own "+ Add" form) — an *arr app has no way to reach it, it
-		// only knows the qBittorrent/SABnzbd shims — see database.AddedVia.
-		AddedVia: database.AddedViaManual,
+		// Manual by default, or Managed if an admin explicitly requested it
+		// — see resolveAddedVia.
+		AddedVia: addedVia,
 	}
 	d, existed, err := s.existingOrInsert(ctx, s.usenetProvider.Name(), string(id), d)
 	if err != nil {
@@ -201,6 +232,11 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	addedVia, err := s.resolveAddedVia(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	ctx := r.Context()
@@ -242,9 +278,11 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		// always resubmit it, unlike torrent/usenet where a file-uploaded
 		// download has no Source to re-add from.
 		Source: link,
-		// AddedViaManual: no *arr-facing shim exists for this kind at all —
-		// see database.KindWebDL.
-		AddedVia: database.AddedViaManual,
+		// Manual by default (no *arr-facing shim exists for this kind at
+		// all — see database.KindWebDL — so this never happens on its own
+		// the way a torrent/usenet Managed download can), or Managed if an
+		// admin explicitly requested it — see resolveAddedVia.
+		AddedVia: addedVia,
 	}
 	d, existed, err := s.existingOrInsert(ctx, s.webDownloadProvider.Name(), string(id), d)
 	if err != nil {

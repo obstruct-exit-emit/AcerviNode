@@ -2204,6 +2204,94 @@ func TestHandleAddTorrent_RequiresAuth(t *testing.T) {
 	}
 }
 
+// TestHandleAddTorrent_AddedViaArr_AdminCreatesManaged proves an admin can
+// explicitly add a Managed download directly (not just via an *arr app
+// through the compat shims) — the download lands with added_via=arr and its
+// requested category, which internal/importer will auto-fetch to
+// download_dir/the category's override the same as if Sonarr/Radarr had
+// added it.
+func TestHandleAddTorrent_AddedViaArr_AdminCreatesManaged(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "999", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet, "category": "tv", "added_via": "arr"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AddedVia != string(database.AddedViaArr) {
+		t.Errorf("added_via = %q, want arr", got.AddedVia)
+	}
+	if got.Category != "tv" {
+		t.Errorf("category = %q, want tv", got.Category)
+	}
+
+	d, err := db.GetDownloadByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if d.AddedVia != database.AddedViaArr {
+		t.Errorf("persisted AddedVia = %q, want arr", d.AddedVia)
+	}
+}
+
+// TestHandleAddTorrent_AddedViaArr_MemberForbidden proves a member can't add
+// a Managed download by asking the API directly, even though the web UI
+// never shows them the option at all — server-side enforcement, not just a
+// hidden UI control, matching how member scoping is enforced everywhere
+// else (see downloadByID/handleListDownloads). Nothing is added at all: the
+// request is rejected before the provider is ever called.
+func TestHandleAddTorrent_AddedViaArr_MemberForbidden(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "999"}
+	srv, _ := newTestServer(t, provider, nil, nil)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet, "added_via": "arr"}, "", "", nil)
+	req.Header.Del("Authorization")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if provider.addedMagnet != "" {
+		t.Error("AddMagnet was called despite the member being forbidden — nothing should reach the provider")
+	}
+}
+
+// TestHandleAddTorrent_AddedViaOmitted_MemberStillAllowed proves the new
+// added_via enforcement doesn't accidentally take away a member's existing
+// ability to add Manual downloads (the one thing they're scoped to) —
+// omitting the field (or sending "manual") stays exactly as unrestricted as
+// before this change.
+func TestHandleAddTorrent_AddedViaOmitted_MemberStillAllowed(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "999", statusErr: errors.New("not indexed yet")}
+	srv, _ := newTestServer(t, provider, nil, nil)
+	token := srv.sessions.create("bob", RoleMember)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	req.Header.Del("Authorization")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AddedVia != string(database.AddedViaManual) {
+		t.Errorf("added_via = %q, want manual", got.AddedVia)
+	}
+}
+
 func TestHandleAddUsenet_URL(t *testing.T) {
 	provider := &fakeProvider{providerName: "torbox", addID: "nzb-1", statusErr: errors.New("not indexed yet")}
 	srv, db := newTestServer(t, nil, provider, nil)
@@ -2328,6 +2416,34 @@ func TestHandleAddUsenet_RequiresAuth(t *testing.T) {
 	}
 }
 
+// TestHandleAddUsenet_AddedViaArr_AdminCreatesManaged confirms
+// resolveAddedVia's wiring reached this handler too, not just torrent's —
+// see TestHandleAddTorrent_AddedViaArr_AdminCreatesManaged/_MemberForbidden
+// for the actual admin/member enforcement tests, which are the same shared
+// function underneath and don't need repeating per kind.
+func TestHandleAddUsenet_AddedViaArr_AdminCreatesManaged(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "nzb-1", statusErr: errors.New("not indexed yet")}
+	srv, _ := newTestServer(t, nil, provider, nil)
+
+	const nzbURL = "https://example.com/release.nzb"
+	req := multipartRequest(t, "/api/v1/downloads/usenet", map[string]string{"url": nzbURL, "category": "tv", "added_via": "arr"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AddedVia != string(database.AddedViaArr) {
+		t.Errorf("added_via = %q, want arr", got.AddedVia)
+	}
+	if got.Category != "tv" {
+		t.Errorf("category = %q, want tv", got.Category)
+	}
+}
+
 // formURLEncodedRequest builds a request handleAddWebDownload can parse via
 // r.ParseForm() — unlike torrent/usenet adds, this endpoint is genuinely
 // link-only (no file-upload variant, matching TorBox's own createwebdownload
@@ -2424,6 +2540,34 @@ func TestHandleAddWebDownload_RequiresAuth(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// TestHandleAddWebDownload_AddedViaArr_AdminCreatesManaged confirms
+// resolveAddedVia's wiring reached this handler too — see
+// TestHandleAddTorrent_AddedViaArr_AdminCreatesManaged/_MemberForbidden for
+// the actual admin/member enforcement tests.
+func TestHandleAddWebDownload_AddedViaArr_AdminCreatesManaged(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "webdl-1", statusErr: errors.New("not indexed yet")}
+	srv, _ := newTestServerWithWebDownload(t, provider, nil)
+
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{
+		"link": "https://mega.nz/folder/abc123", "category": "movies", "added_via": "arr",
+	})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.AddedVia != string(database.AddedViaArr) {
+		t.Errorf("added_via = %q, want arr", got.AddedVia)
+	}
+	if got.Category != "movies" {
+		t.Errorf("category = %q, want movies", got.Category)
 	}
 }
 

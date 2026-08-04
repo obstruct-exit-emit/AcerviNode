@@ -517,7 +517,7 @@ export default function App() {
           </button>
         )}
         <button className="add-download-btn" onClick={() => setAddOpen(true)}>
-          + Add to Manual
+          {isAdmin && view === 'managed' ? '+ Add to Managed' : '+ Add to Manual'}
         </button>
       </nav>
 
@@ -601,10 +601,12 @@ export default function App() {
         <AddDownload
           apiKey={activeKey}
           providers={providers}
+          isAdmin={isAdmin}
+          defaultManaged={isAdmin && view === 'managed'}
           onClose={() => setAddOpen(false)}
-          onAdded={() => {
+          onAdded={(addedManaged) => {
             setAddOpen(false)
-            setView('manual')
+            setView(addedManaged ? 'managed' : 'manual')
             refresh(activeKey)
           }}
         />

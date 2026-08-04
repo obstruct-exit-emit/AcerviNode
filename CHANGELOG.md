@@ -127,6 +127,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **An admin can now add a download straight into the Managed pipeline**,
+  not just Manual — requested directly after relabeling the "+ Add" button
+  made the Manual-only behavior obvious enough to notice as a real gap. The
+  "+ Add" modal gains a Managed/Manual toggle, visible only to admins
+  (members have no Managed access at all, so they never see it — enforced
+  server-side too, not just hidden in the UI: a member requesting it via
+  the API directly gets `403`), defaulting to whichever tab the button was
+  opened from. Picking Managed reveals a category field and, once
+  submitted, the download behaves exactly like a real Sonarr/Radarr add —
+  auto-fetched to `download_dir` (or the category's own override) by
+  `internal/importer`, showing up in the Managed tab from then on. New
+  optional `added_via` field (`"arr"` or `"manual"`, default `"manual"`) on
+  all three add endpoints — see docs/api.md#adding-downloads-directly.
+  Live-verified against the real account: added a real torrent with
+  `added_via=arr` and a category, watched it land in a freshly-created
+  category folder under `download_dir`, and confirmed the file actually
+  wrote to disk.
+
 - **New `provider_request_timeout_seconds` setting, plus two more
   Provider-tab additions.** Three related follow-ups from the same TorBox
   outage that motivated the idle-timeout fix above:

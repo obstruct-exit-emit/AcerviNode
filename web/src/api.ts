@@ -164,14 +164,21 @@ export function reAddDownload(apiKey: string, id: string): Promise<Download> {
   return request(`/api/v1/downloads/${encodeURIComponent(id)}/readd`, apiKey, { method: 'POST' })
 }
 
+// AddedVia mirrors the backend's database.AddedVia — "arr" only takes
+// effect for an admin (see resolveAddedVia in internal/api/add.go); omitted
+// or "manual" keeps the existing default (never auto-fetched, no *arr
+// pipeline involvement).
+export type AddedVia = 'arr' | 'manual'
+
 export function addTorrent(
   apiKey: string,
-  input: { magnet: string; category?: string } | { file: File; category?: string },
+  input: { magnet: string; category?: string; addedVia?: AddedVia } | { file: File; category?: string; addedVia?: AddedVia },
 ): Promise<Download> {
   const form = new FormData()
   if ('magnet' in input) form.set('magnet', input.magnet)
   else form.set('file', input.file)
   if (input.category) form.set('category', input.category)
+  if (input.addedVia) form.set('added_via', input.addedVia)
   // No Content-Type header here on purpose — the browser sets
   // multipart/form-data with the correct boundary itself when the body is a
   // FormData; setting it manually would drop the boundary parameter.
@@ -180,12 +187,13 @@ export function addTorrent(
 
 export function addUsenet(
   apiKey: string,
-  input: { url: string; category?: string } | { file: File; category?: string },
+  input: { url: string; category?: string; addedVia?: AddedVia } | { file: File; category?: string; addedVia?: AddedVia },
 ): Promise<Download> {
   const form = new FormData()
   if ('url' in input) form.set('url', input.url)
   else form.set('file', input.file)
   if (input.category) form.set('category', input.category)
+  if (input.addedVia) form.set('added_via', input.addedVia)
   return request('/api/v1/downloads/usenet', apiKey, { method: 'POST', body: form })
 }
 
@@ -193,10 +201,11 @@ export function addUsenet(
 // ~160 others TorBox's Web Downloads service supports) — link-only, unlike
 // addTorrent/addUsenet: there's no file-upload variant for this endpoint
 // (TorBox's own createwebdownload API has none either).
-export function addWebDownload(apiKey: string, input: { link: string; category?: string }): Promise<Download> {
+export function addWebDownload(apiKey: string, input: { link: string; category?: string; addedVia?: AddedVia }): Promise<Download> {
   const body = new URLSearchParams()
   body.set('link', input.link)
   if (input.category) body.set('category', input.category)
+  if (input.addedVia) body.set('added_via', input.addedVia)
   return request('/api/v1/downloads/webdl', apiKey, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

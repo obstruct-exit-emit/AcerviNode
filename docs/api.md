@@ -41,9 +41,9 @@ necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
 | `GET` | `/api/v1/providers` | Configured providers and their capabilities (`torrent_capable`/`usenet_capable`/`webdl_capable`) |
 | `GET` | `/api/v1/status` | `internal/importer`'s own health signals — meant for an external monitor (Uptime Kuma, Healthchecks.io, ...) to poll and alert on, not for the web UI. `{"last_tick_at"?: "...", "kinds": {"torrent"\|"usenet"\|"webdl": {"last_successful_list_at"?: "...", "rate_limited_until"?: "...", "error_count": N}}}`. `last_tick_at` proves the background tick loop itself hasn't stalled/crashed, regardless of what any one kind found; each kind's `last_successful_list_at` is when that kind's provider last answered a bulk listing call without erroring (a kind can look "stuck" — no state changes — while this keeps advancing just fine, e.g. TorBox's `cooldown_until`, see [Providers](providers.md#cooldown_until--a-real-undocumented-account-restriction) — this endpoint answers a different question, "is polling itself working," not "is the provider account restricted"); `rate_limited_until` mirrors the same per-kind backoff the importer's logs already show; `error_count` is how many downloads of that kind currently sit in local `error` state. Distinct from `GET /api/v1/settings/account`'s `cooldown_until` (the provider's own account state) and `GET /api/v1/providers` (what's configured) — see [Providers](providers.md#status-monitoring) |
 | `GET` | `/api/v1/downloads` | Every download — torrent, usenet, or web download — most recently added first. Optional `?added_via=arr\|manual` scopes to just the web UI's Managed or Manual tab (see [Providers](providers.md#managed-vs-manual)); omitted or unrecognized returns everything |
-| `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category`. Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
-| `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category`. Same response shape/status codes as the torrent endpoint |
-| `POST` | `/api/v1/downloads/webdl` | Adds a direct hoster link (Mega, 1Fichier, Mediafire, and ~160 others — see [Providers](providers.md#web-downloads)) — `application/x-www-form-urlencoded` body with `link` (required) and optional `category`. Link-only, no file-upload variant. Same response shape/status codes as the other two add endpoints |
+| `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category` and `added_via` (admin-only, see below). Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) |
+| `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category` and `added_via`. Same response shape/status codes as the torrent endpoint |
+| `POST` | `/api/v1/downloads/webdl` | Adds a direct hoster link (Mega, 1Fichier, Mediafire, and ~160 others — see [Providers](providers.md#web-downloads)) — `application/x-www-form-urlencoded` body with `link` (required) and optional `category`/`added_via`. Link-only, no file-upload variant. Same response shape/status codes as the other two add endpoints |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
 | `GET` | `/api/v1/downloads/{id}/files/{fileId}/link` | Resolves a direct, provider-hosted download URL for one file — `fileId` is a file's `provider_file_id` from the download's `files` array. Fresh on every call, not cached; the URL is the provider's own CDN link, good for a browser to download straight from (no `Authorization` header needed for that second request — it's not one of ours). `503` if the relevant provider isn't configured; `502` for any other provider-side failure |
 | `GET` | `/api/v1/downloads/{id}/zip-link` | Same idea, but one URL for every file at once, zipped provider-side — an explicit opt-in for a single archive instead of downloading files individually (see [Direct file downloads](#direct-file-downloads)). Same error shape as the per-file endpoint above |
@@ -195,19 +195,33 @@ surface). The web UI shows `files_error` directly instead of a generic
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web
-UI's "+ Add" button uses. Always lands as `added_via: "manual"` (shown in the
-Manual tab, never auto-fetched to local disk) — see
-[Providers](providers.md#managed-vs-manual). All three endpoints still accept
-an optional `category` field for programmatic callers, but the web UI's "+
-Add" form doesn't offer it — category has no effect on a Manual download (see
-[Providers](providers.md#managed-vs-manual) for why it was deliberately left
-out). The `webdl` endpoint is genuinely link-only — a plain
-`application/x-www-form-urlencoded` body, not `multipart/form-data` — since
-TorBox's own Web Downloads service has no file-upload variant either. Errors:
-`400` if neither a link (`magnet`/`url`/`link`) nor a `file` is given (`webdl`
-only ever accepts `link`, never a `file`), `503` if the relevant provider isn't
-configured yet, `502` for any other provider-side failure (e.g. an invalid
-magnet, an unsupported hoster, or a real upstream error).
+UI's "+ Add" button uses. Lands as `added_via: "manual"` by default (shown in
+the Manual tab, never auto-fetched to local disk) — see
+[Providers](providers.md#managed-vs-manual). An optional `category` field is
+accepted by all three, but only has any effect on a Manual add if `added_via`
+is also set — see below; on its own it's accepted but ignored, since category
+has no meaning for a Manual download otherwise (see
+[Providers](providers.md#managed-vs-manual) for why). The `webdl` endpoint is
+genuinely link-only — a plain `application/x-www-form-urlencoded` body, not
+`multipart/form-data` — since TorBox's own Web Downloads service has no
+file-upload variant either. Errors: `400` if neither a link
+(`magnet`/`url`/`link`) nor a `file` is given (`webdl` only ever accepts
+`link`, never a `file`), `503` if the relevant provider isn't configured yet,
+`502` for any other provider-side failure (e.g. an invalid magnet, an
+unsupported hoster, or a real upstream error).
+
+**`added_via` (optional, admin-only): add straight into the Managed
+pipeline.** Set to `"arr"` (any other value, or omitting it, keeps the
+default `"manual"`) to have the new download behave exactly as if an *arr app
+had added it — auto-fetched to `download_dir` (or `category`'s own override,
+if one is set — see [Configuration](configuration.md#categories-and-save-paths))
+by `internal/importer`, and shown in the Managed tab from then on. Requires
+an admin session or the API key; a member requesting `"arr"` gets `403`
+outright — the request is rejected before it ever reaches the provider, not
+silently downgraded to Manual, since the web UI never sends this for a member
+in the first place (the option isn't shown at all) and a script hitting the
+endpoint directly deserves a clear error rather than a silent behavior
+change. See [Providers](providers.md#managed-vs-manual).
 
 Debrid providers dedupe by content: adding a magnet whose hash the provider
 already has cached under an earlier add returns the *existing* tracked

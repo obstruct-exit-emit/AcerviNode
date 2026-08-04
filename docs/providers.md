@@ -488,12 +488,19 @@ usually to browse/grab files on demand, the way TorBox's own web UI works,
 not to have it silently land on disk.
 
 `database.Download.AddedVia` is the permanent, immutable record of which of
-the two a given download is — set once at insert time, from *how* it was
-added, never changed afterward:
+the two a given download is — set once at insert time, never changed
+afterward:
 
 - **`arr`**: added through the qBittorrent or SABnzbd compat shim — i.e. by
-  an *arr app. Auto-fetched by Completed Download Handling like always. Shown
-  in the web UI's **Managed** tab.
+  an *arr app — or, added directly via the native API's own add endpoints
+  with `added_via=arr` explicitly requested (admin-only — see
+  [Adding downloads directly](api.md#adding-downloads-directly) — a member
+  gets `403`, not a silent downgrade to Manual). Both land identically:
+  auto-fetched by Completed Download Handling to `download_dir` or a
+  `category` override, same as always. Shown in the web UI's **Managed**
+  tab; the "+ Add" button offers this as an explicit Managed/Manual choice
+  for an admin (never shown to a member at all, matching their own lack of
+  Managed access — see [Auth: login accounts and roles](#auth-login-accounts-and-roles)).
 - **`manual`**: added directly via the native API's add endpoints (the web
   UI's own "+ Add" form — an *arr app has no way to reach that endpoint, it
   only knows the compat shims), or *discovered* — see below. Never

@@ -7,8 +7,21 @@ type InputMode = 'link' | 'file'
 interface Props {
   apiKey: string
   providers: ProviderStatus[]
+  // isAdmin gates the Managed/Manual toggle entirely — a member has no
+  // access to the Managed pipeline at all (see docs/providers.md#roles),
+  // so they never see the choice; everything they add stays Manual, same
+  // as before this existed. defaultManaged seeds the toggle's starting
+  // position from whichever tab the button was opened from (see App.tsx) —
+  // still just a default, not a restriction; an admin can flip it either
+  // way regardless of which tab they started from.
+  isAdmin: boolean
+  defaultManaged: boolean
   onClose: () => void
-  onAdded: () => void
+  // onAdded reports which mode was actually used — not necessarily
+  // defaultManaged, since an admin can flip the toggle before submitting —
+  // so the caller can navigate to the tab the new download actually landed
+  // in, not just the one the button happened to default to.
+  onAdded: (addedManaged: boolean) => void
 }
 
 const PROTOCOL_LABELS: Record<Protocol, string> = {
@@ -17,7 +30,7 @@ const PROTOCOL_LABELS: Record<Protocol, string> = {
   webdl: 'Web Link',
 }
 
-export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
+export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClose, onAdded }: Props) {
   const torrentAvailable = providers.some((p) => p.torrent_capable)
   const usenetAvailable = providers.some((p) => p.usenet_capable)
   const webdlAvailable = providers.some((p) => p.webdl_capable)
@@ -34,6 +47,11 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
   const [mode, setMode] = useState<InputMode>('link')
   const [link, setLink] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  // managed is always false for a member — isAdmin gates whether the toggle
+  // even renders, not just whether it's editable, so there's no path for a
+  // non-admin to end up with this true.
+  const [managed, setManaged] = useState(isAdmin && defaultManaged)
+  const [category, setCategory] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   useEffect(() => {
@@ -52,23 +70,24 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
 
     setStatus({ kind: 'saving' })
     try {
-      // No category — everything added through this form is a Manual
-      // download (see docs/providers.md#managed-vs-manual), and category has
-      // no effect there (it only drives save-path resolution for Managed
-      // downloads, which are the only ones internal/importer auto-fetches).
-      // Deliberately left out for now rather than wired up as a cosmetic-only
-      // label; revisit if the Manual tab ever needs its own organization
-      // scheme — see ROADMAP.md.
+      // Category only means anything for a Managed add — it drives
+      // internal/importer's save-path resolution, the same as a category
+      // Sonarr/Radarr declared through the compat shims (see
+      // docs/configuration.md#categories-and-save-paths). A Manual add never
+      // sends it: Manual downloads mirror TorBox's own web UI, which has no
+      // category concept at all (see ROADMAP.md's "Manual categories" entry).
+      const categoryToSend = managed ? category.trim() : undefined
+      const addedVia = managed ? 'arr' : undefined
       if (protocol === 'torrent') {
-        if (mode === 'file') await addTorrent(apiKey, { file: file as File })
-        else await addTorrent(apiKey, { magnet: link.trim() })
+        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia })
+        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia })
       } else if (protocol === 'usenet') {
-        if (mode === 'file') await addUsenet(apiKey, { file: file as File })
-        else await addUsenet(apiKey, { url: link.trim() })
+        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia })
+        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia })
       } else {
-        await addWebDownload(apiKey, { link: link.trim() })
+        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia })
       }
-      onAdded()
+      onAdded(managed)
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
@@ -87,11 +106,31 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
     <div className="detail-overlay" onClick={onClose}>
       <div className="detail-panel add-download-panel" onClick={(e) => e.stopPropagation()}>
         <div className="detail-header">
-          <h2>Add to Manual</h2>
+          <h2>Add to {managed ? 'Managed' : 'Manual'}</h2>
           <button className="detail-close" onClick={onClose} title="Close">
             ✕
           </button>
         </div>
+
+        {isAdmin && (
+          <div className="mode-toggle">
+            <label>
+              <input type="radio" checked={!managed} onChange={() => setManaged(false)} />
+              Manual
+            </label>
+            <label>
+              <input type="radio" checked={managed} onChange={() => setManaged(true)} />
+              Managed
+            </label>
+          </div>
+        )}
+        {isAdmin && (
+          <p className="settings-help">
+            {managed
+              ? 'Fetched to disk automatically, same as an *arr-added download — shows up in the Managed tab.'
+              : "Grabbed on demand, mirroring TorBox's own web UI — shows up in the Manual tab, never auto-fetched."}
+          </p>
+        )}
 
         {availableProtocols.length > 1 && (
           <div className="protocol-tabs">
@@ -146,6 +185,15 @@ export function AddDownload({ apiKey, providers, onClose, onAdded }: Props) {
                 type="file"
                 accept={protocol === 'torrent' ? '.torrent' : '.nzb'}
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            )}
+
+            {managed && (
+              <input
+                type="text"
+                placeholder="Category (optional, e.g. tv-sonarr)"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
               />
             )}
 
