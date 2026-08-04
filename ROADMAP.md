@@ -396,6 +396,19 @@ CDN link instead of BitTorrent/NNTP.
   both apply immediately. Verified with tests that force genuine overlap
   (not just serial timing luck) and genuine timeout enforcement (a CDN that
   never responds), not just that the config values round-trip.
+- **Cached & metadata previews on the "+ Add" form** (follow-on, prompted by
+  a direct audit of the official TorBox API against what AcerviNode actually
+  uses — "anything in the official torbox api we don't have but should?").
+  `CheckCached` existed at the client layer from early on but nothing ever
+  called it; closed for torrent/usenet/webdl, plus a new torrent-only
+  metadata preview (`torrentinfo` — name/size/seeders/full file list, by
+  hash alone, before ever adding it). Found live: the real wire format for
+  `checkcached`'s multi-hash query doesn't match TorBox's own docs (a
+  comma-joined value times out; repeated `hash=` params is what actually
+  works). Live-verified against the real account: a known-cached test
+  torrent correctly reported cached with its real metadata; a fabricated
+  hash correctly reported not-cached and no-preview-available. See
+  [Providers](docs/providers.md#cached--metadata-previews).
 
 ## Phase 4 — Multi-provider ⏳
 

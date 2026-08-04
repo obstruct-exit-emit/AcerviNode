@@ -237,6 +237,56 @@ provider-status-not-indexed-yet fallback (using the magnet/URL/filename
 instead) as both compat shims already do on their own adds; see
 [qBittorrent API](qbittorrent-api.md) and [SABnzbd API](sabnzbd-api.md).
 
+## Cached & metadata previews
+
+Three read-only, side-effect-free endpoints let the "+ Add" form show
+whether something is worth adding *before* actually committing to it —
+built on TorBox capabilities that existed at the client layer but were
+never actually wired up anywhere until requested directly ("finish up
+checkcached for all torrent/usenet/webdl. add torrent info because why
+not"):
+
+- `GET /api/v1/downloads/torrent/check-cached?magnet=...`
+- `GET /api/v1/downloads/usenet/check-cached?url=...`
+- `GET /api/v1/downloads/webdl/check-cached?link=...`
+
+All three return `{"cached": true|false}` — whether the provider already
+has this content cached (instantly available) rather than needing a real
+download. `magnet`/`url`/`link` match the corresponding add endpoint's own
+field name exactly. For torrent, the hash checked is the magnet's own
+`xt=urn:btih:` infohash; for usenet/webdl, per TorBox's own (undocumented
+in practice — see [Providers](providers.md#cached--metadata-previews))
+convention, it's an MD5 of the link itself, computed server-side — the
+caller never needs to know this. `400` if the value given doesn't parse
+into a checkable hash at all (e.g. a magnet with no `btih`), `503` if the
+relevant provider isn't configured.
+
+`GET /api/v1/downloads/torrent/info?magnet=...` (or `?hash=...` directly)
+previews a torrent's metadata — name, size, seeders/peers, and full file
+list — straight from the BitTorrent network, by hash alone, before it's
+ever added to the account at all. Response shape:
+
+```json
+{
+  "available": true,
+  "name": "...",
+  "hash": "...",
+  "size_bytes": 123,
+  "seeds": 10,
+  "peers": 12,
+  "files": [{"path": "...", "size_bytes": 456}]
+}
+```
+
+`available: false` (with just an `error` string, everything else omitted)
+covers both a torrent TorBox couldn't find enough peers for within its own
+search window, and a configured provider that doesn't support this kind of
+preview at all — routine either way, matching `GET
+/api/v1/settings/account`'s own `available: false` convention, never a
+hard error status the UI would need special handling for. No usenet/webdl
+equivalent exists — TorBox has no by-link metadata-preview endpoint for
+either.
+
 ## Direct file downloads
 
 `GET /api/v1/downloads/{id}/files/{fileId}/link` resolves a direct,

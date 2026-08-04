@@ -183,11 +183,28 @@ type cachedAvailabilityData struct {
 	Hash string `json:"hash"`
 }
 
-// CheckCachedTorrents reports, per hash, whether TorBox already has it cached.
-// TorBox's checkcached endpoint (format=object, the default) returns a map
-// keyed by whichever hashes are cached — hashes absent from the response are
-// not cached.
+// CheckCachedTorrents reports, per hash, whether TorBox already has it
+// cached — see checkCached's own doc comment for the shared mechanics.
 func (c *Client) CheckCachedTorrents(ctx context.Context, hashes []string) (map[string]bool, error) {
+	return c.checkCached(ctx, "/torrents/checkcached", hashes)
+}
+
+// checkCached backs CheckCachedTorrents/CheckCachedUsenet/
+// CheckCachedWebDownloads — identical mechanics across all three, just a
+// different endpoint and a different notion of "hash" (a real BitTorrent
+// infohash for torrents; an MD5 of the link, or of the uploaded file's own
+// bytes, for usenet/webdl — see each caller's own doc comment). TorBox's
+// checkcached endpoints (format=object, the default) return a map keyed by
+// whichever hashes are cached — hashes absent from the response are not
+// cached.
+//
+// Sends one repeated hash= query param per hash, not the single
+// comma-separated value the docs describe — confirmed live against the real
+// API: a comma-joined value consistently timed out (curl exit 28, twice in a
+// row), while repeated hash= params correctly returned every cached hash
+// requested, even for two hashes at once. Docs were wrong here; the live
+// behavior is what this follows.
+func (c *Client) checkCached(ctx context.Context, endpoint string, hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool, len(hashes))
 	for _, h := range hashes {
 		result[h] = false
@@ -201,7 +218,7 @@ func (c *Client) CheckCachedTorrents(ctx context.Context, hashes []string) (map[
 		q.Add("hash", h)
 	}
 	var env envelope[map[string]cachedAvailabilityData]
-	if err := c.doGet(ctx, "/torrents/checkcached", q, &env); err != nil {
+	if err := c.doGet(ctx, endpoint, q, &env); err != nil {
 		return nil, err
 	}
 	if err := checkSuccess(env.Success, env.Detail); err != nil {
@@ -211,6 +228,47 @@ func (c *Client) CheckCachedTorrents(ctx context.Context, hashes []string) (map[
 		result[h] = true
 	}
 	return result, nil
+}
+
+// TorrentInfoResultFile is one file within a TorrentInfoResult.
+type TorrentInfoResultFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// TorrentInfoResult is torrentinfo's response — a preview of a torrent's
+// metadata straight from the BitTorrent network, by hash alone, before ever
+// adding it. Confirmed live: needs no API key at all (TorBox's own docs say
+// so too — "Authorization: None required" — sent anyway for consistency
+// with every other call, harmless either way), and a torrent it can't find
+// enough peers for within timeoutSeconds comes back a plain HTTP 500 with a
+// real Detail message (surfaced by doGet/checkSuccess exactly like any other
+// failed call), not a 200 with empty data.
+type TorrentInfoResult struct {
+	Name  string                  `json:"name"`
+	Hash  string                  `json:"hash"`
+	Size  int64                   `json:"size"`
+	Seeds int64                   `json:"seeds"`
+	Peers int64                   `json:"peers"`
+	Files []TorrentInfoResultFile `json:"files"`
+}
+
+// TorrentInfo previews a torrent's metadata by hash — TorBox's own
+// torrentinfo endpoint. timeoutSeconds bounds how long TorBox searches the
+// BitTorrent network before giving up; 0 uses TorBox's own default (10s).
+func (c *Client) TorrentInfo(ctx context.Context, hash string, timeoutSeconds int) (TorrentInfoResult, error) {
+	q := url.Values{"hash": {hash}}
+	if timeoutSeconds > 0 {
+		q.Set("timeout", strconv.Itoa(timeoutSeconds))
+	}
+	var env envelope[TorrentInfoResult]
+	if err := c.doGet(ctx, "/torrents/torrentinfo", q, &env); err != nil {
+		return TorrentInfoResult{}, err
+	}
+	if err := checkSuccess(env.Success, env.Detail); err != nil {
+		return TorrentInfoResult{}, err
+	}
+	return env.Data, nil
 }
 
 // --- Usenet -----------------------------------------------------------------
@@ -370,6 +428,16 @@ func (c *Client) GetUsenetDownload(ctx context.Context, id string) (UsenetDownlo
 		return UsenetDownload{}, err
 	}
 	return env.Data, nil
+}
+
+// CheckCachedUsenet reports, per hash, whether TorBox already has a usenet
+// download cached — see checkCached's own doc comment for the shared
+// mechanics. Per TorBox's docs, the hash here isn't TorBox's own — it's an
+// MD5 of the NZB's link (URL-based add) or of the uploaded .nzb file's own
+// bytes (file-based add); computing it is the caller's job (see
+// internal/api's md5Hex).
+func (c *Client) CheckCachedUsenet(ctx context.Context, hashes []string) (map[string]bool, error) {
+	return c.checkCached(ctx, "/usenet/checkcached", hashes)
 }
 
 // --- Queue ------------------------------------------------------------------
@@ -560,6 +628,14 @@ func (c *Client) GetWebDownload(ctx context.Context, id string) (WebDownload, er
 		return WebDownload{}, err
 	}
 	return env.Data, nil
+}
+
+// CheckCachedWebDownloads reports, per hash, whether TorBox already has a
+// web download cached — see checkCached's own doc comment for the shared
+// mechanics. Per TorBox's docs, the hash is an MD5 of the link itself;
+// computing it is the caller's job (see internal/api's md5Hex).
+func (c *Client) CheckCachedWebDownloads(ctx context.Context, hashes []string) (map[string]bool, error) {
+	return c.checkCached(ctx, "/webdl/checkcached", hashes)
 }
 
 // Hoster is one entry from GetHosterList — TorBox's currently-supported

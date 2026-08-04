@@ -122,3 +122,7 @@ func (f *fakeProvider) Delete(_ context.Context, id debrid.ProviderDownloadID, _
 	delete(f.entries, id)
 	return nil
 }
+
+func (f *fakeProvider) CheckCached(_ context.Context, _ []string) (map[string]bool, error) {
+	return nil, nil
+}

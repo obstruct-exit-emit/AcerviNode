@@ -132,3 +132,25 @@ func TestWebDownloadProvider_List(t *testing.T) {
 		t.Fatalf("statuses = %+v, want 2", statuses)
 	}
 }
+
+func TestWebDownloadProvider_CheckCached(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/api/webdl/checkcached" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"linkmd5": map[string]any{"hash": "linkmd5"}},
+		})
+	}))
+	defer server.Close()
+
+	p := NewWebDownloadProvider("test-key", WithBaseURL(server.URL))
+	result, err := p.CheckCached(context.Background(), []string{"linkmd5", "othermd5"})
+	if err != nil {
+		t.Fatalf("CheckCached() error = %v", err)
+	}
+	if !result["linkmd5"] || result["othermd5"] {
+		t.Errorf("result = %+v", result)
+	}
+}

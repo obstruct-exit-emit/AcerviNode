@@ -1259,6 +1259,62 @@ whenever it's set to a future time. Without this, the exact same "why has nothin
 updated in hours" investigation would otherwise require reading logs or querying
 TorBox directly by hand, same as how this was actually found.
 
+### Cached & metadata previews
+
+`CheckCached` existed on `debrid.TorrentProvider` (and `Client.CheckCachedTorrents`)
+from early on, but nothing ever actually called it — real, working capability
+sitting completely idle until asked about directly ("anything in the official
+torbox api we don't have but should?"). Closed for all three kinds, plus a
+companion by-hash metadata preview for torrents, on direct follow-up request
+("finish up checkcached for all torrent/usenet/webdl. add torrent info because
+why not"). See [API](api.md#cached--metadata-previews) for the endpoint shapes
+the "+ Add" form's debounced preview is built on.
+
+**The wire format doesn't match TorBox's own docs — confirmed live, not
+assumed.** `checkcached`'s `hash` query parameter is documented as "comma
+separated," but a comma-joined value consistently timed out against the real
+API (`curl` exit 28, twice in a row); repeated `hash=` params — what
+`CheckCachedTorrents` already happened to send, untested until now — correctly
+returned every cached hash requested, even for two at once. `checkCached`
+(the shared helper `CheckCachedTorrents`/`CheckCachedUsenet`/
+`CheckCachedWebDownloads` all now call) follows the live behavior, not the
+docs.
+
+**The hash isn't always a real hash.** For torrents it's the actual BitTorrent
+infohash. For usenet/webdl, TorBox's own docs say to "md5 the link... or file"
+— confirmed live to mean an MD5 of the link itself (`internal/api`'s
+`md5Hex`), computed server-side so the frontend never needs to know; a
+usenet download added by file upload rather than URL has no link to hash at
+all, so its own check-cached endpoint only ever accepts a URL, matching the
+"+ Add" form's own `url`/`link` fields exactly.
+
+**`torrentinfo` needs no API key at all** — confirmed live and matches
+TorBox's own docs ("Authorization: None required"); AcerviNode sends its key
+anyway for consistency with every other call, harmless either way. A torrent
+TorBox can't find enough peers for within its own search window comes back a
+plain HTTP `500` with a real `detail` message (surfaced through the exact
+same `doGet`/`checkSuccess` error path as everything else), not a `200` with
+empty data.
+
+**`debrid.TorrentInfoProvider` is a separate, optional one-method
+interface** — same "structural, not every provider needs every capability"
+shape as `AccountProvider`, not folded into `TorrentProvider` itself, since
+not every future debrid provider will have an equivalent public
+by-hash-preview endpoint. `DynamicTorrentProvider.TorrentInfo` delegates via
+a runtime type assertion against whichever provider is currently set, the
+same pattern `Account` already established — a provider that doesn't
+implement it just means nothing to preview, not a hard error.
+
+Live-verified end to end against the real account: `check-cached` correctly
+reported a known-cached test torrent's hash as cached and an unrelated
+fabricated hash as not cached; `torrent-info` returned the same torrent's
+real name, size, seed/peer counts, and full 6-file list, and separately
+returned a routine `available: false` for the fabricated hash. The
+usenet/webdl `check-cached` endpoints were confirmed to hit the real API
+without erroring, but not against a genuinely cached item — the test account
+had no usenet/webdl downloads on hand at the time to produce a true
+`cached: true` positive for either.
+
 ## Auth: login accounts and roles
 
 The API key (`config.yaml`'s `api_key`) has always been AcerviNode's only

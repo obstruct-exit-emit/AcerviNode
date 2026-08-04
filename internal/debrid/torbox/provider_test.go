@@ -594,3 +594,56 @@ func TestUsenetProvider_AddStatusFilesDeleteFlow(t *testing.T) {
 		t.Error("Status() after delete: expected not-found error, got nil")
 	}
 }
+
+var _ debrid.TorrentInfoProvider = (*Provider)(nil)
+
+func TestProvider_TorrentInfo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/api/torrents/torrentinfo" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"name": "Preview.Me", "hash": "beefcafe", "size": 999.0,
+				"seeds": 5, "peers": 2,
+				"files": []map[string]any{{"name": "Preview.Me/a.mkv", "size": 900.0}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	p := NewProvider("test-key", WithBaseURL(server.URL))
+	info, err := p.TorrentInfo(context.Background(), "beefcafe")
+	if err != nil {
+		t.Fatalf("TorrentInfo() error = %v", err)
+	}
+	if info.Name != "Preview.Me" || info.SizeBytes != 999 || info.Seeds != 5 || info.Peers != 2 {
+		t.Errorf("info = %+v", info)
+	}
+	if len(info.Files) != 1 || info.Files[0].Path != "Preview.Me/a.mkv" || info.Files[0].SizeBytes != 900 {
+		t.Errorf("info.Files = %+v", info.Files)
+	}
+}
+
+func TestUsenetProvider_CheckCached(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/api/usenet/checkcached" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data":    map[string]any{"md5hash": map[string]any{"hash": "md5hash"}},
+		})
+	}))
+	defer server.Close()
+
+	p := NewUsenetProvider("test-key", WithBaseURL(server.URL))
+	result, err := p.CheckCached(context.Background(), []string{"md5hash", "othermd5"})
+	if err != nil {
+		t.Fatalf("CheckCached() error = %v", err)
+	}
+	if !result["md5hash"] || result["othermd5"] {
+		t.Errorf("result = %+v", result)
+	}
+}

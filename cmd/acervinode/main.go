@@ -174,7 +174,19 @@ func run(ctx context.Context) error {
 // because the compat shim servers built here get wired back into it via
 // SetShimServers — the settings API's category endpoints read/write their
 // category stores directly (see docs/configuration.md).
-func buildHandler(db *database.DB, torrentProvider debrid.TorrentProvider, usenetProvider debrid.UsenetProvider, webDownloadProvider debrid.WebDownloadProvider, settings *liveSettings) http.Handler {
+//
+// torrentProvider/usenetProvider/webDownloadProvider take the concrete
+// Dynamic*Provider types, not their debrid.TorrentProvider/UsenetProvider/
+// WebDownloadProvider interfaces — every call site really does always pass
+// the Dynamic wrapper (see setupProviders), and api.NewServer's own
+// torrentAdder needs TorrentInfo/CheckCached, which live on the concrete
+// wrapper (TorrentInfo delegates via a runtime type assertion against
+// whatever the currently-set inner provider is — see
+// DynamicTorrentProvider.TorrentInfo) but aren't part of the narrower
+// debrid.TorrentProvider interface itself. Passing the concrete type here
+// costs nothing at the other call sites below (qbittorrent.NewServer/
+// sabnzbd.NewServer's own interface parameters are still satisfied fine).
+func buildHandler(db *database.DB, torrentProvider *debrid.DynamicTorrentProvider, usenetProvider *debrid.DynamicUsenetProvider, webDownloadProvider *debrid.DynamicWebDownloadProvider, settings *liveSettings) http.Handler {
 	mux := http.NewServeMux()
 
 	qbtServer := qbittorrent.NewServer(torrentProvider, db, settings)

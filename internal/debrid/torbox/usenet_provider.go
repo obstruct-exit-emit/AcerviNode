@@ -131,6 +131,14 @@ func (p *UsenetProvider) Delete(ctx context.Context, id debrid.ProviderDownloadI
 	return nil
 }
 
+func (p *UsenetProvider) CheckCached(ctx context.Context, hashes []string) (map[string]bool, error) {
+	result, err := p.client.CheckCachedUsenet(ctx, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("torbox: usenet check cached: %w", err)
+	}
+	return result, nil
+}
+
 func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 	state := mapUsenetState(d)
 	// Phase is only meaningful for an in-progress download — usenetPhase

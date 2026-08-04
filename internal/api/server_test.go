@@ -51,6 +51,13 @@ type fakeProvider struct {
 	zipLinkResp string
 	zipLinkErr  error
 	zipLinkID   debrid.ProviderDownloadID // id RequestZipDownloadLink was last called with
+
+	checkCachedResp   map[string]bool
+	checkCachedErr    error
+	checkCachedHashes []string // hashes CheckCached was last called with
+	torrentInfoResp   debrid.TorrentInfo
+	torrentInfoErr    error
+	torrentInfoHash   string // hash TorrentInfo was last called with
 }
 
 func (f *fakeProvider) Name() string {
@@ -137,6 +144,22 @@ func (f *fakeProvider) RequestZipDownloadLink(_ context.Context, id debrid.Provi
 		return "", f.zipLinkErr
 	}
 	return f.zipLinkResp, nil
+}
+
+func (f *fakeProvider) CheckCached(_ context.Context, hashes []string) (map[string]bool, error) {
+	f.checkCachedHashes = hashes
+	if f.checkCachedErr != nil {
+		return nil, f.checkCachedErr
+	}
+	return f.checkCachedResp, nil
+}
+
+func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.TorrentInfo, error) {
+	f.torrentInfoHash = hash
+	if f.torrentInfoErr != nil {
+		return debrid.TorrentInfo{}, f.torrentInfoErr
+	}
+	return f.torrentInfoResp, nil
 }
 
 type fakeSettings struct {
@@ -2597,6 +2620,201 @@ func TestHandleAddWebDownload_AddedViaArr_AdminCreatesManaged(t *testing.T) {
 	}
 	if got.Category != "movies" {
 		t.Errorf("category = %q, want movies", got.Category)
+	}
+}
+
+// --- Check cached & torrent info previews -----------------------------------
+
+func TestHandleCheckCachedTorrent_Cached(t *testing.T) {
+	hash := "abcdef0123456789abcdef0123456789abcdef01" // testMagnet's hash, lowercased
+	provider := &fakeProvider{checkCachedResp: map[string]bool{hash: true}}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/check-cached?magnet="+url.QueryEscape(testMagnet))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got checkCachedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Cached {
+		t.Error("cached = false, want true")
+	}
+	if len(provider.checkCachedHashes) != 1 || provider.checkCachedHashes[0] != hash {
+		t.Errorf("CheckCached called with %v, want [%s] (the magnet's own lowercased infohash)", provider.checkCachedHashes, hash)
+	}
+}
+
+func TestHandleCheckCachedTorrent_NotCached(t *testing.T) {
+	provider := &fakeProvider{checkCachedResp: map[string]bool{}}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/check-cached?magnet="+url.QueryEscape(testMagnet))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	var got checkCachedResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Cached {
+		t.Error("cached = true, want false")
+	}
+}
+
+func TestHandleCheckCachedTorrent_RequiresValidMagnet(t *testing.T) {
+	provider := &fakeProvider{}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/check-cached?magnet=not-a-magnet")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (magnet has no valid btih hash)", rec.Code)
+	}
+}
+
+func TestHandleCheckCachedTorrent_NoProviderConfigured(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/check-cached?magnet="+url.QueryEscape(testMagnet))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+// TestHandleCheckCachedUsenet_HashesTheURL proves the query goes through
+// md5Hex, not the raw URL — TorBox's usenet checkcached endpoint expects an
+// MD5 of the link, unlike torrent's real infohash (see md5Hex's own doc
+// comment).
+func TestHandleCheckCachedUsenet_HashesTheURL(t *testing.T) {
+	const nzbURL = "https://example.test/release.nzb"
+	wantHash := md5Hex(nzbURL)
+	provider := &fakeProvider{checkCachedResp: map[string]bool{wantHash: true}}
+	srv, _ := newTestServer(t, nil, provider, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/usenet/check-cached?url="+url.QueryEscape(nzbURL))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got checkCachedResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if !got.Cached {
+		t.Error("cached = false, want true")
+	}
+	if len(provider.checkCachedHashes) != 1 || provider.checkCachedHashes[0] != wantHash {
+		t.Errorf("CheckCached called with %v, want [%s] (md5 of the URL)", provider.checkCachedHashes, wantHash)
+	}
+}
+
+// TestHandleCheckCachedWebDownload_HashesTheLink is
+// TestHandleCheckCachedUsenet_HashesTheURL's Web Downloads counterpart.
+func TestHandleCheckCachedWebDownload_HashesTheLink(t *testing.T) {
+	const link = "https://mega.nz/folder/abc123"
+	wantHash := md5Hex(link)
+	provider := &fakeProvider{checkCachedResp: map[string]bool{wantHash: true}}
+	srv, _ := newTestServerWithWebDownload(t, provider, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/webdl/check-cached?link="+url.QueryEscape(link))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got checkCachedResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if !got.Cached {
+		t.Error("cached = false, want true")
+	}
+	if len(provider.checkCachedHashes) != 1 || provider.checkCachedHashes[0] != wantHash {
+		t.Errorf("CheckCached called with %v, want [%s] (md5 of the link)", provider.checkCachedHashes, wantHash)
+	}
+}
+
+func TestHandleTorrentInfo_Available(t *testing.T) {
+	provider := &fakeProvider{torrentInfoResp: debrid.TorrentInfo{
+		Name: "Preview.Me", Hash: "abc123", SizeBytes: 999, Seeds: 5, Peers: 2,
+		Files: []debrid.TorrentInfoFile{{Path: "Preview.Me/a.mkv", SizeBytes: 900}},
+	}}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/info?hash=abc123")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got torrentInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Available || got.Name != "Preview.Me" || got.SizeBytes != 999 || got.Seeds != 5 || got.Peers != 2 {
+		t.Errorf("response = %+v", got)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "Preview.Me/a.mkv" || got.Files[0].SizeBytes != 900 {
+		t.Errorf("files = %+v", got.Files)
+	}
+	if provider.torrentInfoHash != "abc123" {
+		t.Errorf("TorrentInfo called with hash %q, want abc123", provider.torrentInfoHash)
+	}
+}
+
+// TestHandleTorrentInfo_ExtractsHashFromMagnet proves ?magnet= works too,
+// not just a raw ?hash= — the "+ Add" form only ever has the magnet, never a
+// bare hash, at the point it wants a preview.
+func TestHandleTorrentInfo_ExtractsHashFromMagnet(t *testing.T) {
+	provider := &fakeProvider{torrentInfoResp: debrid.TorrentInfo{Name: "Preview.Me"}}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/info?magnet="+url.QueryEscape(testMagnet))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.torrentInfoHash != "abcdef0123456789abcdef0123456789abcdef01" {
+		t.Errorf("TorrentInfo called with hash %q, want the magnet's own lowercased infohash", provider.torrentInfoHash)
+	}
+}
+
+// TestHandleTorrentInfo_NotAvailableIsRoutine proves a torrent TorBox
+// couldn't find (or a provider without TorrentInfoProvider support) reports
+// available:false with a 200, the same "available: false" convention as
+// handleGetAccountStatus — not a hard error the UI would need special
+// handling for.
+func TestHandleTorrentInfo_NotAvailableIsRoutine(t *testing.T) {
+	provider := &fakeProvider{torrentInfoErr: errors.New("torbox: torrent info: not found")}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/info?hash=0000")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (unavailable is routine, not an error)", rec.Code)
+	}
+	var got torrentInfoResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Available {
+		t.Error("available = true, want false")
+	}
+	if got.Error == "" {
+		t.Error("error message = empty, want the underlying reason")
+	}
+}
+
+func TestHandleTorrentInfo_RequiresHashOrMagnet(t *testing.T) {
+	provider := &fakeProvider{}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/torrent/info")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
 

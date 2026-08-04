@@ -145,6 +145,27 @@ func (p *Provider) CheckCached(ctx context.Context, hashes []string) (map[string
 	return result, nil
 }
 
+// TorrentInfo satisfies debrid.TorrentInfoProvider — previews a torrent's
+// metadata by hash, before ever adding it.
+func (p *Provider) TorrentInfo(ctx context.Context, hash string) (debrid.TorrentInfo, error) {
+	result, err := p.client.TorrentInfo(ctx, hash, 0)
+	if err != nil {
+		return debrid.TorrentInfo{}, fmt.Errorf("torbox: torrent info: %w", err)
+	}
+	files := make([]debrid.TorrentInfoFile, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = debrid.TorrentInfoFile{Path: f.Name, SizeBytes: f.Size}
+	}
+	return debrid.TorrentInfo{
+		Name:      result.Name,
+		Hash:      result.Hash,
+		SizeBytes: result.Size,
+		Seeds:     result.Seeds,
+		Peers:     result.Peers,
+		Files:     files,
+	}, nil
+}
+
 // Account satisfies debrid.AccountProvider — GetUserData's response has many
 // more fields than modeled here (see UserData's own doc comment); only what
 // the settings UI's account status display actually uses is surfaced.

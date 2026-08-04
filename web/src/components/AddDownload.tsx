@@ -1,5 +1,17 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { addTorrent, addUsenet, addWebDownload, ApiError, type ProviderStatus } from '../api'
+import {
+  addTorrent,
+  addUsenet,
+  addWebDownload,
+  ApiError,
+  checkCachedTorrent,
+  checkCachedUsenet,
+  checkCachedWebDownload,
+  getTorrentInfo,
+  type ProviderStatus,
+  type TorrentInfoResponse,
+} from '../api'
+import { formatBytes } from '../format'
 
 type Protocol = 'torrent' | 'usenet' | 'webdl'
 type InputMode = 'link' | 'file'
@@ -54,6 +66,18 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   const [category, setCategory] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
+  // Cached/metadata preview — cached is null until a check-cached response
+  // comes back (or the input isn't recognizable yet); torrentInfo is only
+  // ever populated for the torrent protocol, which is the only one TorBox
+  // has a by-hash metadata-preview endpoint for at all (see
+  // docs/providers.md#cached--metadata-previews-before-adding). Debounced
+  // rather than firing on every keystroke — the torrent-info lookup in
+  // particular searches the live BitTorrent network, not just TorBox's own
+  // account, so it's real work worth not spamming.
+  const [cached, setCached] = useState<boolean | null>(null)
+  const [torrentInfo, setTorrentInfo] = useState<TorrentInfoResponse | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
@@ -61,6 +85,48 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
+
+  useEffect(() => {
+    setCached(null)
+    setTorrentInfo(null)
+    if (mode !== 'link') return
+    const value = link.trim()
+    // Cheap client-side sanity checks before ever spending a round trip —
+    // real validation still happens server-side either way, this just
+    // avoids firing on a clearly-incomplete paste-in-progress.
+    if (protocol === 'torrent' && !/xt=urn:btih:/i.test(value)) return
+    if (protocol !== 'torrent' && !/^https?:\/\//i.test(value)) return
+
+    let cancelled = false
+    setPreviewLoading(true)
+
+    async function loadPreview() {
+      // Independent, best-effort — neither ever blocks submission, so one
+      // failing (e.g. a transient network error) shouldn't hide the other
+      // succeeding.
+      const cachedPromise =
+        protocol === 'torrent'
+          ? checkCachedTorrent(apiKey, value)
+          : protocol === 'usenet'
+            ? checkCachedUsenet(apiKey, value)
+            : checkCachedWebDownload(apiKey, value)
+      const [cachedResult, infoResult] = await Promise.allSettled([
+        cachedPromise,
+        protocol === 'torrent' ? getTorrentInfo(apiKey, value) : Promise.resolve(null),
+      ])
+      if (cancelled) return
+      setCached(cachedResult.status === 'fulfilled' ? cachedResult.value.cached : null)
+      setTorrentInfo(infoResult.status === 'fulfilled' ? infoResult.value : null)
+      setPreviewLoading(false)
+    }
+
+    const timer = setTimeout(loadPreview, 500)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey, protocol, mode, link])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -186,6 +252,36 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
                 accept={protocol === 'torrent' ? '.torrent' : '.nzb'}
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
+            )}
+
+            {mode === 'link' && (previewLoading || cached !== null || torrentInfo) && (
+              <div className="add-preview">
+                {previewLoading && <p className="settings-help">Checking…</p>}
+                {!previewLoading && cached !== null && (
+                  <p className={cached ? 'settings-success' : 'settings-help'}>
+                    {cached ? '✓ Cached — instantly available' : 'Not cached — will need a real download'}
+                  </p>
+                )}
+                {!previewLoading && torrentInfo && (
+                  <>
+                    {torrentInfo.available ? (
+                      <p className="settings-help" title={torrentInfo.name}>
+                        {torrentInfo.name}
+                        {typeof torrentInfo.size_bytes === 'number' && ` · ${formatBytes(torrentInfo.size_bytes)}`}
+                        {torrentInfo.files && ` · ${torrentInfo.files.length} file${torrentInfo.files.length === 1 ? '' : 's'}`}
+                        {typeof torrentInfo.seeds === 'number' &&
+                          ` · ${torrentInfo.seeds} seed${torrentInfo.seeds === 1 ? '' : 's'}, ${torrentInfo.peers} peer${torrentInfo.peers === 1 ? '' : 's'}`}
+                      </p>
+                    ) : (
+                      // Routine, not an error — TorBox couldn't find this
+                      // torrent on the network yet (or the provider doesn't
+                      // support previews at all). The check-cached badge
+                      // above still shows either way.
+                      <p className="settings-help">No preview available yet.</p>
+                    )}
+                  </>
+                )}
+              </div>
             )}
 
             {managed && (

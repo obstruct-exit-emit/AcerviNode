@@ -114,6 +114,9 @@ func (s *stubUsenetProvider) RequestZipDownloadLink(context.Context, ProviderDow
 	return "https://example.test/all.zip", nil
 }
 func (s *stubUsenetProvider) Delete(context.Context, ProviderDownloadID, bool) error { return nil }
+func (s *stubUsenetProvider) CheckCached(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{"stub-usenet-hash": true}, nil
+}
 
 func TestDynamicUsenetProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.T) {
 	d := NewDynamicUsenetProvider("torbox")
@@ -131,6 +134,14 @@ func TestDynamicUsenetProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.T) {
 	}
 	if id != "nzb-2" {
 		t.Errorf("id = %q, want nzb-2", id)
+	}
+
+	result, err := d.CheckCached(context.Background(), []string{"stub-usenet-hash"})
+	if err != nil {
+		t.Fatalf("CheckCached() error = %v", err)
+	}
+	if !result["stub-usenet-hash"] {
+		t.Errorf("CheckCached() result = %+v, want delegated to the inner provider", result)
 	}
 }
 
@@ -154,6 +165,9 @@ func (s *stubWebDownloadProvider) RequestZipDownloadLink(context.Context, Provid
 	return "https://example.test/webdl.zip", nil
 }
 func (s *stubWebDownloadProvider) Delete(context.Context, ProviderDownloadID, bool) error { return nil }
+func (s *stubWebDownloadProvider) CheckCached(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{"stub-webdl-hash": true}, nil
+}
 
 func TestDynamicWebDownloadProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.T) {
 	d := NewDynamicWebDownloadProvider("torbox")
@@ -182,6 +196,14 @@ func TestDynamicWebDownloadProvider_ErrorsBeforeSetAndDelegatesAfter(t *testing.
 	}
 	if status.State != StateCompleted {
 		t.Errorf("state = %q, want completed", status.State)
+	}
+
+	result, err := d.CheckCached(context.Background(), []string{"stub-webdl-hash"})
+	if err != nil {
+		t.Fatalf("CheckCached() error = %v", err)
+	}
+	if !result["stub-webdl-hash"] {
+		t.Errorf("CheckCached() result = %+v, want delegated to the inner provider", result)
 	}
 }
 
@@ -215,5 +237,40 @@ func TestDynamicTorrentProvider_Account(t *testing.T) {
 	}
 	if status.PlanName != "Pro" || !status.IsSubscribed || status.TotalBytesDownloaded != 1024 {
 		t.Errorf("status = %+v", status)
+	}
+}
+
+// stubTorrentInfoProvider is a stubTorrentProvider that also implements
+// TorrentInfoProvider, used to prove DynamicTorrentProvider.TorrentInfo
+// delegates via type assertion when the inner provider supports it — same
+// pattern as stubAccountingTorrentProvider/TestDynamicTorrentProvider_Account
+// above.
+type stubTorrentInfoProvider struct {
+	stubTorrentProvider
+}
+
+func (s *stubTorrentInfoProvider) TorrentInfo(context.Context, string) (TorrentInfo, error) {
+	return TorrentInfo{Name: "Preview.Me", SizeBytes: 999}, nil
+}
+
+func TestDynamicTorrentProvider_TorrentInfo(t *testing.T) {
+	d := NewDynamicTorrentProvider("torbox")
+
+	if _, err := d.TorrentInfo(context.Background(), "hash"); !errors.Is(err, ErrNoProvider) {
+		t.Errorf("TorrentInfo() error = %v, want ErrNoProvider before Set()", err)
+	}
+
+	d.Set(&stubTorrentProvider{name: "torbox"})
+	if _, err := d.TorrentInfo(context.Background(), "hash"); err == nil {
+		t.Error("TorrentInfo() error = nil, want an error since the inner provider doesn't implement TorrentInfoProvider")
+	}
+
+	d.Set(&stubTorrentInfoProvider{stubTorrentProvider{name: "torbox"}})
+	info, err := d.TorrentInfo(context.Background(), "hash")
+	if err != nil {
+		t.Fatalf("TorrentInfo() error = %v", err)
+	}
+	if info.Name != "Preview.Me" || info.SizeBytes != 999 {
+		t.Errorf("info = %+v", info)
 	}
 }

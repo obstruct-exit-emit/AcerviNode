@@ -105,6 +105,14 @@ func (p *WebDownloadProvider) Delete(ctx context.Context, id debrid.ProviderDown
 	return nil
 }
 
+func (p *WebDownloadProvider) CheckCached(ctx context.Context, hashes []string) (map[string]bool, error) {
+	result, err := p.client.CheckCachedWebDownloads(ctx, hashes)
+	if err != nil {
+		return nil, fmt.Errorf("torbox: web download check cached: %w", err)
+	}
+	return result, nil
+}
+
 func webDownloadToStatus(d WebDownload) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
 		ID:          debrid.ProviderDownloadID(formatID(d.ID)),

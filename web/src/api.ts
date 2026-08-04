@@ -213,6 +213,49 @@ export function addWebDownload(apiKey: string, input: { link: string; category?:
   })
 }
 
+// CheckCachedResponse is the shared shape of all three check-cached
+// endpoints below — reports whether the given magnet/URL/link is already
+// cached on the provider's side, without adding it.
+export interface CheckCachedResponse {
+  cached: boolean
+}
+
+export function checkCachedTorrent(apiKey: string, magnet: string): Promise<CheckCachedResponse> {
+  return request(`/api/v1/downloads/torrent/check-cached?magnet=${encodeURIComponent(magnet)}`, apiKey)
+}
+
+export function checkCachedUsenet(apiKey: string, url: string): Promise<CheckCachedResponse> {
+  return request(`/api/v1/downloads/usenet/check-cached?url=${encodeURIComponent(url)}`, apiKey)
+}
+
+export function checkCachedWebDownload(apiKey: string, link: string): Promise<CheckCachedResponse> {
+  return request(`/api/v1/downloads/webdl/check-cached?link=${encodeURIComponent(link)}`, apiKey)
+}
+
+export interface TorrentInfoFile {
+  path: string
+  size_bytes: number
+}
+
+// TorrentInfoResponse is GET /api/v1/downloads/torrent/info's response —
+// available is false (with no other fields, just error) whenever the
+// provider doesn't support previews, or TorBox couldn't find the torrent on
+// the network at all — routine, not something to show as an error.
+export interface TorrentInfoResponse {
+  available: boolean
+  error?: string
+  name?: string
+  hash?: string
+  size_bytes?: number
+  seeds?: number
+  peers?: number
+  files?: TorrentInfoFile[]
+}
+
+export function getTorrentInfo(apiKey: string, magnet: string): Promise<TorrentInfoResponse> {
+  return request(`/api/v1/downloads/torrent/info?magnet=${encodeURIComponent(magnet)}`, apiKey)
+}
+
 export interface ProviderSettings {
   [providerName: string]: { configured: boolean }
 }

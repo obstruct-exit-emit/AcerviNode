@@ -22,4 +22,9 @@ type UsenetProvider interface {
 	// return a not-implemented-style error rather than faking it locally.
 	RequestZipDownloadLink(ctx context.Context, id ProviderDownloadID) (string, error)
 	Delete(ctx context.Context, id ProviderDownloadID, deleteFiles bool) error
+	// CheckCached reports, per hash, whether the usenet download is already
+	// cached on the provider's side — see TorrentProvider.CheckCached's own
+	// doc comment for the shared reasoning. Providers without a cache-check
+	// endpoint may return all-false rather than implement real logic.
+	CheckCached(ctx context.Context, hashes []string) (map[string]bool, error)
 }

@@ -180,6 +180,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The "+ Add" form now shows whether a magnet/URL/link is already cached
+  on the provider before you commit to adding it, and previews a torrent's
+  real name/size/file list/seeders straight from the BitTorrent network.**
+  `CheckCached` existed at the client layer from early on but was never
+  actually wired up anywhere — found by asking directly what the official
+  TorBox API has that AcerviNode doesn't. Closed for all three kinds
+  (`GET /api/v1/downloads/{torrent,usenet,webdl}/check-cached`), plus a new
+  `GET /api/v1/downloads/torrent/info` metadata preview
+  (`debrid.TorrentInfoProvider`, an optional capability the same shape as
+  `AccountProvider`). Found live along the way: TorBox's own docs describe
+  the `checkcached` hash parameter as comma-separated, but a comma-joined
+  value consistently timed out against the real API — repeated `hash=`
+  params (what the existing, never-actually-exercised torrent
+  implementation already happened to send) is what genuinely works,
+  confirmed against two real hashes at once. Live-verified end to end: a
+  known-cached test torrent correctly reported `cached: true` with its real
+  name/size/seed-peer counts/6-file list, and a fabricated hash correctly
+  reported both `cached: false` and a routine `available: false` preview.
+  See docs/api.md#cached--metadata-previews.
+
 - **An admin can now add a download straight into the Managed pipeline**,
   not just Manual — requested directly after relabeling the "+ Add" button
   made the Manual-only behavior obvious enough to notice as a real gap. The

@@ -79,6 +79,18 @@ type torrentAdder interface {
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
+	// CheckCached backs GET /api/v1/downloads/torrent/check-cached — lets the
+	// "+ Add" form show whether a magnet is already cached before committing
+	// to adding it.
+	CheckCached(ctx context.Context, hashes []string) (map[string]bool, error)
+	// TorrentInfo backs GET /api/v1/downloads/torrent/info — previews a
+	// torrent's metadata (name/size/files/seeds/peers) by hash alone, before
+	// ever adding it. Every concrete provider passed into NewServer is
+	// *debrid.DynamicTorrentProvider, which always has this method (see its
+	// own doc comment for how it handles a provider that doesn't actually
+	// support the underlying capability) — so this is safe to require here
+	// rather than a runtime type assertion at the handler layer.
+	TorrentInfo(ctx context.Context, hash string) (debrid.TorrentInfo, error)
 }
 
 // usenetAdder is torrentAdder's usenet counterpart, backing
@@ -92,6 +104,9 @@ type usenetAdder interface {
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
+	// CheckCached backs GET /api/v1/downloads/usenet/check-cached — see
+	// torrentAdder.CheckCached's own doc comment for the shared reasoning.
+	CheckCached(ctx context.Context, hashes []string) (map[string]bool, error)
 }
 
 // webDownloadAdder is torrentAdder/usenetAdder's Web Downloads counterpart,
@@ -105,6 +120,9 @@ type webDownloadAdder interface {
 	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
 	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
 	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
+	// CheckCached backs GET /api/v1/downloads/webdl/check-cached — see
+	// torrentAdder.CheckCached's own doc comment for the shared reasoning.
+	CheckCached(ctx context.Context, hashes []string) (map[string]bool, error)
 }
 
 // GeneralInfo is AcerviNode's own runtime configuration, as reported to the
@@ -363,6 +381,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/downloads/torrent", s.requireAuth(s.handleAddTorrent))
 	s.mux.HandleFunc("POST /api/v1/downloads/usenet", s.requireAuth(s.handleAddUsenet))
 	s.mux.HandleFunc("POST /api/v1/downloads/webdl", s.requireAuth(s.handleAddWebDownload))
+	// Cached-status/metadata previews, all read-only and side-effect-free —
+	// same auth tier as the add endpoints above, since they exist purely to
+	// inform a decision the "+ Add" form is about to make.
+	s.mux.HandleFunc("GET /api/v1/downloads/torrent/check-cached", s.requireAuth(s.handleCheckCachedTorrent))
+	s.mux.HandleFunc("GET /api/v1/downloads/torrent/info", s.requireAuth(s.handleTorrentInfo))
+	s.mux.HandleFunc("GET /api/v1/downloads/usenet/check-cached", s.requireAuth(s.handleCheckCachedUsenet))
+	s.mux.HandleFunc("GET /api/v1/downloads/webdl/check-cached", s.requireAuth(s.handleCheckCachedWebDownload))
 	s.mux.HandleFunc("GET /api/v1/downloads/{id}", s.requireAuth(s.handleGetDownload))
 	s.mux.HandleFunc("DELETE /api/v1/downloads/{id}", s.requireAuth(s.handleDeleteDownload))
 	s.mux.HandleFunc("POST /api/v1/downloads/{id}/retry", s.requireAuth(s.handleRetryDownload))

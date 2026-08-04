@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -402,6 +404,139 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, toDownloadResponse(updated, live, fetchProgress, hasFetchProgress))
 }
 
+// --- Check cached & torrent info previews -----------------------------------
+
+// checkCachedResponse is the shared response shape for every check-cached
+// endpoint below.
+type checkCachedResponse struct {
+	Cached bool `json:"cached"`
+}
+
+// handleCheckCachedTorrent implements
+// GET /api/v1/downloads/torrent/check-cached — reports whether a magnet is
+// already cached on the provider's side, without adding it, so the "+ Add"
+// form can show it before commit. See debrid.TorrentProvider.CheckCached.
+func (s *Server) handleCheckCachedTorrent(w http.ResponseWriter, r *http.Request) {
+	if s.torrentProvider == nil {
+		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
+		return
+	}
+	hash := magnetHash(strings.TrimSpace(r.URL.Query().Get("magnet")))
+	if hash == "" {
+		http.Error(w, "magnet is required and must include a valid btih hash", http.StatusBadRequest)
+		return
+	}
+	result, err := s.torrentProvider.CheckCached(r.Context(), []string{hash})
+	if err != nil {
+		writeProviderError(w, "torrent", err)
+		return
+	}
+	writeJSON(w, checkCachedResponse{Cached: result[hash]})
+}
+
+// handleCheckCachedUsenet is handleCheckCachedTorrent's usenet counterpart —
+// GET /api/v1/downloads/usenet/check-cached. The hash TorBox actually wants
+// here isn't a torrent-style infohash — per its own docs, it's an MD5 of the
+// NZB link itself (see md5Hex).
+func (s *Server) handleCheckCachedUsenet(w http.ResponseWriter, r *http.Request) {
+	if s.usenetProvider == nil {
+		http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
+		return
+	}
+	nzbURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if nzbURL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return
+	}
+	hash := md5Hex(nzbURL)
+	result, err := s.usenetProvider.CheckCached(r.Context(), []string{hash})
+	if err != nil {
+		writeProviderError(w, "usenet", err)
+		return
+	}
+	writeJSON(w, checkCachedResponse{Cached: result[hash]})
+}
+
+// handleCheckCachedWebDownload is handleCheckCachedTorrent's Web Downloads
+// counterpart — GET /api/v1/downloads/webdl/check-cached. Per TorBox's docs,
+// the hash is an MD5 of the link itself.
+func (s *Server) handleCheckCachedWebDownload(w http.ResponseWriter, r *http.Request) {
+	if s.webDownloadProvider == nil {
+		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
+		return
+	}
+	link := strings.TrimSpace(r.URL.Query().Get("link"))
+	if link == "" {
+		http.Error(w, "link is required", http.StatusBadRequest)
+		return
+	}
+	hash := md5Hex(link)
+	result, err := s.webDownloadProvider.CheckCached(r.Context(), []string{hash})
+	if err != nil {
+		writeProviderError(w, "web download", err)
+		return
+	}
+	writeJSON(w, checkCachedResponse{Cached: result[hash]})
+}
+
+// torrentInfoResponse is GET /api/v1/downloads/torrent/info's response —
+// Available mirrors handleGetAccountStatus's own "available: false" style:
+// a provider that doesn't support previews, or a torrent TorBox couldn't
+// find on the network within its own search window, is routine, not a hard
+// error.
+type torrentInfoResponse struct {
+	Available bool                      `json:"available"`
+	Error     string                    `json:"error,omitempty"`
+	Name      string                    `json:"name,omitempty"`
+	Hash      string                    `json:"hash,omitempty"`
+	SizeBytes int64                     `json:"size_bytes,omitempty"`
+	Seeds     int64                     `json:"seeds,omitempty"`
+	Peers     int64                     `json:"peers,omitempty"`
+	Files     []torrentInfoFileResponse `json:"files,omitempty"`
+}
+
+type torrentInfoFileResponse struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// handleTorrentInfo implements GET /api/v1/downloads/torrent/info —
+// previews a torrent's metadata (name, size, file list, seeders/peers)
+// straight from the BitTorrent network, by hash alone, before ever adding
+// it.
+func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
+	if s.torrentProvider == nil {
+		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
+		return
+	}
+	hash := strings.TrimSpace(r.URL.Query().Get("hash"))
+	if hash == "" {
+		hash = magnetHash(strings.TrimSpace(r.URL.Query().Get("magnet")))
+	}
+	if hash == "" {
+		http.Error(w, "hash, or magnet with a valid btih hash, is required", http.StatusBadRequest)
+		return
+	}
+	info, err := s.torrentProvider.TorrentInfo(r.Context(), hash)
+	if err != nil {
+		writeJSON(w, torrentInfoResponse{Available: false, Error: err.Error()})
+		return
+	}
+	files := make([]torrentInfoFileResponse, len(info.Files))
+	for i, f := range info.Files {
+		files[i] = torrentInfoFileResponse{Path: f.Path, SizeBytes: f.SizeBytes}
+	}
+	writeJSON(w, torrentInfoResponse{
+		Available: true,
+		Name:      info.Name,
+		Hash:      info.Hash,
+		SizeBytes: info.SizeBytes,
+		Seeds:     info.Seeds,
+		Peers:     info.Peers,
+		Files:     files,
+	})
+}
+
 // deleterForKind returns the deleter for a download's kind, mirroring
 // handleDeleteDownload's own switch.
 func (s *Server) deleterForKind(kind database.Kind) deleter {
@@ -474,6 +609,15 @@ func readFormFile(header *multipart.FileHeader) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(f)
+}
+
+// md5Hex computes an MD5 of s and returns its lowercase hex encoding — what
+// TorBox's usenet/webdl checkcached endpoints expect in place of a real
+// hash (see torbox.Client.CheckCachedUsenet/CheckCachedWebDownloads' own doc
+// comments): an MD5 of the link itself.
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // magnetHash extracts the infohash from a magnet URI's xt=urn:btih:HASH

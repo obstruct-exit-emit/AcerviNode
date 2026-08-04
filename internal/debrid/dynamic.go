@@ -153,6 +153,21 @@ func (d *DynamicTorrentProvider) Account(ctx context.Context) (AccountStatus, er
 	return ap.Account(ctx)
 }
 
+// TorrentInfo satisfies debrid.TorrentInfoProvider by delegating to the
+// current inner provider, if it happens to implement TorrentInfoProvider too
+// — same type-assertion-through-the-live-swap approach as Account above.
+func (d *DynamicTorrentProvider) TorrentInfo(ctx context.Context, hash string) (TorrentInfo, error) {
+	p, err := d.current()
+	if err != nil {
+		return TorrentInfo{}, err
+	}
+	tip, ok := p.(TorrentInfoProvider)
+	if !ok {
+		return TorrentInfo{}, fmt.Errorf("debrid: provider %q does not support torrent info previews", d.name)
+	}
+	return tip.TorrentInfo(ctx, hash)
+}
+
 // DynamicUsenetProvider is DynamicTorrentProvider's counterpart for
 // UsenetProvider — see its docs for the rationale.
 type DynamicUsenetProvider struct {
@@ -252,6 +267,14 @@ func (d *DynamicUsenetProvider) Delete(ctx context.Context, id ProviderDownloadI
 	return p.Delete(ctx, id, deleteFiles)
 }
 
+func (d *DynamicUsenetProvider) CheckCached(ctx context.Context, hashes []string) (map[string]bool, error) {
+	p, err := d.current()
+	if err != nil {
+		return nil, err
+	}
+	return p.CheckCached(ctx, hashes)
+}
+
 // DynamicWebDownloadProvider is DynamicTorrentProvider's counterpart for
 // WebDownloadProvider — see its docs for the rationale.
 type DynamicWebDownloadProvider struct {
@@ -341,4 +364,12 @@ func (d *DynamicWebDownloadProvider) Delete(ctx context.Context, id ProviderDown
 		return err
 	}
 	return p.Delete(ctx, id, deleteFiles)
+}
+
+func (d *DynamicWebDownloadProvider) CheckCached(ctx context.Context, hashes []string) (map[string]bool, error) {
+	p, err := d.current()
+	if err != nil {
+		return nil, err
+	}
+	return p.CheckCached(ctx, hashes)
 }

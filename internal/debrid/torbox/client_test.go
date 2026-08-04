@@ -271,6 +271,133 @@ func TestCheckCachedTorrents(t *testing.T) {
 	}
 }
 
+// TestCheckCachedTorrents_SendsRepeatedHashParams guards against a real,
+// live-confirmed API quirk: TorBox's docs describe the hash query param as
+// "comma separated," but a comma-joined value consistently timed out against
+// the real API (curl exit 28, twice in a row) — repeated hash= params is
+// what actually works, confirmed to correctly return every cached hash
+// requested, even for two at once. See checkCached's own doc comment.
+func TestCheckCachedTorrents_SendsRepeatedHashParams(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got := r.URL.Query()["hash"]
+		want := []string{"aaa", "bbb"}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("hash query params = %v, want %v (repeated, not comma-joined)", got, want)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{}})
+	})
+	if _, err := client.CheckCachedTorrents(context.Background(), []string{"aaa", "bbb"}); err != nil {
+		t.Fatalf("CheckCachedTorrents() error = %v", err)
+	}
+}
+
+func TestCheckCachedUsenet(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/usenet/checkcached" {
+			t.Errorf("path = %s", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"deadbeef": map[string]any{"hash": "deadbeef"},
+			},
+		})
+	})
+
+	got, err := client.CheckCachedUsenet(context.Background(), []string{"deadbeef", "notcached"})
+	if err != nil {
+		t.Fatalf("CheckCachedUsenet() error = %v", err)
+	}
+	if !got["deadbeef"] {
+		t.Error("deadbeef should be reported cached")
+	}
+	if got["notcached"] {
+		t.Error("notcached should be reported not cached")
+	}
+}
+
+func TestCheckCachedWebDownloads(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/webdl/checkcached" {
+			t.Errorf("path = %s", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"cafef00d": map[string]any{"hash": "cafef00d"},
+			},
+		})
+	})
+
+	got, err := client.CheckCachedWebDownloads(context.Background(), []string{"cafef00d", "notcached"})
+	if err != nil {
+		t.Fatalf("CheckCachedWebDownloads() error = %v", err)
+	}
+	if !got["cafef00d"] {
+		t.Error("cafef00d should be reported cached")
+	}
+	if got["notcached"] {
+		t.Error("notcached should be reported not cached")
+	}
+}
+
+func TestTorrentInfo(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/api/torrents/torrentinfo" {
+			t.Errorf("path = %s", got)
+		}
+		if got := r.URL.Query().Get("hash"); got != "abc123" {
+			t.Errorf("hash query param = %q, want abc123", got)
+		}
+		if got := r.URL.Query().Get("timeout"); got != "15" {
+			t.Errorf("timeout query param = %q, want 15", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"name": "Test.Torrent", "hash": "abc123", "size": 12345,
+				"seeds": 10, "peers": 3,
+				"files": []map[string]any{
+					{"name": "Test.Torrent/file.mkv", "size": 12000},
+				},
+			},
+		})
+	})
+
+	got, err := client.TorrentInfo(context.Background(), "abc123", 15)
+	if err != nil {
+		t.Fatalf("TorrentInfo() error = %v", err)
+	}
+	if got.Name != "Test.Torrent" || got.Size != 12345 || got.Seeds != 10 || got.Peers != 3 {
+		t.Errorf("TorrentInfo() = %+v", got)
+	}
+	if len(got.Files) != 1 || got.Files[0].Name != "Test.Torrent/file.mkv" || got.Files[0].Size != 12000 {
+		t.Errorf("TorrentInfo() files = %+v", got.Files)
+	}
+}
+
+// TestTorrentInfo_NotFoundSurfacesError guards the real, live-confirmed
+// failure shape: a torrent TorBox can't find enough peers for within its own
+// search window comes back a plain HTTP 500 with a real error detail, not a
+// 200 with empty data — confirmed live against the real API with a
+// fabricated hash.
+func TestTorrentInfo_NotFoundSurfacesError(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"error":   "UNKNOWN_ERROR",
+			"detail":  "Could not download full metadata for the torrent.",
+			"data":    map[string]any{"name": nil, "hash": "0000", "size": nil, "seeds": 0, "peers": 0, "files": nil},
+		})
+	})
+
+	_, err := client.TorrentInfo(context.Background(), "0000", 0)
+	if err == nil {
+		t.Fatal("TorrentInfo() error = nil, want an error for a torrent TorBox couldn't find")
+	}
+}
+
 func TestListQueued(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/v1/api/queued/getqueued" {
