@@ -31,9 +31,9 @@ export function supportsDirectoryPicker(): boolean {
 // link, which already downloads reliably as a plain link — the provider's
 // own response sets Content-Disposition there.
 export async function forceDownload(url: string, filename: string): Promise<void> {
-  const resp = await fetch(url)
+  const resp = await fetchWithIdleTimeout(url, DEFAULT_IDLE_TIMEOUT_MS)
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-  const blob = await resp.blob()
+  const blob = await readBlobWithIdleTimeout(resp, DEFAULT_IDLE_TIMEOUT_MS)
   const blobUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = blobUrl
@@ -120,6 +120,31 @@ function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, idleTime
       },
     )
   })
+}
+
+// readBlobWithIdleTimeout is forceDownload's counterpart to
+// writeFileToDirectory's own idle-timeout wiring below — Response.blob()
+// has no per-chunk hook to protect, so this reads the body manually via the
+// same readWithIdleTimeout helper and reassembles it into a Blob
+// afterward, rather than buffering with zero stall protection the way a
+// plain await response.blob() does.
+async function readBlobWithIdleTimeout(response: Response, idleTimeoutMs: number): Promise<Blob> {
+  if (!response.body) {
+    return response.blob() // no body at all (e.g. a 204) — nothing to protect
+  }
+  const reader = response.body.getReader()
+  const chunks: BlobPart[] = []
+  try {
+    while (true) {
+      const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs)
+      if (done) break
+      chunks.push(value)
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => {})
+    throw err
+  }
+  return new Blob(chunks)
 }
 
 // writeFileToDirectory streams a fetch Response's body straight to disk

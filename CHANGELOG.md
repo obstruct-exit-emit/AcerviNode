@@ -24,17 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   docs/configuration.md and the Settings UI's relabeled "Import fetch idle
   timeout" field.
 
-- **The browser-side streamed downloads (Manual downloads' "Download all" →
-  folder, both the in-tab path and the Downloads popup window) had no
-  idle/stall protection at all** — the same class of bug as the backend fix
-  above, just on the frontend. A stalled provider CDN link left the
-  progress bar frozen forever with no error and no way to notice short of
-  watching it stop moving; the popup's own manual Stop button was the only
-  recourse there, and the in-tab path didn't even have that. Fixed the same
-  way: `fsAccess.ts`'s `writeFileToDirectory` now resets a 600s-default idle
-  deadline on every chunk actually written, and a new `fetchWithIdleTimeout`
-  covers the connect-and-wait-for-headers phase before that. A transfer
-  that's slow but genuinely still receiving data is unaffected either way.
+- **Every browser-side download path had no idle/stall protection at
+  all** — the same class of bug as the backend fix above, just on the
+  frontend. A stalled provider CDN link left a progress bar (or, for a
+  single-file download, the browser itself) frozen forever with no error
+  and no way to notice short of watching it stop moving; the Downloads
+  popup window's own manual Stop button was the only recourse for that one
+  path, and neither the in-tab streaming path nor the plain per-file
+  "Download" button (and its Firefox/Safari individual-files fallback) had
+  even that. Fixed the same way across all three: `fsAccess.ts`'s
+  `writeFileToDirectory` (the streamed-to-folder paths) resets a
+  600s-default idle deadline on every chunk actually written, a new
+  `readBlobWithIdleTimeout` gives `forceDownload` (the plain-download path,
+  previously a bare `await response.blob()` with zero protection) the same
+  per-chunk protection, and a new `fetchWithIdleTimeout` covers the
+  connect-and-wait-for-headers phase before either of those for all three
+  paths. A transfer that's slow but genuinely still receiving data is
+  unaffected either way.
 
 - **Every NZB-sourced Managed import failed outright in Radarr/Sonarr** with
   "Access to the path ... is denied," even though the download showed
