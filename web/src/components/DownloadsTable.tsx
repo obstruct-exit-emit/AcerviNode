@@ -130,12 +130,21 @@ export function DownloadsTable({
                 {/* Only worth showing while actually moving — a completed,
                     queued, or stalled download's ETA is 0/unknown and would
                     just be noise here (the full breakdown, including why
-                    it's stalled, lives in the detail view). */}
-                {d.state === 'downloading' && d.eta_seconds > 0 && (
+                    it's stalled, lives in the detail view). Also gated on
+                    !d.phase — found live: TorBox's own eta doesn't
+                    necessarily reset to 0 the moment a usenet download
+                    finishes transferring and moves into a phase
+                    (verifying/repairing/extracting/processing), so a stale
+                    leftover value could sit frozen next to "Processing"
+                    indefinitely. ETA describes time remaining to download —
+                    once any phase is active the transfer is already over,
+                    so it's structurally meaningless there regardless of
+                    what the provider happens to still report. */}
+                {d.state === 'downloading' && !d.phase && d.eta_seconds > 0 && (
                   <span className="progress-eta"> · {formatDuration(d.eta_seconds)}</span>
                 )}
               </span>
-              {d.state === 'downloading' && d.download_speed_bytes > 0 && (
+              {d.state === 'downloading' && !d.phase && d.download_speed_bytes > 0 && (
                 <div className="progress-speed">{formatSpeed(d.download_speed_bytes)}</div>
               )}
             </td>

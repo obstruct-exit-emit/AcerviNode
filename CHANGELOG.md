@@ -6,7 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **The web UI now detects when it's running a stale build and prompts you
+  to reload.** It's a long-lived SPA — nothing re-fetches its own JS once
+  loaded, so a tab left open across a deploy would silently keep running
+  old code indefinitely, which is exactly how a just-shipped fix went
+  unnoticed until a manual hard refresh. `App.tsx` already polls
+  `GET /api/v1/version` every few seconds; the version seen on the first
+  poll is now kept as a baseline, and a later mismatch shows a small
+  dismissible "A new version of AcerviNode is available" banner with a
+  Reload button — deliberately a prompt, not a forced reload, since the tab
+  could be mid-form-fill or mid-edit in Settings when a deploy happens
+  elsewhere. Deliberately not applied to the Downloads popup window, where
+  a forced reload could interrupt an actual in-progress download — the
+  exact thing that window exists to survive even the main tab closing.
+  Verified live: deployed two builds with different stamped versions back
+  to back without touching the open tab, and watched the banner appear on
+  its own within one poll tick.
+
 ### Fixed
+
+- **A usenet download's ETA/speed could stay frozen at a stale value
+  (e.g. "1s") the entire time it showed "Processing".** Found live,
+  immediately after the phase-badge fix below shipped: TorBox's own `eta`/
+  `download_speed` fields don't necessarily reset to 0 the moment a usenet
+  download finishes transferring and moves into a phase — AcerviNode was
+  passing whatever it last reported straight through. Both describe the
+  transfer itself, which is already over by the time any phase is active,
+  so they're structurally meaningless there regardless of what the
+  provider happens to still report — now suppressed in both the table and
+  detail view whenever a phase is present, not just gated on state.
 
 - **Neither the downloads table nor the detail view's state badge showed a
   usenet download's phase** (verifying/repairing/extracting/processing) —

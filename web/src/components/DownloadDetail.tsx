@@ -161,13 +161,19 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
                   values are 0/stale and would just be confusing here. */}
               {detail.state === 'downloading' && (
                 <>
-                  {detail.eta_seconds > 0 && (
+                  {/* Also gated on !detail.phase — see DownloadsTable's
+                      identical guard for why: TorBox's own eta/speed don't
+                      necessarily reset to 0 the moment a usenet download
+                      finishes transferring and moves into a phase, and both
+                      describe the transfer itself, which is already over by
+                      then regardless of what's still being reported. */}
+                  {!detail.phase && detail.eta_seconds > 0 && (
                     <div>
                       <dt>ETA</dt>
                       <dd>{formatDuration(detail.eta_seconds)}</dd>
                     </div>
                   )}
-                  {detail.download_speed_bytes > 0 && (
+                  {!detail.phase && detail.download_speed_bytes > 0 && (
                     <div>
                       <dt>Speed</dt>
                       <dd>{formatSpeed(detail.download_speed_bytes)}</dd>

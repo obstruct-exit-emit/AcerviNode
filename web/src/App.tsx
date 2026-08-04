@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   deleteDownload,
@@ -55,6 +55,18 @@ export default function App() {
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null)
   const [view, setView] = useState<View>('manual')
   const [version, setVersion] = useState<string>('')
+  // Set once, on the first successful poll — the baseline this tab loaded
+  // with. Compared against every later poll's version so a deploy while the
+  // tab is already open (it's a long-lived SPA; nothing else ever re-fetches
+  // its own JS) surfaces an "Update available" prompt instead of silently
+  // running stale indefinitely. A prompt, not a forced reload — this tab
+  // could be sitting on a filled-out Add-download form, or mid-edit in
+  // Settings, when a deploy happens elsewhere; the user decides when to
+  // reload, same reasoning as (and deliberately not applied to) the
+  // Downloads popup window, where a forced reload mid-transfer would
+  // actually interrupt an in-progress download.
+  const initialVersionRef = useRef<string | null>(null)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   // Both tabs' downloads are kept loaded regardless of which is active, so
   // switching tabs is instant and doesn't need its own loading state.
@@ -164,6 +176,11 @@ export default function App() {
           listDownloads(key, 'arr'),
           listDownloads(key, 'manual'),
         ])
+        if (initialVersionRef.current === null) {
+          initialVersionRef.current = v.version
+        } else if (v.version !== initialVersionRef.current) {
+          setUpdateAvailable(true)
+        }
         setVersion(v.version)
         setProviders(p)
         setManagedDownloads(managed)
@@ -523,6 +540,17 @@ export default function App() {
 
   return (
     <div className="app">
+      {updateAvailable && (
+        <div className="update-banner">
+          <span>A new version of AcerviNode is available.</span>
+          <button className="update-banner-reload" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+          <button className="update-banner-dismiss" onClick={() => setUpdateAvailable(false)} title="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
       <header className="app-header">
         <h1>📦 AcerviNode</h1>
         <div className="header-meta">
