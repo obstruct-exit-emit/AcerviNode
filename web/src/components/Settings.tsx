@@ -35,9 +35,26 @@ import { SecuritySettings } from './SecuritySettings'
 // text-only. Smaller than LibriNode's own six groups, too — AcerviNode's
 // whole settings surface is one provider, categories, and login accounts,
 // not a full media-manager's worth of libraries/quality profiles/indexers.
+// Reorganized (2026-08-04, requested directly) — General's "Import &
+// cleanup" section had grown to 10 fields across 5 genuinely unrelated
+// concerns (retry/concurrency, fetch timeout, two different retention
+// policies, a stuck-download watchdog, file filtering), each new feature
+// this session having nowhere better to land than that one catch-all.
+// Split into three focused groups (Import/Filtering/Cleanup) instead —
+// General keeps only what it always had otherwise: API key, instance
+// identity, HTTPS. Provider's own "Polling & timeout" section (import
+// interval, fast poll interval, provider request timeout) deliberately
+// stays put rather than merging into Import — those are specifically about
+// how often/how patiently AcerviNode talks to *this* provider, which would
+// need to be per-provider if Phase 4 (multi-provider) ever unblocks, unlike
+// Import's retry/concurrency/fetch-timeout fields, which apply to the
+// fetch-to-disk pipeline regardless of which provider a download came from.
 const settingsGroups = [
-  { name: 'General', blurb: "This instance's API key and import/cleanup behavior." },
+  { name: 'General', blurb: "This instance's API key, network, and logging." },
   { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through, and how often it polls it.' },
+  { name: 'Import', blurb: 'How a completed download gets fetched to local disk: retries, concurrency, and timeouts.' },
+  { name: 'Filtering', blurb: 'Skip specific files, by size or name pattern, when fetching a download to local disk.' },
+  { name: 'Cleanup', blurb: 'Automatically remove a finished, errored, or stuck download after a while.' },
   { name: 'Categories', blurb: 'Pre-register categories for Sonarr/Radarr, and optionally redirect their downloads to a specific directory.' },
   { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
   { name: 'Security', blurb: 'Login accounts on top of the API key, and their roles.' },
@@ -460,126 +477,6 @@ export function Settings({ apiKey }: Props) {
 
           {form && (
             <form className="settings-form-stack" onSubmit={handleGeneralSubmit}>
-              <Section title="Import & cleanup" help="Applies immediately, no restart needed.">
-                <div className="general-form">
-                  <label>
-                    Import max retries
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.import_max_retries}
-                      onChange={(e) => setForm({ ...form, import_max_retries: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Max concurrent downloads
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.max_concurrent_downloads}
-                      onChange={(e) => setForm({ ...form, max_concurrent_downloads: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Import fetch idle timeout (seconds)
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.import_fetch_timeout_seconds}
-                      onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Clean up Managed downloads after (days, 0 = off)
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.cleanup_after_days}
-                      onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Clean up errored downloads after (days, 0 = off)
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.cleanup_error_after_days}
-                      onChange={(e) => setForm({ ...form, cleanup_error_after_days: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Stuck download timeout (minutes, 0 = off)
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.stuck_download_timeout_minutes}
-                      onChange={(e) => setForm({ ...form, stuck_download_timeout_minutes: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Minimum file size to fetch (bytes, 0 = off)
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.min_fetch_file_size_bytes}
-                      onChange={(e) => setForm({ ...form, min_fetch_file_size_bytes: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Maximum file size to fetch (bytes, 0 = off)
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.max_fetch_file_size_bytes}
-                      onChange={(e) => setForm({ ...form, max_fetch_file_size_bytes: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Include files matching (regex, blank = off)
-                    <input
-                      type="text"
-                      placeholder={String.raw`\.(mkv|mp4)$`}
-                      value={form.include_file_regex}
-                      onChange={(e) => setForm({ ...form, include_file_regex: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Exclude files matching (regex, blank = off)
-                    <input
-                      type="text"
-                      placeholder="sample"
-                      value={form.exclude_file_regex}
-                      onChange={(e) => setForm({ ...form, exclude_file_regex: e.target.value })}
-                    />
-                  </label>
-                </div>
-                <p className="settings-help">
-                  Import max retries is how many times a failed fetch-to-disk attempt is retried before a Managed
-                  download is given up on and moved to "error". Max concurrent downloads bounds how many
-                  provider_completed downloads are fetched to disk at once (previously always strictly one at a
-                  time). The fetch idle timeout only fires after this many seconds pass with zero bytes received —
-                  a large file on a slow connection that's still steadily, actively transferring is never affected
-                  by this however long the whole download takes; only a connection that's actually gone quiet (stuck
-                  connecting, or stalled mid-transfer) trips it. Cleanup only ever touches a Managed download once
-                  it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
-                  a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). See the
-                  Provider tab for how often AcerviNode polls the debrid provider itself.
-                </p>
-                <p className="settings-help">
-                  Cleanup for errored downloads is separate from the one above, and applies to both Managed and
-                  Manual downloads — an error already means AcerviNode gave up (retry-exhausted) or the provider
-                  itself lost track of it, not an in-progress state worth preserving. The stuck download timeout
-                  auto-errors a download that's sat queued/downloading with no genuine change reported by the
-                  provider for this long — keyed on whether anything actually changed, not simply how long it's
-                  been running, so a large download still steadily making progress on a slow connection is never
-                  affected, however long the whole thing takes. Minimum/maximum file size and the include/exclude
-                  patterns (matched against each file's path within the download, e.g. "Show/episode.en.srt") apply
-                  when fetching a download's files to local disk — skip samples/junk, an oversized bonus file, or
-                  only fetch certain file types. Any combination can be set at once; a file has to satisfy all of
-                  them to be kept.
-                </p>
-              </Section>
-
               <Section title="Instance">
                 <div className="general-form">
                   <label>
@@ -870,6 +767,177 @@ export function Settings({ apiKey }: Props) {
             </Section>
           )}
             </>
+          )}
+        </section>
+      )}
+
+      {group === 'Import' && (
+        <section className="settings-card">
+          <h2>Import</h2>
+          <p className="settings-help">
+            Import max retries is how many times a failed fetch-to-disk attempt is retried before a Managed
+            download is given up on and moved to "error". Max concurrent downloads bounds how many
+            provider_completed downloads are fetched to disk at once. The fetch idle timeout only fires after
+            this many seconds pass with zero bytes received — a large file on a slow connection that's still
+            steadily, actively transferring is never affected by this however long the whole download takes;
+            only a connection that's actually gone quiet (stuck connecting, or stalled mid-transfer) trips it.
+            See the Provider tab for how often AcerviNode polls the debrid provider itself — a separate
+            concern from how the fetch-to-disk pipeline itself behaves once a download's actually being
+            fetched.
+          </p>
+          {form && (
+            <form className="settings-form-stack" onSubmit={handleGeneralSubmit}>
+              <div className="general-form">
+                <label>
+                  Import max retries
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.import_max_retries}
+                    onChange={(e) => setForm({ ...form, import_max_retries: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Max concurrent downloads
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.max_concurrent_downloads}
+                    onChange={(e) => setForm({ ...form, max_concurrent_downloads: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Import fetch idle timeout (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.import_fetch_timeout_seconds}
+                    onChange={(e) => setForm({ ...form, import_fetch_timeout_seconds: Number(e.target.value) })}
+                  />
+                </label>
+                <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                  {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+              {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+            </form>
+          )}
+        </section>
+      )}
+
+      {group === 'Filtering' && (
+        <section className="settings-card">
+          <h2>Filtering</h2>
+          <p className="settings-help">
+            Minimum/maximum file size and the include/exclude patterns (matched against each file's path
+            within the download, e.g. "Show/episode.en.srt") apply when fetching a download's files to local
+            disk — skip samples/junk, an oversized bonus file, or only fetch certain file types. Any
+            combination can be set at once; a file has to satisfy all of them to be kept. Purely local — never
+            changes what the provider itself considers part of the download, only which of its files actually
+            get written to disk.
+          </p>
+          {form && (
+            <form className="settings-form-stack" onSubmit={handleGeneralSubmit}>
+              <div className="general-form">
+                <label>
+                  Minimum file size to fetch (bytes, 0 = off)
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.min_fetch_file_size_bytes}
+                    onChange={(e) => setForm({ ...form, min_fetch_file_size_bytes: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Maximum file size to fetch (bytes, 0 = off)
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.max_fetch_file_size_bytes}
+                    onChange={(e) => setForm({ ...form, max_fetch_file_size_bytes: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Include files matching (regex, blank = off)
+                  <input
+                    type="text"
+                    placeholder={String.raw`\.(mkv|mp4)$`}
+                    value={form.include_file_regex}
+                    onChange={(e) => setForm({ ...form, include_file_regex: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Exclude files matching (regex, blank = off)
+                  <input
+                    type="text"
+                    placeholder="sample"
+                    value={form.exclude_file_regex}
+                    onChange={(e) => setForm({ ...form, exclude_file_regex: e.target.value })}
+                  />
+                </label>
+                <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                  {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+              {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+            </form>
+          )}
+        </section>
+      )}
+
+      {group === 'Cleanup' && (
+        <section className="settings-card">
+          <h2>Cleanup</h2>
+          <p className="settings-help">
+            Cleanup only ever touches a Managed download once it's reached "ready for import" (already handed
+            off to Sonarr/Radarr) and stayed there this long — a Manual download is never auto-deleted this
+            way. Cleanup for errored downloads is separate, and applies to both Managed and Manual downloads —
+            an error already means AcerviNode gave up (retry-exhausted) or the provider itself lost track of
+            it, not an in-progress state worth preserving. The stuck download timeout auto-errors a download
+            that's sat queued/downloading with no genuine change reported by the provider for this long —
+            keyed on whether anything actually changed, not simply how long it's been running, so a large
+            download still steadily making progress on a slow connection is never affected however long the
+            whole thing takes. 0 disables each of these independently (the default).
+          </p>
+          {form && (
+            <form className="settings-form-stack" onSubmit={handleGeneralSubmit}>
+              <div className="general-form">
+                <label>
+                  Clean up Managed downloads after (days, 0 = off)
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.cleanup_after_days}
+                    onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Clean up errored downloads after (days, 0 = off)
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.cleanup_error_after_days}
+                    onChange={(e) => setForm({ ...form, cleanup_error_after_days: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Stuck download timeout (minutes, 0 = off)
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.stuck_download_timeout_minutes}
+                    onChange={(e) => setForm({ ...form, stuck_download_timeout_minutes: Number(e.target.value) })}
+                  />
+                </label>
+                <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                  {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+              {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
+            </form>
           )}
         </section>
       )}

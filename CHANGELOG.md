@@ -64,6 +64,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to back without touching the open tab, and watched the banner appear on
   its own within one poll tick.
 
+### Changed
+
+- **Settings reorganized: three new focused groups split out of a General
+  tab that had grown to a 10-field "Import & cleanup" section covering five
+  genuinely unrelated concerns.** Requested directly, after Settings itself
+  hit the trigger an earlier decision had already flagged for revisiting
+  the section-not-tabs layout ("revisit if Settings keeps growing" —
+  Phase 3). Every feature landed this session (TLS, the file filters, the
+  stuck-download watchdog, error cleanup) had nowhere better to go than
+  that one catch-all, so it kept absorbing more. Split into:
+  - **Import** — retry count, max concurrent downloads, fetch idle timeout.
+  - **Filtering** — the min/max file size and include/exclude regex filters.
+  - **Cleanup** — the two retention policies and the stuck-download
+    watchdog.
+
+  General now holds only what it always had otherwise: API key, instance
+  identity (port/log level/download dir/permissions), and HTTPS. Provider's
+  own "Polling & timeout" section deliberately stays where it is rather
+  than merging into Import — it's specifically about how often AcerviNode
+  talks to *this* provider (would need to be per-provider if multi-provider
+  support ever lands), unlike Import's fields, which apply to the
+  fetch-to-disk pipeline regardless of which provider a download came
+  from. No backend change — purely a UI reorganization, same shared
+  settings object and save path (`handleGeneralSubmit`) every section
+  already used.
+
 ### Fixed
 
 - **A usenet download's ETA/speed could stay frozen at a stale value
