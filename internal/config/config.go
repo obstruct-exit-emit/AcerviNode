@@ -102,6 +102,14 @@ type Config struct {
 	// samples, .nfo/.txt junk, and similar. 0 (the default) fetches every
 	// file the provider reports, same as before this existed.
 	MinFetchFileSizeBytes int64 `yaml:"min_fetch_file_size_bytes"`
+	// MaxFetchFileSizeBytes, if > 0, has internal/importer skip any file
+	// larger than this when fetching a download's files to local disk —
+	// e.g. an oversized bonus/extra bundled alongside the main file. 0 (the
+	// default) fetches every file regardless of size, same as
+	// MinFetchFileSizeBytes's own default. Found comparing against
+	// decypharr's own settings (MinFileSize/MaxFileSize), the symmetric
+	// counterpart to the minimum above.
+	MaxFetchFileSizeBytes int64 `yaml:"max_fetch_file_size_bytes"`
 	// IncludeFileRegex, if set, has internal/importer skip any file whose
 	// path doesn't match it when fetching a download's files to local disk
 	// — e.g. only video file extensions. Can be combined with
@@ -217,6 +225,7 @@ func defaults() *Config {
 		CategoryPaths:                 map[string]string{},
 		TLSPort:                       8443,
 		MinFetchFileSizeBytes:         0,
+		MaxFetchFileSizeBytes:         0,
 		StuckDownloadTimeoutMinutes:   0,
 		CleanupErrorAfterDays:         0,
 	}
@@ -327,6 +336,11 @@ func applyEnv(cfg *Config) {
 			cfg.MinFetchFileSizeBytes = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_MAX_FETCH_FILE_SIZE_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.MaxFetchFileSizeBytes = n
+		}
+	}
 	if v := os.Getenv("ACERVINODE_INCLUDE_FILE_REGEX"); v != "" {
 		cfg.IncludeFileRegex = v
 	}
@@ -432,6 +446,12 @@ func (c *Config) Validate() error {
 	}
 	if c.MinFetchFileSizeBytes < 0 {
 		return fmt.Errorf("min_fetch_file_size_bytes must not be negative")
+	}
+	if c.MaxFetchFileSizeBytes < 0 {
+		return fmt.Errorf("max_fetch_file_size_bytes must not be negative")
+	}
+	if c.MaxFetchFileSizeBytes > 0 && c.MinFetchFileSizeBytes > c.MaxFetchFileSizeBytes {
+		return fmt.Errorf("min_fetch_file_size_bytes must not be greater than max_fetch_file_size_bytes")
 	}
 	if c.IncludeFileRegex != "" {
 		if _, err := regexp.Compile(c.IncludeFileRegex); err != nil {

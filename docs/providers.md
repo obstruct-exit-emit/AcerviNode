@@ -761,23 +761,30 @@ Requested directly, comparing AcerviNode's settings against
 [rdt-client](https://github.com/rogerfar/rdt-client)'s own — it can skip
 files under a minimum size (samples, `.nfo`/`.txt` junk) and include/exclude
 by regex; AcerviNode fetched every file the provider reported, no filtering
-at all, before this. `min_fetch_file_size_bytes`/`include_file_regex`/
-`exclude_file_regex` (`config.Config`, all disabled — `0`/empty — by
-default) are checked by `Importer.filterFiles`, called from
-`processDownload` right after the provider's own file list comes back and
-before any of them are fetched. A file is kept only if it's at least the
-minimum size **and** (no include pattern, or its path matches it) **and**
-(no exclude pattern, or its path doesn't match it) — include and exclude
-can both be set at once; unlike rdt-client's own "only use one or the
-other" convention, a file here has to satisfy both. Matched against each
-file's path (e.g. `Show/episode.en.srt` for a multi-file torrent's own
-subdirectory structure), never its size for the regex checks or any other
-field. Purely local: never changes what the provider itself considers part
-of the download, or what `GET /api/v1/downloads/{id}`'s own `files` list
-reports — only which of those files actually get written to disk. A filter
-matching nothing doesn't leave the download stuck — it trivially reaches
-`ready_for_import` with zero files fetched, the same as a torrent that
-genuinely had none.
+at all, before this. `min_fetch_file_size_bytes`/`max_fetch_file_size_bytes`/
+`include_file_regex`/`exclude_file_regex` (`config.Config`, all disabled —
+`0`/`0`/empty — by default) are checked by `Importer.filterFiles`, called
+from `processDownload` right after the provider's own file list comes back
+and before any of them are fetched. A file is kept only if it's at least
+the minimum size **and** at most the maximum size (each only when actually
+set) **and** (no include pattern, or its path matches it) **and** (no
+exclude pattern, or its path doesn't match it) — every check that's
+configured must pass; unlike rdt-client's own "only use one or the other"
+convention for include/exclude, a file here has to satisfy all of them.
+`max_fetch_file_size_bytes` itself came from a second comparison, against
+[decypharr](https://github.com/sirrobot01/decypharr)'s own `MinFileSize`/
+`MaxFileSize` — the symmetric counterpart to the minimum, e.g. skipping an
+oversized bonus feature bundled alongside the main file. `config.Config.Validate`
+rejects a `min_fetch_file_size_bytes` greater than a nonzero
+`max_fetch_file_size_bytes` — a range that could never match anything.
+Matched against each file's path (e.g. `Show/episode.en.srt` for a
+multi-file torrent's own subdirectory structure) for the regex checks, not
+its size or any other field. Purely local: never changes what the provider
+itself considers part of the download, or what
+`GET /api/v1/downloads/{id}`'s own `files` list reports — only which of
+those files actually get written to disk. A filter matching nothing
+doesn't leave the download stuck — it trivially reaches `ready_for_import`
+with zero files fetched, the same as a torrent that genuinely had none.
 
 ### Stuck-download watchdog
 

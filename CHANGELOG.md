@@ -13,12 +13,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Per-file fetch filtering.** `min_fetch_file_size_bytes` skips a file
     smaller than a configured size (samples, junk); `include_file_regex`/
     `exclude_file_regex` skip a file by path pattern (unwanted types,
-    languages) — both can be set at once, a file must satisfy both. Applied
-    in `Importer.filterFiles`, right after a download's file list comes
-    back from the provider and before any of them are fetched to local
-    disk. Purely local — never changes what the provider itself considers
-    part of the download, or what `GET /api/v1/downloads/{id}`'s own
-    `files` list reports.
+    languages) — any combination can be set at once, a file must satisfy
+    all of them. Applied in `Importer.filterFiles`, right after a
+    download's file list comes back from the provider and before any of
+    them are fetched to local disk. Purely local — never changes what the
+    provider itself considers part of the download, or what
+    `GET /api/v1/downloads/{id}`'s own `files` list reports. Immediate
+    follow-on, found comparing against [decypharr](https://github.com/sirrobot01/decypharr)'s
+    own settings this time: `max_fetch_file_size_bytes`, the symmetric
+    counterpart to the minimum — skips a file larger than a configured
+    size (e.g. an oversized bonus feature bundled alongside the main
+    file). Rejected if it would make `min_fetch_file_size_bytes` exceed
+    it — a range that could never match anything.
   - **Stuck-download watchdog.** `stuck_download_timeout_minutes`
     auto-errors a download that's sat `queued`/`downloading` with no
     genuine change reported by the provider for too long —

@@ -65,8 +65,14 @@ this unattended. Recommendations first.
     `include_file_regex`/`exclude_file_regex` skip a file (samples, junk,
     unwanted types) when fetching a download's files to local disk.
     `Importer.filterFiles`, applied right after the provider's own file
-    list comes back. Include and exclude can both be set at once, unlike
-    rdt-client's own "only use one" convention.
+    list comes back. Any combination can be set at once, unlike
+    rdt-client's own "only use one" convention for include/exclude.
+    ✅ Immediate follow-on, same technique against a second reference
+    client: `max_fetch_file_size_bytes`, the symmetric counterpart to the
+    minimum, found comparing against
+    [decypharr](https://github.com/sirrobot01/decypharr)'s own
+    `MinFileSize`/`MaxFileSize`. `config.Config.Validate` rejects a
+    minimum greater than a nonzero maximum.
   - **Stuck-download watchdog** — `stuck_download_timeout_minutes`
     auto-errors a download that's sat `queued`/`downloading` with no
     genuine change reported for too long. Deliberately keyed differently

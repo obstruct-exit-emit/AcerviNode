@@ -82,10 +82,12 @@ type Importer struct {
 	dirMode             os.FileMode       // permission mode every download directory is created with — see ensureWritableDir
 	fastPollInterval    time.Duration     // see fastPollIntervalDefault's own doc comment
 
-	// minFetchFileSizeBytes/includeFileRegex/excludeFileRegex back the
-	// per-file filtering policy — see filterFiles. 0/nil/nil (the defaults)
-	// disable each check independently.
+	// minFetchFileSizeBytes/maxFetchFileSizeBytes/includeFileRegex/
+	// excludeFileRegex back the per-file filtering policy — see
+	// filterFiles. 0/0/nil/nil (the defaults) disable each check
+	// independently.
 	minFetchFileSizeBytes int64
+	maxFetchFileSizeBytes int64
 	includeFileRegex      *regexp.Regexp
 	excludeFileRegex      *regexp.Regexp
 	// stuckDownloadTimeout backs the stuck-download watchdog — see
@@ -467,24 +469,26 @@ func (im *Importer) CleanupAfterDays() int {
 
 // SetFileFilters updates the per-file fetch filtering policy live — the
 // next download processed uses the new values immediately. minBytes <= 0
-// disables the minimum-size check; includeRegex/excludeRegex nil disables
-// each respectively. Callers are responsible for compiling the regexes
-// themselves (see config.Config.Validate, which already confirms they
-// compile before a candidate settings update is ever accepted) — Importer
-// stores compiled patterns, not raw strings, since it never needs to
-// serialize them anywhere.
-func (im *Importer) SetFileFilters(minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+// disables the minimum-size check, maxBytes <= 0 disables the maximum-size
+// check; includeRegex/excludeRegex nil disables each respectively. Callers
+// are responsible for compiling the regexes themselves (see
+// config.Config.Validate, which already confirms they compile before a
+// candidate settings update is ever accepted) — Importer stores compiled
+// patterns, not raw strings, since it never needs to serialize them
+// anywhere.
+func (im *Importer) SetFileFilters(minBytes, maxBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
 	im.mu.Lock()
 	im.minFetchFileSizeBytes = minBytes
+	im.maxFetchFileSizeBytes = maxBytes
 	im.includeFileRegex = includeRegex
 	im.excludeFileRegex = excludeRegex
 	im.mu.Unlock()
 }
 
-func (im *Importer) getFileFilters() (minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+func (im *Importer) getFileFilters() (minBytes, maxBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	return im.minFetchFileSizeBytes, im.includeFileRegex, im.excludeFileRegex
+	return im.minFetchFileSizeBytes, im.maxFetchFileSizeBytes, im.includeFileRegex, im.excludeFileRegex
 }
 
 // SetStuckDownloadTimeout updates the stuck-download watchdog live (see
@@ -520,7 +524,7 @@ func (im *Importer) getCleanupErrorAfterDays() int {
 // FileFilters is the exported counterpart of getFileFilters, for callers
 // outside this package confirming a SetFileFilters call took (see
 // cmd/acervinode's settings tests).
-func (im *Importer) FileFilters() (minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+func (im *Importer) FileFilters() (minBytes, maxBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
 	return im.getFileFilters()
 }
 
@@ -1150,26 +1154,31 @@ func (im *Importer) CancelFetch(id string) {
 	}
 }
 
-// filterFiles applies the configured minimum-file-size and include/exclude
-// regex filters (see SetFileFilters) to files before processDownload fetches
-// them to local disk. A file is kept only if it's at least the minimum size
-// AND (no include pattern, or its path matches it) AND (no exclude pattern,
-// or its path doesn't match it) — include and exclude can both be set at
-// once; a file has to satisfy both. Matched against the file's path (its
-// name, or a relative path for a multi-file torrent's subdirectory
-// structure), not its size or any other field. Purely local: never changes
-// what the provider itself considers part of the download, or what shows in
-// GET /api/v1/downloads/{id}'s own files list — only which of those files
-// actually get written to disk. Returns files unchanged (not a copy) when
-// nothing is configured, the common case, so this costs nothing when unused.
+// filterFiles applies the configured minimum/maximum-file-size and
+// include/exclude regex filters (see SetFileFilters) to files before
+// processDownload fetches them to local disk. A file is kept only if it's
+// at least the minimum size AND at most the maximum size (when each is set)
+// AND (no include pattern, or its path matches it) AND (no exclude
+// pattern, or its path doesn't match it) — every check that's actually
+// configured must pass; a file has to satisfy all of them. Matched against
+// the file's path (its name, or a relative path for a multi-file torrent's
+// subdirectory structure) for the regex checks, not its size or any other
+// field. Purely local: never changes what the provider itself considers
+// part of the download, or what shows in GET /api/v1/downloads/{id}'s own
+// files list — only which of those files actually get written to disk.
+// Returns files unchanged (not a copy) when nothing is configured, the
+// common case, so this costs nothing when unused.
 func (im *Importer) filterFiles(files []debrid.DownloadFile) []debrid.DownloadFile {
-	minBytes, include, exclude := im.getFileFilters()
-	if minBytes <= 0 && include == nil && exclude == nil {
+	minBytes, maxBytes, include, exclude := im.getFileFilters()
+	if minBytes <= 0 && maxBytes <= 0 && include == nil && exclude == nil {
 		return files
 	}
 	out := make([]debrid.DownloadFile, 0, len(files))
 	for _, f := range files {
 		if minBytes > 0 && f.SizeBytes < minBytes {
+			continue
+		}
+		if maxBytes > 0 && f.SizeBytes > maxBytes {
 			continue
 		}
 		if include != nil && !include.MatchString(f.Path) {

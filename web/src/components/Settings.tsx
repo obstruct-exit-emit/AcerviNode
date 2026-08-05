@@ -222,6 +222,7 @@ export function Settings({ apiKey }: Props) {
         tls_cert_file: generalSettings.tls_cert_file,
         tls_key_file: generalSettings.tls_key_file,
         min_fetch_file_size_bytes: generalSettings.min_fetch_file_size_bytes,
+        max_fetch_file_size_bytes: generalSettings.max_fetch_file_size_bytes,
         include_file_regex: generalSettings.include_file_regex,
         exclude_file_regex: generalSettings.exclude_file_regex,
         stuck_download_timeout_minutes: generalSettings.stuck_download_timeout_minutes,
@@ -525,6 +526,15 @@ export function Settings({ apiKey }: Props) {
                     />
                   </label>
                   <label>
+                    Maximum file size to fetch (bytes, 0 = off)
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.max_fetch_file_size_bytes}
+                      onChange={(e) => setForm({ ...form, max_fetch_file_size_bytes: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
                     Include files matching (regex, blank = off)
                     <input
                       type="text"
@@ -562,10 +572,11 @@ export function Settings({ apiKey }: Props) {
                   auto-errors a download that's sat queued/downloading with no genuine change reported by the
                   provider for this long — keyed on whether anything actually changed, not simply how long it's
                   been running, so a large download still steadily making progress on a slow connection is never
-                  affected, however long the whole thing takes. Minimum file size and the include/exclude patterns
-                  (matched against each file's path within the download, e.g. "Show/episode.en.srt") apply when
-                  fetching a download's files to local disk — skip samples/junk, or only fetch certain file types.
-                  Include and exclude can both be set at once; a file has to satisfy both to be kept.
+                  affected, however long the whole thing takes. Minimum/maximum file size and the include/exclude
+                  patterns (matched against each file's path within the download, e.g. "Show/episode.en.srt") apply
+                  when fetching a download's files to local disk — skip samples/junk, an oversized bonus file, or
+                  only fetch certain file types. Any combination can be set at once; a file has to satisfy all of
+                  them to be kept.
                 </p>
               </Section>
 

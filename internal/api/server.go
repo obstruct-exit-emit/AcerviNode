@@ -165,10 +165,11 @@ type GeneralInfo struct {
 	TLSPort     int    `json:"tls_port"`
 	TLSCertFile string `json:"tls_cert_file"`
 	TLSKeyFile  string `json:"tls_key_file"`
-	// MinFetchFileSizeBytes/IncludeFileRegex/ExcludeFileRegex mirror
-	// config.Config's own file-filtering fields exactly — see
-	// config.Config.MinFetchFileSizeBytes's own doc comment.
+	// MinFetchFileSizeBytes/MaxFetchFileSizeBytes/IncludeFileRegex/
+	// ExcludeFileRegex mirror config.Config's own file-filtering fields
+	// exactly — see config.Config.MinFetchFileSizeBytes's own doc comment.
 	MinFetchFileSizeBytes int64  `json:"min_fetch_file_size_bytes"`
+	MaxFetchFileSizeBytes int64  `json:"max_fetch_file_size_bytes"`
 	IncludeFileRegex      string `json:"include_file_regex"`
 	ExcludeFileRegex      string `json:"exclude_file_regex"`
 	// StuckDownloadTimeoutMinutes/CleanupErrorAfterDays mirror
@@ -202,6 +203,7 @@ type GeneralUpdate struct {
 	TLSCertFile                   string `json:"tls_cert_file"`
 	TLSKeyFile                    string `json:"tls_key_file"`
 	MinFetchFileSizeBytes         int64  `json:"min_fetch_file_size_bytes"`
+	MaxFetchFileSizeBytes         int64  `json:"max_fetch_file_size_bytes"`
 	IncludeFileRegex              string `json:"include_file_regex"`
 	ExcludeFileRegex              string `json:"exclude_file_regex"`
 	StuckDownloadTimeoutMinutes   int    `json:"stuck_download_timeout_minutes"`

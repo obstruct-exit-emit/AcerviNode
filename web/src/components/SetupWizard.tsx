@@ -113,6 +113,7 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
           tls_cert_file: g.tls_cert_file,
           tls_key_file: g.tls_key_file,
           min_fetch_file_size_bytes: g.min_fetch_file_size_bytes,
+          max_fetch_file_size_bytes: g.max_fetch_file_size_bytes,
           include_file_regex: g.include_file_regex,
           exclude_file_regex: g.exclude_file_regex,
           stuck_download_timeout_minutes: g.stuck_download_timeout_minutes,

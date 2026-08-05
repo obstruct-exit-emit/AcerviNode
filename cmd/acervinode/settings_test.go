@@ -305,6 +305,7 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		ProviderRequestTimeoutSeconds: 45,
 		TLSPort:                       cfg.TLSPort, // unchanged — no restart needed
 		MinFetchFileSizeBytes:         1024,
+		MaxFetchFileSizeBytes:         104857600,
 		IncludeFileRegex:              `\.mkv$`,
 		ExcludeFileRegex:              `sample`,
 		StuckDownloadTimeoutMinutes:   180,
@@ -345,9 +346,12 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if got := imp.FastPollInterval(); got != 5*time.Second {
 		t.Errorf("importer FastPollInterval() = %v, want 5s applied live", got)
 	}
-	minBytes, include, exclude := imp.FileFilters()
+	minBytes, maxBytes, include, exclude := imp.FileFilters()
 	if minBytes != 1024 {
 		t.Errorf("importer FileFilters() minBytes = %d, want 1024 applied live", minBytes)
+	}
+	if maxBytes != 104857600 {
+		t.Errorf("importer FileFilters() maxBytes = %d, want 104857600 applied live", maxBytes)
 	}
 	if include == nil || include.String() != `\.mkv$` {
 		t.Errorf("importer FileFilters() include = %v, want compiled `\\.mkv$` applied live", include)
@@ -371,7 +375,8 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 ||
 		reloaded.CleanupAfterDays != 14 || reloaded.DownloadDirMode != "0750" ||
 		reloaded.FastPollIntervalSeconds != 5 || reloaded.ProviderRequestTimeoutSeconds != 45 ||
-		reloaded.MinFetchFileSizeBytes != 1024 || reloaded.IncludeFileRegex != `\.mkv$` ||
+		reloaded.MinFetchFileSizeBytes != 1024 || reloaded.MaxFetchFileSizeBytes != 104857600 ||
+		reloaded.IncludeFileRegex != `\.mkv$` ||
 		reloaded.ExcludeFileRegex != "sample" || reloaded.StuckDownloadTimeoutMinutes != 180 ||
 		reloaded.CleanupErrorAfterDays != 3 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)

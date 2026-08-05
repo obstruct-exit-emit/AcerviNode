@@ -303,10 +303,12 @@ export interface GeneralSettings {
   tls_port: number
   tls_cert_file: string
   tls_key_file: string
-  // min_fetch_file_size_bytes/include_file_regex/exclude_file_regex skip a
-  // file entirely when fetching a download's files to local disk — 0/empty
-  // (the defaults) fetch everything, same as before these existed.
+  // min_fetch_file_size_bytes/max_fetch_file_size_bytes/include_file_regex/
+  // exclude_file_regex skip a file entirely when fetching a download's
+  // files to local disk — 0/0/empty (the defaults) fetch everything, same
+  // as before these existed.
   min_fetch_file_size_bytes: number
+  max_fetch_file_size_bytes: number
   include_file_regex: string
   exclude_file_regex: string
   // stuck_download_timeout_minutes auto-errors a download that's sat
@@ -347,6 +349,7 @@ export interface GeneralUpdateInput {
   tls_cert_file: string
   tls_key_file: string
   min_fetch_file_size_bytes: number
+  max_fetch_file_size_bytes: number
   include_file_regex: string
   exclude_file_regex: string
   stuck_download_timeout_minutes: number

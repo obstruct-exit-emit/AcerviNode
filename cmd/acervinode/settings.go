@@ -93,6 +93,7 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	}
 	fastPollInterval := time.Duration(s.cfg.FastPollIntervalSeconds) * time.Second
 	minFetchFileSizeBytes := s.cfg.MinFetchFileSizeBytes
+	maxFetchFileSizeBytes := s.cfg.MaxFetchFileSizeBytes
 	includeFileRegex := compileOptionalRegex(s.cfg.IncludeFileRegex)
 	excludeFileRegex := compileOptionalRegex(s.cfg.ExcludeFileRegex)
 	stuckDownloadTimeout := time.Duration(s.cfg.StuckDownloadTimeoutMinutes) * time.Minute
@@ -104,7 +105,7 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	imp.SetCleanupAfterDays(cleanupAfterDays)
 	imp.SetDirMode(dirMode)
 	imp.SetFastPollInterval(fastPollInterval)
-	imp.SetFileFilters(minFetchFileSizeBytes, includeFileRegex, excludeFileRegex)
+	imp.SetFileFilters(minFetchFileSizeBytes, maxFetchFileSizeBytes, includeFileRegex, excludeFileRegex)
 	imp.SetStuckDownloadTimeout(stuckDownloadTimeout)
 	imp.SetCleanupErrorAfterDays(cleanupErrorAfterDays)
 }
@@ -288,6 +289,7 @@ func (s *liveSettings) General() api.GeneralInfo {
 		TLSCertFile:                   s.cfg.TLSCertFile,
 		TLSKeyFile:                    s.cfg.TLSKeyFile,
 		MinFetchFileSizeBytes:         s.cfg.MinFetchFileSizeBytes,
+		MaxFetchFileSizeBytes:         s.cfg.MaxFetchFileSizeBytes,
 		IncludeFileRegex:              s.cfg.IncludeFileRegex,
 		ExcludeFileRegex:              s.cfg.ExcludeFileRegex,
 		StuckDownloadTimeoutMinutes:   s.cfg.StuckDownloadTimeoutMinutes,
@@ -347,6 +349,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.TLSCertFile = update.TLSCertFile
 	candidate.TLSKeyFile = update.TLSKeyFile
 	candidate.MinFetchFileSizeBytes = update.MinFetchFileSizeBytes
+	candidate.MaxFetchFileSizeBytes = update.MaxFetchFileSizeBytes
 	candidate.IncludeFileRegex = update.IncludeFileRegex
 	candidate.ExcludeFileRegex = update.ExcludeFileRegex
 	candidate.StuckDownloadTimeoutMinutes = update.StuckDownloadTimeoutMinutes
@@ -382,7 +385,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 			s.imp.SetDirMode(dirMode)
 		}
 		s.imp.SetFastPollInterval(time.Duration(candidate.FastPollIntervalSeconds) * time.Second)
-		s.imp.SetFileFilters(candidate.MinFetchFileSizeBytes, compileOptionalRegex(candidate.IncludeFileRegex), compileOptionalRegex(candidate.ExcludeFileRegex))
+		s.imp.SetFileFilters(candidate.MinFetchFileSizeBytes, candidate.MaxFetchFileSizeBytes, compileOptionalRegex(candidate.IncludeFileRegex), compileOptionalRegex(candidate.ExcludeFileRegex))
 		s.imp.SetStuckDownloadTimeout(time.Duration(candidate.StuckDownloadTimeoutMinutes) * time.Minute)
 		s.imp.SetCleanupErrorAfterDays(candidate.CleanupErrorAfterDays)
 	}

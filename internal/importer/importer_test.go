@@ -221,7 +221,7 @@ func TestTick_MinFileSizeFiltersSmallFiles(t *testing.T) {
 	}
 
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
-	im.SetFileFilters(int64(len(fileContents["1"]))+1, nil, nil) // between the two file sizes
+	im.SetFileFilters(int64(len(fileContents["1"]))+1, 0, nil, nil) // between the two file sizes
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -243,6 +243,58 @@ func TestTick_MinFileSizeFiltersSmallFiles(t *testing.T) {
 	}
 	if got.State != database.StateReadyForImport {
 		t.Errorf("state = %q, want ready_for_import even with a filtered-out file", got.State)
+	}
+}
+
+// TestTick_MaxFileSizeFiltersLargeFiles is TestTick_MinFileSizeFiltersSmallFiles'
+// symmetric counterpart — an oversized bonus file is skipped, the
+// normal-sized main file is kept.
+func TestTick_MaxFileSizeFiltersLargeFiles(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	fileContents := map[string]string{
+		"1": "the actual movie bytes",
+		"2": "an oversized bonus feature nobody asked for and is much bigger",
+	}
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fileContents[r.URL.Path[1:]]))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn: cdn,
+		files: []debrid.DownloadFile{
+			{ProviderFileID: "1", Path: "Show/movie.mkv", SizeBytes: int64(len(fileContents["1"]))},
+			{ProviderFileID: "2", Path: "Show/bonus.mkv", SizeBytes: int64(len(fileContents["2"]))},
+		},
+	}
+
+	destDir := t.TempDir()
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Show", Category: "tv-sonarr", SavePath: destDir,
+		State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFileFilters(0, int64(len(fileContents["1"]))+1, nil, nil) // between the two file sizes
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "Show", "bonus.mkv")); !os.IsNotExist(err) {
+		t.Errorf("bonus file present (stat err = %v), want filtered out by max size", err)
+	}
+	data, err := os.ReadFile(filepath.Join(destDir, "Show", "movie.mkv"))
+	if err != nil {
+		t.Fatalf("read movie.mkv: %v", err)
+	}
+	if string(data) != fileContents["1"] {
+		t.Errorf("movie.mkv contents = %q, want %q", data, fileContents["1"])
 	}
 }
 
@@ -285,7 +337,7 @@ func TestTick_IncludeExcludeRegexFilterFiles(t *testing.T) {
 	}
 
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
-	im.SetFileFilters(0, regexp.MustCompile(`\.mkv$`), regexp.MustCompile(`sample`))
+	im.SetFileFilters(0, 0, regexp.MustCompile(`\.mkv$`), regexp.MustCompile(`sample`))
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -326,7 +378,7 @@ func TestTick_AllFilesFilteredOutStillReachesReadyForImport(t *testing.T) {
 	}
 
 	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
-	im.SetFileFilters(0, regexp.MustCompile(`\.mkv$`), nil) // matches nothing here
+	im.SetFileFilters(0, 0, regexp.MustCompile(`\.mkv$`), nil) // matches nothing here
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}

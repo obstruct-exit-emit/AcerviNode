@@ -374,6 +374,9 @@ func TestLoad_FileFilteringAndWatchdogSettingsDefaultToDisabled(t *testing.T) {
 	if cfg.MinFetchFileSizeBytes != 0 {
 		t.Errorf("MinFetchFileSizeBytes default = %d, want 0 (disabled)", cfg.MinFetchFileSizeBytes)
 	}
+	if cfg.MaxFetchFileSizeBytes != 0 {
+		t.Errorf("MaxFetchFileSizeBytes default = %d, want 0 (disabled)", cfg.MaxFetchFileSizeBytes)
+	}
 	if cfg.IncludeFileRegex != "" {
 		t.Errorf("IncludeFileRegex default = %q, want empty (disabled)", cfg.IncludeFileRegex)
 	}
@@ -446,6 +449,36 @@ func TestLoad_InvalidNegativeMinFetchFileSizeBytes(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Error("Load() expected error for negative min_fetch_file_size_bytes, got nil")
+	}
+}
+
+func TestLoad_MaxFetchFileSizeBytesEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_MAX_FETCH_FILE_SIZE_BYTES", "104857600")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxFetchFileSizeBytes != 104857600 {
+		t.Errorf("MaxFetchFileSizeBytes = %d, want 104857600", cfg.MaxFetchFileSizeBytes)
+	}
+}
+
+func TestLoad_InvalidNegativeMaxFetchFileSizeBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "max_fetch_file_size_bytes: -1\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for negative max_fetch_file_size_bytes, got nil")
+	}
+}
+
+func TestLoad_InvalidMinFetchFileSizeBytesExceedsMax(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "min_fetch_file_size_bytes: 2000\nmax_fetch_file_size_bytes: 1000\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for min_fetch_file_size_bytes exceeding max_fetch_file_size_bytes, got nil")
 	}
 }
 
