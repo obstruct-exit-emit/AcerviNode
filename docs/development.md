@@ -13,6 +13,13 @@ go build ./cmd/acervinode                          # embeds web/dist if present
 
 A committed `web/dist/.gitkeep` keeps `go build` working on a fresh clone even
 before `npm run build` has ever run — you'll just get an empty `/` until it has.
+That cuts the other way too, though: `go build` on its own never checks
+whether `web/dist` is *current*, just that something's there — see
+[Installation](installation.md#updating-an-existing-from-source-install) for
+why that matters and reach for `make build` instead of a bare `go build`
+whenever you actually want a real binary to run or deploy (not just the
+`go run` loop above, which serves the frontend from `web/dist` the same way
+either way).
 
 Frontend-only iteration (Node 22+):
 

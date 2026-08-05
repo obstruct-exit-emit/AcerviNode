@@ -39,18 +39,60 @@ sudo systemctl restart acervinode
 
 ## From source
 
-Requirements: Go 1.25+, Node 22+ (for the frontend).
+Requirements: Go 1.25+, Node 22+ (for the frontend), `make` (or run the two
+commands it wraps directly — see below).
 
 ```sh
 git clone https://github.com/obstruct-exit-emit/AcerviNode.git
 cd AcerviNode
-cd web && npm install && npm run build && cd ..
-go build ./cmd/acervinode
+make build
 ```
 
 This produces a single `acervinode` binary (`acervinode.exe` on Windows, for local
 development — production deployment targets Linux, see below). See
 [Development](development.md) for the full build/test loop.
+
+`make build` is exactly equivalent to running these two commands, in order:
+
+```sh
+cd web && npm ci && npm run build && cd ..
+go build ./cmd/acervinode
+```
+
+### Updating an existing from-source install
+
+**Always rebuild the frontend before the backend, every time — including
+an update, not just the first build.** `go:embed` bakes in whatever's
+already on disk in `web/dist` at the moment `go build` runs, not what's in
+git — the actual built frontend files are gitignored (only a placeholder
+`web/dist/.gitkeep` is committed), so `git pull` alone never updates them.
+A plain `git pull && go build`, skipping the frontend step, compiles and
+runs *successfully* — there's no error — it just serves whatever UI
+happened to already be sitting in `web/dist` from an earlier build, with
+nothing to indicate anything's stale. Found live, updating a real
+deployment this way.
+
+```sh
+git pull
+make build
+sudo systemctl restart acervinode   # or however this install is run
+```
+
+`make build` closes the gap above by always doing both steps as one
+command, so there's no longer a multi-step sequence an update can partially
+skip. If you don't have `make` available, just run the two commands from
+the section above yourself, in that order, every time.
+
+If you're building on a machine that deliberately has no Node.js (e.g. a
+minimal production box) — build the full thing elsewhere (a dev machine,
+or even a throwaway container) and copy over just the resulting
+`acervinode` binary; nothing else about the binary depends on where it was
+built. `make build-backend-only` is the equivalent shortcut for a machine
+that already has an up-to-date `web/dist` some other way and just needs
+the Go side rebuilt — skips the frontend step entirely, embedding whatever
+is currently on disk as-is. It's a separate, explicitly-named target on
+purpose: skipping the frontend has to be typed on purpose, not stumbled
+into via a forgotten step.
 
 ## Running it
 

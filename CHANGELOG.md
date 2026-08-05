@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A `Makefile`, so updating a from-source install can't silently skip the
+  frontend build.** `go:embed` bakes in whatever's already on disk in
+  `web/dist` at build time, not what's in git — the actual built frontend
+  files are gitignored (only a placeholder `.gitkeep` is committed), so a
+  plain `git pull && go build` compiles and runs *successfully* while
+  silently serving whatever UI happened to already be sitting in
+  `web/dist` from an earlier build, no error, nothing to indicate anything
+  changed. Found live, updating a real deployment this way — the just-
+  shipped Settings reorganization wasn't showing up because the frontend
+  step of the update had been skipped, not because anything was actually
+  broken. `make build` always runs `npm ci && npm run build` before
+  `go build`, as one command, so there's no longer a multi-step sequence
+  an update can partially skip; `make build-backend-only` is a separate,
+  explicitly-named target for the "build elsewhere, copy just the binary
+  to a Node-less production box" workflow. CI now runs `make build` itself
+  rather than the equivalent steps inline, so a regression in the Makefile
+  gets caught the same way any other regression would. See
+  docs/installation.md#updating-an-existing-from-source-install.
+
 - **Three settings gaps found by comparing AcerviNode's own settings
   against rdt-client's, field by field:**
   - **Per-file fetch filtering.** `min_fetch_file_size_bytes` skips a file
