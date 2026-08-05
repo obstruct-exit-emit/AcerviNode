@@ -165,6 +165,17 @@ type GeneralInfo struct {
 	TLSPort     int    `json:"tls_port"`
 	TLSCertFile string `json:"tls_cert_file"`
 	TLSKeyFile  string `json:"tls_key_file"`
+	// MinFetchFileSizeBytes/IncludeFileRegex/ExcludeFileRegex mirror
+	// config.Config's own file-filtering fields exactly — see
+	// config.Config.MinFetchFileSizeBytes's own doc comment.
+	MinFetchFileSizeBytes int64  `json:"min_fetch_file_size_bytes"`
+	IncludeFileRegex      string `json:"include_file_regex"`
+	ExcludeFileRegex      string `json:"exclude_file_regex"`
+	// StuckDownloadTimeoutMinutes/CleanupErrorAfterDays mirror
+	// config.Config's own watchdog/error-cleanup fields exactly — see
+	// config.Config.StuckDownloadTimeoutMinutes's own doc comment.
+	StuckDownloadTimeoutMinutes int `json:"stuck_download_timeout_minutes"`
+	CleanupErrorAfterDays       int `json:"cleanup_error_after_days"`
 }
 
 // GeneralUpdate is a candidate change to AcerviNode's general configuration
@@ -190,6 +201,11 @@ type GeneralUpdate struct {
 	TLSPort                       int    `json:"tls_port"`
 	TLSCertFile                   string `json:"tls_cert_file"`
 	TLSKeyFile                    string `json:"tls_key_file"`
+	MinFetchFileSizeBytes         int64  `json:"min_fetch_file_size_bytes"`
+	IncludeFileRegex              string `json:"include_file_regex"`
+	ExcludeFileRegex              string `json:"exclude_file_regex"`
+	StuckDownloadTimeoutMinutes   int    `json:"stuck_download_timeout_minutes"`
+	CleanupErrorAfterDays         int    `json:"cleanup_error_after_days"`
 }
 
 // Settings lets the API read and change configuration live, without a

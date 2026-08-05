@@ -366,6 +366,125 @@ func TestLoad_TLSCertAndKeyMustBeSetTogether(t *testing.T) {
 	}
 }
 
+func TestLoad_FileFilteringAndWatchdogSettingsDefaultToDisabled(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MinFetchFileSizeBytes != 0 {
+		t.Errorf("MinFetchFileSizeBytes default = %d, want 0 (disabled)", cfg.MinFetchFileSizeBytes)
+	}
+	if cfg.IncludeFileRegex != "" {
+		t.Errorf("IncludeFileRegex default = %q, want empty (disabled)", cfg.IncludeFileRegex)
+	}
+	if cfg.ExcludeFileRegex != "" {
+		t.Errorf("ExcludeFileRegex default = %q, want empty (disabled)", cfg.ExcludeFileRegex)
+	}
+	if cfg.StuckDownloadTimeoutMinutes != 0 {
+		t.Errorf("StuckDownloadTimeoutMinutes default = %d, want 0 (disabled)", cfg.StuckDownloadTimeoutMinutes)
+	}
+	if cfg.CleanupErrorAfterDays != 0 {
+		t.Errorf("CleanupErrorAfterDays default = %d, want 0 (disabled)", cfg.CleanupErrorAfterDays)
+	}
+}
+
+func TestLoad_MinFetchFileSizeBytesEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_MIN_FETCH_FILE_SIZE_BYTES", "5242880")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MinFetchFileSizeBytes != 5242880 {
+		t.Errorf("MinFetchFileSizeBytes = %d, want 5242880", cfg.MinFetchFileSizeBytes)
+	}
+}
+
+func TestLoad_IncludeExcludeFileRegexEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_INCLUDE_FILE_REGEX", `\.mkv$`)
+	t.Setenv("ACERVINODE_EXCLUDE_FILE_REGEX", "sample")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.IncludeFileRegex != `\.mkv$` {
+		t.Errorf("IncludeFileRegex = %q, want %q", cfg.IncludeFileRegex, `\.mkv$`)
+	}
+	if cfg.ExcludeFileRegex != "sample" {
+		t.Errorf("ExcludeFileRegex = %q, want %q", cfg.ExcludeFileRegex, "sample")
+	}
+}
+
+func TestLoad_StuckDownloadTimeoutMinutesEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_STUCK_DOWNLOAD_TIMEOUT_MINUTES", "180")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.StuckDownloadTimeoutMinutes != 180 {
+		t.Errorf("StuckDownloadTimeoutMinutes = %d, want 180", cfg.StuckDownloadTimeoutMinutes)
+	}
+}
+
+func TestLoad_CleanupErrorAfterDaysEnvOverride(t *testing.T) {
+	t.Setenv("ACERVINODE_CLEANUP_ERROR_AFTER_DAYS", "3")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CleanupErrorAfterDays != 3 {
+		t.Errorf("CleanupErrorAfterDays = %d, want 3", cfg.CleanupErrorAfterDays)
+	}
+}
+
+func TestLoad_InvalidNegativeMinFetchFileSizeBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "min_fetch_file_size_bytes: -1\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for negative min_fetch_file_size_bytes, got nil")
+	}
+}
+
+func TestLoad_InvalidIncludeFileRegex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "include_file_regex: \"[\"\n") // unclosed character class
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid include_file_regex, got nil")
+	}
+}
+
+func TestLoad_InvalidExcludeFileRegex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "exclude_file_regex: \"(\"\n") // unclosed group
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for invalid exclude_file_regex, got nil")
+	}
+}
+
+func TestLoad_InvalidNegativeStuckDownloadTimeoutMinutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "stuck_download_timeout_minutes: -1\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for negative stuck_download_timeout_minutes, got nil")
+	}
+}
+
+func TestLoad_InvalidNegativeCleanupErrorAfterDays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, "cleanup_error_after_days: -1\n")
+
+	if _, err := Load(path); err == nil {
+		t.Error("Load() expected error for negative cleanup_error_after_days, got nil")
+	}
+}
+
 func TestSave_RoundTripsThroughLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 

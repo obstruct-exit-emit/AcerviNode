@@ -387,6 +387,69 @@ func (db *DB) ListDownloadsEligibleForCleanup(ctx context.Context, olderThan tim
 	return out, rows.Err()
 }
 
+// ListStuckDownloads returns every StateQueued or StateDownloading download
+// whose updated_at is older than olderThan — see internal/importer's
+// stuck-download watchdog. updated_at only ever moves when
+// UpdateDownloadStatus/RefreshFromProvider actually change something
+// (state/progress/size/error), never on a no-op poll, so an old updated_at
+// here means the provider has genuinely stopped reporting anything new, not
+// just that the download has been running a while. Applies to both Managed
+// and Manual downloads — unlike ListDownloadsEligibleForCleanup's arr-only
+// scope, being stuck queued/downloading isn't a state that means anything
+// different depending on how it was added.
+func (db *DB) ListStuckDownloads(ctx context.Context, olderThan time.Time) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+downloadColumns+`
+		FROM downloads
+		WHERE state IN (?, ?) AND updated_at < ?
+		ORDER BY updated_at`, StateQueued, StateDownloading, olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("list stuck downloads: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ListErroredDownloadsEligibleForCleanup returns every StateError download
+// whose updated_at is older than olderThan — see internal/importer's
+// error-cleanup policy. Applies to both Managed and Manual downloads: an
+// error here already means AcerviNode gave up (retry-exhausted) or the
+// provider genuinely lost track of it (a vanished Manual download), unlike
+// ListDownloadsEligibleForCleanup's arr-only ready_for_import scope, which
+// exists specifically to avoid deleting a Manual download before the user
+// ever grabbed it — that concern doesn't apply to a row that's already
+// errored out.
+func (db *DB) ListErroredDownloadsEligibleForCleanup(ctx context.Context, olderThan time.Time) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT `+downloadColumns+`
+		FROM downloads
+		WHERE state = ? AND updated_at < ?
+		ORDER BY updated_at`, StateError, olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("list errored downloads eligible for cleanup: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // UpdateDownloadRetry records a failed attempt: increments bookkeeping for
 // internal/importer's backoff without changing state — the row stays
 // provider_completed and is picked up again once next_retry_at passes.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -181,6 +182,161 @@ func TestTick_DownloadsFilesAndMarksReadyForImport(t *testing.T) {
 	}
 	if got.CompletedAt == nil {
 		t.Error("CompletedAt should be set once files are on disk")
+	}
+}
+
+// TestTick_MinFileSizeFiltersSmallFiles proves SetFileFilters' minimum-size
+// check actually keeps a small file off disk, not just out of some in-memory
+// accounting — the subtitle here is well under the configured minimum, the
+// movie file well over it.
+func TestTick_MinFileSizeFiltersSmallFiles(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	fileContents := map[string]string{
+		"1": "tiny",
+		"2": "the actual movie bytes, pretend this is large enough to matter",
+	}
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fileContents[r.URL.Path[1:]]))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn: cdn,
+		files: []debrid.DownloadFile{
+			{ProviderFileID: "1", Path: "Show/movie.en.srt", SizeBytes: int64(len(fileContents["1"]))},
+			{ProviderFileID: "2", Path: "Show/movie.mkv", SizeBytes: int64(len(fileContents["2"]))},
+		},
+	}
+
+	destDir := t.TempDir()
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Show", Category: "tv-sonarr", SavePath: destDir,
+		State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFileFilters(int64(len(fileContents["1"]))+1, nil, nil) // between the two file sizes
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "Show", "movie.en.srt")); !os.IsNotExist(err) {
+		t.Errorf("subtitle file present (stat err = %v), want filtered out by min size", err)
+	}
+	data, err := os.ReadFile(filepath.Join(destDir, "Show", "movie.mkv"))
+	if err != nil {
+		t.Fatalf("read movie.mkv: %v", err)
+	}
+	if string(data) != fileContents["2"] {
+		t.Errorf("movie.mkv contents = %q, want %q", data, fileContents["2"])
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateReadyForImport {
+		t.Errorf("state = %q, want ready_for_import even with a filtered-out file", got.State)
+	}
+}
+
+// TestTick_IncludeExcludeRegexFilterFiles proves both the include and
+// exclude regex checks apply, and combine correctly (a file must satisfy
+// both) — an .srt is excluded outright, and of the two remaining video
+// files, only the one actually matching the include pattern (not a sample)
+// is kept.
+func TestTick_IncludeExcludeRegexFilterFiles(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	fileContents := map[string]string{
+		"1": "subtitle",
+		"2": "sample clip",
+		"3": "the real movie",
+	}
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fileContents[r.URL.Path[1:]]))
+	}))
+	t.Cleanup(cdn.Close)
+
+	provider := &fakeProvider{
+		cdn: cdn,
+		files: []debrid.DownloadFile{
+			{ProviderFileID: "1", Path: "Movie/movie.en.srt", SizeBytes: int64(len(fileContents["1"]))},
+			{ProviderFileID: "2", Path: "Movie/movie.sample.mkv", SizeBytes: int64(len(fileContents["2"]))},
+			{ProviderFileID: "3", Path: "Movie/movie.mkv", SizeBytes: int64(len(fileContents["3"]))},
+		},
+	}
+
+	destDir := t.TempDir()
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Movie", Category: "radarr", SavePath: destDir,
+		State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFileFilters(0, regexp.MustCompile(`\.mkv$`), regexp.MustCompile(`sample`))
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	for _, excluded := range []string{"movie.en.srt", "movie.sample.mkv"} {
+		if _, err := os.Stat(filepath.Join(destDir, "Movie", excluded)); !os.IsNotExist(err) {
+			t.Errorf("%s present (stat err = %v), want filtered out", excluded, err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(destDir, "Movie", "movie.mkv")); err != nil {
+		t.Fatalf("read movie.mkv: %v", err)
+	} else if string(data) != fileContents["3"] {
+		t.Errorf("movie.mkv contents = %q, want %q", data, fileContents["3"])
+	}
+}
+
+// TestTick_AllFilesFilteredOutStillReachesReadyForImport is the edge case:
+// a filter matching nothing shouldn't leave the download stuck — it
+// trivially "finishes" with zero files fetched, same as a torrent that
+// genuinely had none.
+func TestTick_AllFilesFilteredOutStillReachesReadyForImport(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{
+		files: []debrid.DownloadFile{
+			{ProviderFileID: "1", Path: "Movie/movie.en.srt", SizeBytes: 10},
+		},
+	}
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Movie", Category: "radarr", SavePath: t.TempDir(),
+		State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetFileFilters(0, regexp.MustCompile(`\.mkv$`), nil) // matches nothing here
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateReadyForImport {
+		t.Errorf("state = %q, want ready_for_import even when every file was filtered out", got.State)
 	}
 }
 
@@ -487,6 +643,256 @@ func TestCleanupOldDownloads_ProviderDeleteFailureStillCleansUpLocally(t *testin
 	}
 	if _, err := os.Stat(destDir); !os.IsNotExist(err) {
 		t.Errorf("local directory still present after a provider-delete failure (err = %v), want removed anyway", err)
+	}
+}
+
+// backdateUpdatedAt directly sets a row's updated_at to an arbitrary past
+// time — UpdateDownloadStatus/InsertDownload always stamp "now", so tests
+// exercising the stuck-download watchdog or error-cleanup (both keyed
+// entirely on how stale updated_at is) need a way to simulate time having
+// actually passed.
+func backdateUpdatedAt(t *testing.T, db *database.DB, id string, at time.Time) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(), `UPDATE downloads SET updated_at = ? WHERE id = ?`, at, id); err != nil {
+		t.Fatalf("backdate updated_at for %s: %v", id, err)
+	}
+}
+
+// TestCheckStuckDownloads_DisabledByDefault proves
+// stuck_download_timeout_minutes=0 (the default) means checkStuckDownloads
+// never touches a download that hasn't reported anything new in a long
+// time — no accidental error for anyone who hasn't opted in.
+func TestCheckStuckDownloads_DisabledByDefault(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Stuck", State: database.StateDownloading,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().Add(-24*time.Hour))
+
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im.checkStuckDownloads(ctx)
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateDownloading {
+		t.Errorf("state = %q, want downloading unchanged (watchdog disabled)", got.State)
+	}
+}
+
+// TestCheckStuckDownloads_MarksStuckDownloadAsError is the positive case:
+// once enabled, a download that's sat in StateDownloading with no genuine
+// change reported for longer than the configured timeout gets marked
+// StateError with an explanatory message.
+func TestCheckStuckDownloads_MarksStuckDownloadAsError(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Stuck", State: database.StateDownloading, Progress: 0.4,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().Add(-2*time.Hour))
+
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im.SetStuckDownloadTimeout(time.Hour)
+	im.checkStuckDownloads(ctx)
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateError {
+		t.Errorf("state = %q, want error", got.State)
+	}
+	if got.ErrorMessage == "" {
+		t.Error("ErrorMessage empty, want a message explaining why")
+	}
+}
+
+// TestCheckStuckDownloads_LeavesRecentlyUpdatedDownloadAlone proves a
+// download that's still genuinely progressing (updated_at recent, well
+// within the timeout) is never touched — the watchdog must never punish a
+// large download just for taking a while.
+func TestCheckStuckDownloads_LeavesRecentlyUpdatedDownloadAlone(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "StillGoing", State: database.StateDownloading, Progress: 0.9,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	// updated_at defaults to "now" at insert time — well within the timeout.
+
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im.SetStuckDownloadTimeout(time.Hour)
+	im.checkStuckDownloads(ctx)
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State != database.StateDownloading {
+		t.Errorf("state = %q, want downloading unchanged (updated recently, still within timeout)", got.State)
+	}
+}
+
+// TestCheckStuckDownloads_IgnoresStatesOutsideQueuedOrDownloading proves the
+// watchdog only ever looks at StateQueued/StateDownloading rows — a
+// provider_completed or ready_for_import row sitting untouched for a long
+// time is expected, not stuck, and an already-errored row must keep its
+// original, more specific reason rather than being overwritten.
+func TestCheckStuckDownloads_IgnoresStatesOutsideQueuedOrDownloading(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	completed := &database.Download{
+		ID: "dl-completed", Provider: "fake", ProviderDownloadID: "p-1", Kind: database.KindTorrent,
+		Hash: "a", Name: "Completed", State: database.StateProviderCompleted,
+	}
+	ready := &database.Download{
+		ID: "dl-ready", Provider: "fake", ProviderDownloadID: "p-2", Kind: database.KindTorrent,
+		Hash: "b", Name: "Ready", State: database.StateReadyForImport,
+	}
+	alreadyError := &database.Download{
+		ID: "dl-error", Provider: "fake", ProviderDownloadID: "p-3", Kind: database.KindTorrent,
+		Hash: "c", Name: "AlreadyError", State: database.StateError, ErrorMessage: "some other reason",
+	}
+	for _, d := range []*database.Download{completed, ready, alreadyError} {
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload(%s) error = %v", d.ID, err)
+		}
+		backdateUpdatedAt(t, db, d.ID, old)
+	}
+
+	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im.SetStuckDownloadTimeout(time.Hour)
+	im.checkStuckDownloads(ctx)
+
+	if got, err := db.GetDownloadByID(ctx, completed.ID); err != nil {
+		t.Fatalf("GetDownloadByID(completed) error = %v", err)
+	} else if got.State != database.StateProviderCompleted {
+		t.Errorf("provider_completed row state = %q, want unchanged", got.State)
+	}
+	if got, err := db.GetDownloadByID(ctx, ready.ID); err != nil {
+		t.Fatalf("GetDownloadByID(ready) error = %v", err)
+	} else if got.State != database.StateReadyForImport {
+		t.Errorf("ready_for_import row state = %q, want unchanged", got.State)
+	}
+	if got, err := db.GetDownloadByID(ctx, alreadyError.ID); err != nil {
+		t.Fatalf("GetDownloadByID(alreadyError) error = %v", err)
+	} else if got.ErrorMessage != "some other reason" {
+		t.Errorf("already-errored row ErrorMessage = %q, want unchanged", got.ErrorMessage)
+	}
+}
+
+// TestCleanupErroredDownloads_DisabledByDefault proves
+// cleanup_error_after_days=0 (the default) means an old errored download is
+// never automatically removed — no accidental deletion for anyone who
+// hasn't opted in.
+func TestCleanupErroredDownloads_DisabledByDefault(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "OldError", State: database.StateError, ErrorMessage: "gave up",
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().AddDate(0, 0, -30))
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.cleanupErroredDownloads(ctx)
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("row removed even though error-cleanup is disabled")
+	}
+	if provider.deletedCount() != 0 {
+		t.Errorf("provider Delete called %d times, want 0", provider.deletedCount())
+	}
+}
+
+// TestCleanupErroredDownloads_RemovesOldErroredDownload is the positive
+// case: once enabled, a download that's sat in StateError longer than
+// cleanup_error_after_days is removed the same way an old ready_for_import
+// download is — and, unlike cleanupOldDownloads' Managed-only scope, this
+// applies to a Manual download too, since an error already means a real
+// dead end regardless of how it was added.
+func TestCleanupErroredDownloads_RemovesOldErroredDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	old := &database.Download{
+		ID: "dl-old", Provider: "fake", ProviderDownloadID: "provider-old", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "OldError", State: database.StateError, ErrorMessage: "gave up", AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, old); err != nil {
+		t.Fatalf("InsertDownload(old) error = %v", err)
+	}
+	backdateUpdatedAt(t, db, old.ID, time.Now().UTC().AddDate(0, 0, -10))
+
+	recent := &database.Download{
+		ID: "dl-recent", Provider: "fake", ProviderDownloadID: "provider-recent", Kind: database.KindTorrent,
+		Hash: "def456", Name: "RecentError", State: database.StateError, ErrorMessage: "gave up", AddedVia: database.AddedViaArr,
+	}
+	if err := db.InsertDownload(ctx, recent); err != nil {
+		t.Fatalf("InsertDownload(recent) error = %v", err)
+	}
+
+	manual := &database.Download{
+		ID: "dl-manual", Provider: "fake", ProviderDownloadID: "provider-manual", Kind: database.KindTorrent,
+		Hash: "ghi789", Name: "VanishedManual", State: database.StateError,
+		ErrorMessage: "no longer found in the provider's account", AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, manual); err != nil {
+		t.Fatalf("InsertDownload(manual) error = %v", err)
+	}
+	backdateUpdatedAt(t, db, manual.ID, time.Now().UTC().AddDate(0, 0, -10))
+
+	provider := &fakeProvider{}
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im.SetCleanupErrorAfterDays(3)
+	im.cleanupErroredDownloads(ctx)
+
+	if got, err := db.GetDownloadByID(ctx, old.ID); err != nil {
+		t.Fatalf("GetDownloadByID(old) error = %v", err)
+	} else if got != nil {
+		t.Error("old errored row still present, want removed")
+	}
+	if got, err := db.GetDownloadByID(ctx, recent.ID); err != nil {
+		t.Fatalf("GetDownloadByID(recent) error = %v", err)
+	} else if got == nil {
+		t.Error("recent errored row removed, want left alone (not old enough)")
+	}
+	if got, err := db.GetDownloadByID(ctx, manual.ID); err != nil {
+		t.Fatalf("GetDownloadByID(manual) error = %v", err)
+	} else if got != nil {
+		t.Error("old errored Manual row still present, want removed too (unlike cleanupOldDownloads' arr-only scope)")
+	}
+
+	if provider.deletedCount() != 2 {
+		t.Errorf("provider.deletedCount() = %d, want 2 (old + manual)", provider.deletedCount())
 	}
 }
 

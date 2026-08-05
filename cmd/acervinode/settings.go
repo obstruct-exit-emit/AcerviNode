@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -68,10 +69,11 @@ func (s *liveSettings) SetRestartTrigger(trigger func()) {
 // UpdateGeneral, which calls its SetConfig to apply download_dir/
 // import_interval_seconds/import_max_retries changes live. Also pushes
 // whatever category path overrides, max_concurrent_downloads,
-// import_fetch_timeout_seconds, cleanup_after_days, download_dir_mode, and
-// fast_poll_interval_seconds config.yaml already had at startup, so a value
-// set through the UI on a previous run is live again immediately, without
-// waiting for another settings call.
+// import_fetch_timeout_seconds, cleanup_after_days, download_dir_mode,
+// fast_poll_interval_seconds, the file-filtering settings,
+// stuck_download_timeout_minutes, and cleanup_error_after_days config.yaml
+// already had at startup, so a value set through the UI on a previous run
+// is live again immediately, without waiting for another settings call.
 func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	s.mu.Lock()
 	s.imp = imp
@@ -90,6 +92,11 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 		dirMode = 0o777
 	}
 	fastPollInterval := time.Duration(s.cfg.FastPollIntervalSeconds) * time.Second
+	minFetchFileSizeBytes := s.cfg.MinFetchFileSizeBytes
+	includeFileRegex := compileOptionalRegex(s.cfg.IncludeFileRegex)
+	excludeFileRegex := compileOptionalRegex(s.cfg.ExcludeFileRegex)
+	stuckDownloadTimeout := time.Duration(s.cfg.StuckDownloadTimeoutMinutes) * time.Minute
+	cleanupErrorAfterDays := s.cfg.CleanupErrorAfterDays
 	s.mu.Unlock()
 	imp.SetCategoryPaths(categoryPaths)
 	imp.SetMaxConcurrent(maxConcurrent)
@@ -97,6 +104,9 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	imp.SetCleanupAfterDays(cleanupAfterDays)
 	imp.SetDirMode(dirMode)
 	imp.SetFastPollInterval(fastPollInterval)
+	imp.SetFileFilters(minFetchFileSizeBytes, includeFileRegex, excludeFileRegex)
+	imp.SetStuckDownloadTimeout(stuckDownloadTimeout)
+	imp.SetCleanupErrorAfterDays(cleanupErrorAfterDays)
 }
 
 // SetShimServers wires in the compat shim servers built in buildHandler,
@@ -277,7 +287,33 @@ func (s *liveSettings) General() api.GeneralInfo {
 		TLSPort:                       s.cfg.TLSPort,
 		TLSCertFile:                   s.cfg.TLSCertFile,
 		TLSKeyFile:                    s.cfg.TLSKeyFile,
+		MinFetchFileSizeBytes:         s.cfg.MinFetchFileSizeBytes,
+		IncludeFileRegex:              s.cfg.IncludeFileRegex,
+		ExcludeFileRegex:              s.cfg.ExcludeFileRegex,
+		StuckDownloadTimeoutMinutes:   s.cfg.StuckDownloadTimeoutMinutes,
+		CleanupErrorAfterDays:         s.cfg.CleanupErrorAfterDays,
 	}
+}
+
+// compileOptionalRegex compiles pattern, or returns nil for an empty one —
+// the shape importer.Importer.SetFileFilters wants (nil disables that
+// check). Only ever called with a pattern that already passed
+// config.Config.Validate's own regexp.Compile check (UpdateGeneral above,
+// SetImporter's own startup wiring below), so a compile failure here would
+// mean config.yaml was hand-edited to something invalid after that, or a
+// bug in Validate itself; falling back to nil (no filtering) rather than
+// panicking keeps a fresh install-adjacent, easily-recoverable failure mode
+// — the same reasoning SetImporter already applies to download_dir_mode.
+func compileOptionalRegex(pattern string) *regexp.Regexp {
+	if pattern == "" {
+		return nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		slog.Error("settings: invalid persisted file-filter regex, disabling that filter", "pattern", pattern, "error", err)
+		return nil
+	}
+	return re
 }
 
 // UpdateGeneral validates update against a copy of the current config (so a
@@ -310,6 +346,11 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.TLSPort = update.TLSPort
 	candidate.TLSCertFile = update.TLSCertFile
 	candidate.TLSKeyFile = update.TLSKeyFile
+	candidate.MinFetchFileSizeBytes = update.MinFetchFileSizeBytes
+	candidate.IncludeFileRegex = update.IncludeFileRegex
+	candidate.ExcludeFileRegex = update.ExcludeFileRegex
+	candidate.StuckDownloadTimeoutMinutes = update.StuckDownloadTimeoutMinutes
+	candidate.CleanupErrorAfterDays = update.CleanupErrorAfterDays
 	if err := candidate.Validate(); err != nil {
 		return false, err
 	}
@@ -341,6 +382,9 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 			s.imp.SetDirMode(dirMode)
 		}
 		s.imp.SetFastPollInterval(time.Duration(candidate.FastPollIntervalSeconds) * time.Second)
+		s.imp.SetFileFilters(candidate.MinFetchFileSizeBytes, compileOptionalRegex(candidate.IncludeFileRegex), compileOptionalRegex(candidate.ExcludeFileRegex))
+		s.imp.SetStuckDownloadTimeout(time.Duration(candidate.StuckDownloadTimeoutMinutes) * time.Minute)
+		s.imp.SetCleanupErrorAfterDays(candidate.CleanupErrorAfterDays)
 	}
 	// Unlike every other field above, a changed provider request timeout
 	// can't just be pushed into an existing live object — it's baked into

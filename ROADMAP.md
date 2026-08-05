@@ -55,6 +55,35 @@ this unattended. Recommendations first.
   provider-side copy, and row once it's sat `ready_for_import` for at least
   that many days — never a Manual download. Surfaced in Settings → General.
   See [Providers](docs/providers.md#retentioncleanup-policy).
+- ✅ **Three settings gaps found by comparing against rdt-client's own
+  settings, field by field, not guessed.** Requested directly ("take a
+  complete look at all of the rdt-client settings — are we missing any that
+  would make sense"). Most of rdt-client's surface didn't apply (pluggable
+  download engines, unpack limits, banned trackers — architecturally not
+  how AcerviNode works), but three genuinely did:
+  - **Per-file fetch filtering** — `min_fetch_file_size_bytes`/
+    `include_file_regex`/`exclude_file_regex` skip a file (samples, junk,
+    unwanted types) when fetching a download's files to local disk.
+    `Importer.filterFiles`, applied right after the provider's own file
+    list comes back. Include and exclude can both be set at once, unlike
+    rdt-client's own "only use one" convention.
+  - **Stuck-download watchdog** — `stuck_download_timeout_minutes`
+    auto-errors a download that's sat `queued`/`downloading` with no
+    genuine change reported for too long. Deliberately keyed differently
+    than rdt-client's own blunt "maximum lifetime": on `updated_at` (only
+    ever moves on a real change — state/progress/size/error), not simply
+    elapsed time, so a large download still steadily making progress is
+    never punished just for taking a while.
+  - **Error-state cleanup** — `cleanup_error_after_days` automatically
+    removes a download that's sat in `error` for too long, the one real gap
+    the existing retention policy's own scope left open (Managed +
+    `ready_for_import` only — an errored download had no automatic cleanup
+    path at all). Applies to both Managed and Manual downloads, unlike that
+    one, since an error already means a real dead end either way.
+
+  All three surfaced in Settings → General, live-editable, no restart. See
+  [Providers](docs/providers.md#per-file-fetch-filtering) (and the two
+  sections immediately following it).
 
 **Verify before trusting this daily** — process, not code:
 

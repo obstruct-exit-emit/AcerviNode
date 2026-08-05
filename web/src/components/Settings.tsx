@@ -149,6 +149,11 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error']
 
 export function Settings({ apiKey }: Props) {
   const [group, setGroup] = useState<SettingsGroup>('General')
+  // Collapsed by default — the configured flag and plan (shown in the
+  // header row regardless of this) are usually all there is to check; the
+  // key form/account detail/status/polling knobs underneath are needed far
+  // less often.
+  const [providerExpanded, setProviderExpanded] = useState(false)
   const [settings, setSettings] = useState<ProviderSettings | null>(null)
   const [torboxKey, setTorboxKey] = useState('')
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
@@ -216,6 +221,11 @@ export function Settings({ apiKey }: Props) {
         // editable field in this form (config/env-only, see GeneralSettings).
         tls_cert_file: generalSettings.tls_cert_file,
         tls_key_file: generalSettings.tls_key_file,
+        min_fetch_file_size_bytes: generalSettings.min_fetch_file_size_bytes,
+        include_file_regex: generalSettings.include_file_regex,
+        exclude_file_regex: generalSettings.exclude_file_regex,
+        stuck_download_timeout_minutes: generalSettings.stuck_download_timeout_minutes,
+        cleanup_error_after_days: generalSettings.cleanup_error_after_days,
       })
       setCategories(cats)
       setHealth(statusInfo)
@@ -487,6 +497,51 @@ export function Settings({ apiKey }: Props) {
                       onChange={(e) => setForm({ ...form, cleanup_after_days: Number(e.target.value) })}
                     />
                   </label>
+                  <label>
+                    Clean up errored downloads after (days, 0 = off)
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.cleanup_error_after_days}
+                      onChange={(e) => setForm({ ...form, cleanup_error_after_days: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Stuck download timeout (minutes, 0 = off)
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.stuck_download_timeout_minutes}
+                      onChange={(e) => setForm({ ...form, stuck_download_timeout_minutes: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Minimum file size to fetch (bytes, 0 = off)
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.min_fetch_file_size_bytes}
+                      onChange={(e) => setForm({ ...form, min_fetch_file_size_bytes: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Include files matching (regex, blank = off)
+                    <input
+                      type="text"
+                      placeholder={String.raw`\.(mkv|mp4)$`}
+                      value={form.include_file_regex}
+                      onChange={(e) => setForm({ ...form, include_file_regex: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Exclude files matching (regex, blank = off)
+                    <input
+                      type="text"
+                      placeholder="sample"
+                      value={form.exclude_file_regex}
+                      onChange={(e) => setForm({ ...form, exclude_file_regex: e.target.value })}
+                    />
+                  </label>
                 </div>
                 <p className="settings-help">
                   Import max retries is how many times a failed fetch-to-disk attempt is retried before a Managed
@@ -499,6 +554,18 @@ export function Settings({ apiKey }: Props) {
                   it's reached "ready for import" (already handed off to Sonarr/Radarr) and stayed there this long —
                   a Manual download is never auto-deleted. 0 disables cleanup entirely (the default). See the
                   Provider tab for how often AcerviNode polls the debrid provider itself.
+                </p>
+                <p className="settings-help">
+                  Cleanup for errored downloads is separate from the one above, and applies to both Managed and
+                  Manual downloads — an error already means AcerviNode gave up (retry-exhausted) or the provider
+                  itself lost track of it, not an in-progress state worth preserving. The stuck download timeout
+                  auto-errors a download that's sat queued/downloading with no genuine change reported by the
+                  provider for this long — keyed on whether anything actually changed, not simply how long it's
+                  been running, so a large download still steadily making progress on a slow connection is never
+                  affected, however long the whole thing takes. Minimum file size and the include/exclude patterns
+                  (matched against each file's path within the download, e.g. "Show/episode.en.srt") apply when
+                  fetching a download's files to local disk — skip samples/junk, or only fetch certain file types.
+                  Include and exclude can both be set at once; a file has to satisfy both to be kept.
                 </p>
               </Section>
 
@@ -631,20 +698,39 @@ export function Settings({ apiKey }: Props) {
 
       {group === 'Provider' && (
         <section className="settings-card">
-          <h2>TorBox</h2>
-          <p className="settings-status">
-            {configured ? (
-              <span className="badge badge-ready_for_import">Configured</span>
-            ) : (
-              <span className="badge badge-queued">Not configured</span>
-            )}
-          </p>
-          <p className="settings-help">
-            {configured
-              ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
-              : 'Add your TorBox API key to enable the qBittorrent and SABnzbd compat shims.'}
-          </p>
-          <form onSubmit={handleSubmit}>
+          <div
+            className="settings-card-toggle"
+            onClick={() => setProviderExpanded((e) => !e)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setProviderExpanded((v) => !v)
+              }
+            }}
+          >
+            <h2>TorBox</h2>
+            <span className="settings-card-summary">
+              {configured ? (
+                <span className="badge badge-ready_for_import">Configured</span>
+              ) : (
+                <span className="badge badge-queued">Not configured</span>
+              )}
+            </span>
+            <span className={`settings-card-chevron${providerExpanded ? ' settings-card-chevron-open' : ''}`}>▸</span>
+          </div>
+
+          {providerExpanded && (
+            <>
+              {/* No separate "Configured"/"Not configured" badge here —
+                  the header row above already shows it, even collapsed. */}
+              <p className="settings-help">
+                {configured
+                  ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
+                  : 'Add your TorBox API key to enable the qBittorrent and SABnzbd compat shims.'}
+              </p>
+              <form onSubmit={handleSubmit}>
             <input type="password" placeholder="TorBox API key" value={torboxKey} onChange={(e) => setTorboxKey(e.target.value)} />
             <button type="submit" disabled={status.kind === 'saving' || !torboxKey.trim()}>
               {status.kind === 'saving' ? 'Saving…' : 'Save'}
@@ -771,6 +857,8 @@ export function Settings({ apiKey }: Props) {
               {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
               {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
             </Section>
+          )}
+            </>
           )}
         </section>
       )}

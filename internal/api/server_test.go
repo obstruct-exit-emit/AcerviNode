@@ -839,7 +839,7 @@ func TestHandleUpdateGeneralSettings(t *testing.T) {
 	settings := &fakeSettings{}
 	srv, _ := newTestServer(t, nil, nil, settings)
 
-	body := `{"port":7846,"data_dir":"./data","download_dir":"./new-downloads","log_level":"debug","import_interval_seconds":15,"import_max_retries":3}`
+	body := `{"port":7846,"data_dir":"./data","download_dir":"./new-downloads","log_level":"debug","import_interval_seconds":15,"import_max_retries":3,"min_fetch_file_size_bytes":2048,"include_file_regex":"\\.mkv$","exclude_file_regex":"sample","stuck_download_timeout_minutes":90,"cleanup_error_after_days":7}`
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 
@@ -854,6 +854,14 @@ func TestHandleUpdateGeneralSettings(t *testing.T) {
 	got := settings.updateCalls[0]
 	if got.DownloadDir != "./new-downloads" || got.LogLevel != "debug" || got.ImportIntervalSeconds != 15 || got.ImportMaxRetries != 3 {
 		t.Errorf("UpdateGeneral called with %+v", got)
+	}
+	// Sent through a real JSON body, not a Go struct literal — proves the
+	// json tags themselves are correct, not just that the Go field
+	// assignment works (a struct literal wouldn't catch a missing/
+	// misspelled tag the way decoding real JSON does).
+	if got.MinFetchFileSizeBytes != 2048 || got.IncludeFileRegex != `\.mkv$` || got.ExcludeFileRegex != "sample" ||
+		got.StuckDownloadTimeoutMinutes != 90 || got.CleanupErrorAfterDays != 7 {
+		t.Errorf("UpdateGeneral called with %+v, want the new fields decoded from JSON", got)
 	}
 
 	var resp map[string]bool

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -96,6 +97,43 @@ type Config struct {
 	// handful of downloads are actively in flight at once.
 	FastPollIntervalSeconds int `yaml:"fast_poll_interval_seconds"`
 
+	// MinFetchFileSizeBytes, if > 0, has internal/importer skip any file
+	// smaller than this when fetching a download's files to local disk —
+	// samples, .nfo/.txt junk, and similar. 0 (the default) fetches every
+	// file the provider reports, same as before this existed.
+	MinFetchFileSizeBytes int64 `yaml:"min_fetch_file_size_bytes"`
+	// IncludeFileRegex, if set, has internal/importer skip any file whose
+	// path doesn't match it when fetching a download's files to local disk
+	// — e.g. only video file extensions. Can be combined with
+	// ExcludeFileRegex (a file must satisfy both); either or both left
+	// empty (the default) fetches every file regardless.
+	IncludeFileRegex string `yaml:"include_file_regex"`
+	// ExcludeFileRegex, if set, has internal/importer skip any file whose
+	// path matches it when fetching a download's files to local disk — e.g.
+	// unwanted subtitle languages. See IncludeFileRegex.
+	ExcludeFileRegex string `yaml:"exclude_file_regex"`
+
+	// StuckDownloadTimeoutMinutes, if > 0, has internal/importer mark a
+	// download StateError once it's sat in StateQueued/StateDownloading
+	// with no genuine change reported by the provider (see
+	// internal/importer's checkStuckDownloads — keyed on updated_at, not
+	// simply how long it's been running, so a large download still
+	// actually making progress is never affected) for at least this many
+	// minutes. 0 (the default) disables the watchdog entirely — nothing
+	// currently catches a download that's stalled with no explicit error.
+	StuckDownloadTimeoutMinutes int `yaml:"stuck_download_timeout_minutes"`
+	// CleanupErrorAfterDays, if > 0, has internal/importer automatically
+	// remove a download once it's been sat in StateError for at least this
+	// many days — local files (if any), the provider-side copy
+	// (best-effort), and the row itself, the same removal
+	// CleanupAfterDays' ready_for_import policy already does. Unlike that
+	// one, applies to both Managed and Manual downloads — an error already
+	// means AcerviNode gave up or the provider lost track of it, not an
+	// in-progress state worth preserving. 0 (the default) disables it
+	// entirely — an errored download currently sits forever with no
+	// automatic cleanup path.
+	CleanupErrorAfterDays int `yaml:"cleanup_error_after_days"`
+
 	// ProviderRequestTimeoutSeconds bounds how long a single call to the
 	// debrid provider's own API (list, status, add, delete, account — every
 	// one of them) may run before being cancelled. A plain total-request
@@ -178,6 +216,9 @@ func defaults() *Config {
 		ProviderRequestTimeoutSeconds: 30,
 		CategoryPaths:                 map[string]string{},
 		TLSPort:                       8443,
+		MinFetchFileSizeBytes:         0,
+		StuckDownloadTimeoutMinutes:   0,
+		CleanupErrorAfterDays:         0,
 	}
 }
 
@@ -281,6 +322,27 @@ func applyEnv(cfg *Config) {
 			cfg.ProviderRequestTimeoutSeconds = n
 		}
 	}
+	if v := os.Getenv("ACERVINODE_MIN_FETCH_FILE_SIZE_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.MinFetchFileSizeBytes = n
+		}
+	}
+	if v := os.Getenv("ACERVINODE_INCLUDE_FILE_REGEX"); v != "" {
+		cfg.IncludeFileRegex = v
+	}
+	if v := os.Getenv("ACERVINODE_EXCLUDE_FILE_REGEX"); v != "" {
+		cfg.ExcludeFileRegex = v
+	}
+	if v := os.Getenv("ACERVINODE_STUCK_DOWNLOAD_TIMEOUT_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.StuckDownloadTimeoutMinutes = n
+		}
+	}
+	if v := os.Getenv("ACERVINODE_CLEANUP_ERROR_AFTER_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CleanupErrorAfterDays = n
+		}
+	}
 	if v := os.Getenv("ACERVINODE_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLSEnabled = b
@@ -367,6 +429,25 @@ func (c *Config) Validate() error {
 	}
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return fmt.Errorf("tls_cert_file and tls_key_file must be set together, or not at all")
+	}
+	if c.MinFetchFileSizeBytes < 0 {
+		return fmt.Errorf("min_fetch_file_size_bytes must not be negative")
+	}
+	if c.IncludeFileRegex != "" {
+		if _, err := regexp.Compile(c.IncludeFileRegex); err != nil {
+			return fmt.Errorf("invalid include_file_regex: %w", err)
+		}
+	}
+	if c.ExcludeFileRegex != "" {
+		if _, err := regexp.Compile(c.ExcludeFileRegex); err != nil {
+			return fmt.Errorf("invalid exclude_file_regex: %w", err)
+		}
+	}
+	if c.StuckDownloadTimeoutMinutes < 0 {
+		return fmt.Errorf("stuck_download_timeout_minutes must not be negative")
+	}
+	if c.CleanupErrorAfterDays < 0 {
+		return fmt.Errorf("cleanup_error_after_days must not be negative")
 	}
 	return nil
 }

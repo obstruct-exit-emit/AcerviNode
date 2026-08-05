@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -61,9 +62,12 @@ type Importer struct {
 
 	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
 	// fetchTimeout/webDownloadProvider/cleanupAfterDays/dirMode/
-	// fastPollInterval, which SetConfig/SetCategoryPaths/SetMaxConcurrent/
-	// SetFetchTimeout/SetWebDownloadProvider/SetCleanupAfterDays/SetDirMode/
-	// SetFastPollInterval can change live (see cmd/acervinode's
+	// fastPollInterval/minFetchFileSizeBytes/includeFileRegex/
+	// excludeFileRegex/stuckDownloadTimeout/cleanupErrorAfterDays, which
+	// SetConfig/SetCategoryPaths/SetMaxConcurrent/SetFetchTimeout/
+	// SetWebDownloadProvider/SetCleanupAfterDays/SetDirMode/
+	// SetFastPollInterval/SetFileFilters/SetStuckDownloadTimeout/
+	// SetCleanupErrorAfterDays can change live (see cmd/acervinode's
 	// liveSettings) — everything else on Importer is set once at
 	// construction and never mutated afterward.
 	mu                  sync.Mutex
@@ -77,6 +81,19 @@ type Importer struct {
 	webDownloadProvider provider          // nil if no web-download-capable provider is configured — see SetWebDownloadProvider
 	dirMode             os.FileMode       // permission mode every download directory is created with — see ensureWritableDir
 	fastPollInterval    time.Duration     // see fastPollIntervalDefault's own doc comment
+
+	// minFetchFileSizeBytes/includeFileRegex/excludeFileRegex back the
+	// per-file filtering policy — see filterFiles. 0/nil/nil (the defaults)
+	// disable each check independently.
+	minFetchFileSizeBytes int64
+	includeFileRegex      *regexp.Regexp
+	excludeFileRegex      *regexp.Regexp
+	// stuckDownloadTimeout backs the stuck-download watchdog — see
+	// checkStuckDownloads. 0 (the default) disables it.
+	stuckDownloadTimeout time.Duration
+	// cleanupErrorAfterDays backs the error-cleanup policy — see
+	// cleanupErroredDownloads. 0 (the default) disables it.
+	cleanupErrorAfterDays int
 
 	// intervalChanged carries a fresh interval into Run's select loop so a
 	// live SetConfig call can reset the ticker without Run having to poll
@@ -448,6 +465,79 @@ func (im *Importer) CleanupAfterDays() int {
 	return im.getCleanupAfterDays()
 }
 
+// SetFileFilters updates the per-file fetch filtering policy live — the
+// next download processed uses the new values immediately. minBytes <= 0
+// disables the minimum-size check; includeRegex/excludeRegex nil disables
+// each respectively. Callers are responsible for compiling the regexes
+// themselves (see config.Config.Validate, which already confirms they
+// compile before a candidate settings update is ever accepted) — Importer
+// stores compiled patterns, not raw strings, since it never needs to
+// serialize them anywhere.
+func (im *Importer) SetFileFilters(minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+	im.mu.Lock()
+	im.minFetchFileSizeBytes = minBytes
+	im.includeFileRegex = includeRegex
+	im.excludeFileRegex = excludeRegex
+	im.mu.Unlock()
+}
+
+func (im *Importer) getFileFilters() (minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.minFetchFileSizeBytes, im.includeFileRegex, im.excludeFileRegex
+}
+
+// SetStuckDownloadTimeout updates the stuck-download watchdog live (see
+// checkStuckDownloads) — the next Tick uses the new value immediately. 0
+// (or negative) disables it entirely.
+func (im *Importer) SetStuckDownloadTimeout(d time.Duration) {
+	im.mu.Lock()
+	im.stuckDownloadTimeout = d
+	im.mu.Unlock()
+}
+
+func (im *Importer) getStuckDownloadTimeout() time.Duration {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.stuckDownloadTimeout
+}
+
+// SetCleanupErrorAfterDays updates the error-cleanup policy live (see
+// cleanupErroredDownloads) — the next Tick uses the new value immediately.
+// 0 (or negative) disables it entirely.
+func (im *Importer) SetCleanupErrorAfterDays(days int) {
+	im.mu.Lock()
+	im.cleanupErrorAfterDays = days
+	im.mu.Unlock()
+}
+
+func (im *Importer) getCleanupErrorAfterDays() int {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.cleanupErrorAfterDays
+}
+
+// FileFilters is the exported counterpart of getFileFilters, for callers
+// outside this package confirming a SetFileFilters call took (see
+// cmd/acervinode's settings tests).
+func (im *Importer) FileFilters() (minBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
+	return im.getFileFilters()
+}
+
+// StuckDownloadTimeout is the exported counterpart of
+// getStuckDownloadTimeout, for callers outside this package confirming a
+// SetStuckDownloadTimeout call took (see cmd/acervinode's settings tests).
+func (im *Importer) StuckDownloadTimeout() time.Duration {
+	return im.getStuckDownloadTimeout()
+}
+
+// CleanupErrorAfterDays is the exported counterpart of
+// getCleanupErrorAfterDays, for callers outside this package confirming a
+// SetCleanupErrorAfterDays call took (see cmd/acervinode's settings tests).
+func (im *Importer) CleanupErrorAfterDays() int {
+	return im.getCleanupErrorAfterDays()
+}
+
 // Config reports the current live downloadDir/interval/maxRetries — the
 // exported counterpart of getConfig, for callers outside this package that
 // need to confirm a SetConfig call actually took (see
@@ -514,16 +604,21 @@ func (im *Importer) runFastPoll(ctx context.Context) {
 // ID), and database.DB's connection pool is capped to one connection, so
 // concurrent goroutines here can't corrupt anything — they just serialize on
 // that one connection for the brief moment any of them touches it. Finally,
-// cleanupOldDownloads runs the retention policy (a no-op unless
-// cleanup_after_days is configured) — last, so a download that just reached
-// ready_for_import this same tick isn't somehow considered for cleanup
-// before its completed_at has even had a chance to age past the cutoff.
+// checkStuckDownloads runs right after (a no-op unless
+// stuck_download_timeout_minutes is configured), reflecting the freshest
+// possible updated_at for every row before deciding anything looks stuck.
+// cleanupOldDownloads/cleanupErroredDownloads run the retention policies
+// (each a no-op unless its own days setting is configured) — last, so a
+// download that just reached ready_for_import or StateError this same tick
+// isn't somehow considered for cleanup before its own timestamp has even had
+// a chance to age past the cutoff.
 func (im *Importer) Tick(ctx context.Context) error {
 	im.statsMu.Lock()
 	im.tickAt = time.Now()
 	im.statsMu.Unlock()
 
 	im.refreshStatuses(ctx)
+	im.checkStuckDownloads(ctx)
 
 	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
 	if err != nil {
@@ -546,6 +641,7 @@ func (im *Importer) Tick(ctx context.Context) error {
 	wg.Wait()
 
 	im.cleanupOldDownloads(ctx)
+	im.cleanupErroredDownloads(ctx)
 	return nil
 }
 
@@ -1054,6 +1150,39 @@ func (im *Importer) CancelFetch(id string) {
 	}
 }
 
+// filterFiles applies the configured minimum-file-size and include/exclude
+// regex filters (see SetFileFilters) to files before processDownload fetches
+// them to local disk. A file is kept only if it's at least the minimum size
+// AND (no include pattern, or its path matches it) AND (no exclude pattern,
+// or its path doesn't match it) — include and exclude can both be set at
+// once; a file has to satisfy both. Matched against the file's path (its
+// name, or a relative path for a multi-file torrent's subdirectory
+// structure), not its size or any other field. Purely local: never changes
+// what the provider itself considers part of the download, or what shows in
+// GET /api/v1/downloads/{id}'s own files list — only which of those files
+// actually get written to disk. Returns files unchanged (not a copy) when
+// nothing is configured, the common case, so this costs nothing when unused.
+func (im *Importer) filterFiles(files []debrid.DownloadFile) []debrid.DownloadFile {
+	minBytes, include, exclude := im.getFileFilters()
+	if minBytes <= 0 && include == nil && exclude == nil {
+		return files
+	}
+	out := make([]debrid.DownloadFile, 0, len(files))
+	for _, f := range files {
+		if minBytes > 0 && f.SizeBytes < minBytes {
+			continue
+		}
+		if include != nil && !include.MatchString(f.Path) {
+			continue
+		}
+		if exclude != nil && exclude.MatchString(f.Path) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
 	fetchCtx, doneFetch, ok := im.tryStartFetch(ctx, d.ID)
 	if !ok {
@@ -1082,9 +1211,16 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	}
 
 	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
-	files, err := p.Files(ctx, id)
+	allFiles, err := p.Files(ctx, id)
 	if err != nil {
 		return fmt.Errorf("list files: %w", err)
+	}
+	files := im.filterFiles(allFiles)
+	if skipped := len(allFiles) - len(files); skipped > 0 {
+		slog.Info("importer: skipped files not matching configured filters", "id", d.ID, "name", d.Name, "skipped", skipped, "kept", len(files))
+	}
+	if len(files) == 0 && len(allFiles) > 0 {
+		slog.Warn("importer: every file was filtered out, nothing to fetch", "id", d.ID, "name", d.Name)
 	}
 
 	destDir := im.resolveDestDir(d)
@@ -1161,6 +1297,69 @@ func (im *Importer) cleanupOldDownloads(ctx context.Context) {
 	rows, err := im.db.ListDownloadsEligibleForCleanup(ctx, cutoff)
 	if err != nil {
 		slog.Error("importer: list downloads eligible for cleanup failed", "error", err)
+		return
+	}
+	for _, d := range rows {
+		im.cleanupDownload(ctx, d)
+	}
+}
+
+// checkStuckDownloads implements the stuck-download watchdog: a download
+// still sitting in StateQueued or StateDownloading whose row hasn't actually
+// changed — updated_at, which UpdateDownloadStatus/RefreshFromProvider only
+// ever bump when state/progress/size/error genuinely changed, never on a
+// no-op poll (see RefreshFromProvider's own no-op check) — in at least
+// getStuckDownloadTimeout is marked StateError instead of sitting unnoticed
+// forever. Deliberately keyed on "no real change reported," not "how long
+// it's been running": a large download still genuinely making progress on a
+// slow connection must never be punished just for taking a while — only a
+// download the provider itself has stopped saying anything new about trips
+// this. Applies to both Managed and Manual downloads; unlike
+// cleanupOldDownloads' ready_for_import scope, being stuck queued/
+// downloading isn't a state that means anything different depending on how
+// it was added. Disabled entirely when getStuckDownloadTimeout is 0 (the
+// default).
+func (im *Importer) checkStuckDownloads(ctx context.Context) {
+	timeout := im.getStuckDownloadTimeout()
+	if timeout <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-timeout)
+	rows, err := im.db.ListStuckDownloads(ctx, cutoff)
+	if err != nil {
+		slog.Error("importer: list stuck downloads failed", "error", err)
+		return
+	}
+	for _, d := range rows {
+		msg := fmt.Sprintf("no progress for over %s — possibly stuck", timeout)
+		if err := im.db.UpdateDownloadStatus(ctx, d.ID, database.StateError, d.Progress, d.SizeBytes, nil, msg); err != nil {
+			slog.Error("importer: mark stuck download as error failed", "id", d.ID, "error", err)
+			continue
+		}
+		slog.Warn("importer: marked download as error, no progress for too long", "id", d.ID, "name", d.Name, "timeout", timeout)
+	}
+}
+
+// cleanupErroredDownloads implements the error-cleanup policy: once a
+// download has sat in StateError for at least getCleanupErrorAfterDays
+// days, it's removed the same way cleanupOldDownloads removes a finished
+// one — local files (if any), the provider-side copy (best-effort), and the
+// row itself, via the same cleanupDownload. Unlike cleanupOldDownloads,
+// applies to both Managed and Manual downloads: an error here already means
+// AcerviNode gave up (retry-exhausted) or the provider genuinely lost track
+// of it (a vanished Manual download) — either way a real dead end nobody's
+// acted on, not an in-progress state that needs preserving the way
+// ready_for_import's Managed-only scope does. Disabled entirely when
+// getCleanupErrorAfterDays is 0 (the default).
+func (im *Importer) cleanupErroredDownloads(ctx context.Context) {
+	days := im.getCleanupErrorAfterDays()
+	if days <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	rows, err := im.db.ListErroredDownloadsEligibleForCleanup(ctx, cutoff)
+	if err != nil {
+		slog.Error("importer: list errored downloads eligible for cleanup failed", "error", err)
 		return
 	}
 	for _, d := range rows {

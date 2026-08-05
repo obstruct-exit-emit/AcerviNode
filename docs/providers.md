@@ -755,6 +755,75 @@ tombstone and removes the row — the exact same
 (`internal/api`'s `handleDeleteDownload`), since this runs on `Tick`'s own
 independent schedule, the same as discovery.
 
+### Per-file fetch filtering
+
+Requested directly, comparing AcerviNode's settings against
+[rdt-client](https://github.com/rogerfar/rdt-client)'s own — it can skip
+files under a minimum size (samples, `.nfo`/`.txt` junk) and include/exclude
+by regex; AcerviNode fetched every file the provider reported, no filtering
+at all, before this. `min_fetch_file_size_bytes`/`include_file_regex`/
+`exclude_file_regex` (`config.Config`, all disabled — `0`/empty — by
+default) are checked by `Importer.filterFiles`, called from
+`processDownload` right after the provider's own file list comes back and
+before any of them are fetched. A file is kept only if it's at least the
+minimum size **and** (no include pattern, or its path matches it) **and**
+(no exclude pattern, or its path doesn't match it) — include and exclude
+can both be set at once; unlike rdt-client's own "only use one or the
+other" convention, a file here has to satisfy both. Matched against each
+file's path (e.g. `Show/episode.en.srt` for a multi-file torrent's own
+subdirectory structure), never its size for the regex checks or any other
+field. Purely local: never changes what the provider itself considers part
+of the download, or what `GET /api/v1/downloads/{id}`'s own `files` list
+reports — only which of those files actually get written to disk. A filter
+matching nothing doesn't leave the download stuck — it trivially reaches
+`ready_for_import` with zero files fetched, the same as a torrent that
+genuinely had none.
+
+### Stuck-download watchdog
+
+Also requested directly off the same rdt-client comparison — its own
+"maximum lifetime" setting auto-errors a torrent that's been running too
+long, regardless of whether it's still genuinely making progress.
+AcerviNode's version (`stuck_download_timeout_minutes`, `config.Config`, `0`
+disabled by default) is deliberately keyed differently:
+`Importer.checkStuckDownloads`, run right after `refreshStatuses` on every
+`Tick`, marks a `StateQueued`/`StateDownloading` row `StateError` once its
+own `updated_at` is older than the configured timeout —
+`database.ListStuckDownloads`. `updated_at` only actually moves when
+`UpdateDownloadStatus`/`RefreshFromProvider` change something real (state,
+progress, size, or the error message — see `RefreshFromProvider`'s own
+no-op check), never on a poll that found nothing new, so a stale
+`updated_at` here means the provider has genuinely stopped reporting
+anything new, not just that the download has been running a while. A large
+download still steadily, actively transferring on a slow connection is
+never affected by this however long the whole thing takes — only a
+download that's actually gone quiet trips it, the same "idle, not total"
+philosophy `ImportFetchTimeoutSeconds` already applies to a single file's
+own fetch. Applies to both Managed and Manual downloads — being stuck
+queued/downloading isn't a state that means anything different depending on
+how it was added, unlike the retention policy above.
+
+### Error-state cleanup
+
+The retention policy above only ever removes a *successfully finished*
+Managed download; an `error` row — retry-exhausted, a genuinely
+provider-reported failure, or a vanished Manual download the missing-count
+threshold above flagged — had no automatic cleanup path at all before this,
+matching a gap in AcerviNode's own settings found the same way as the two
+above: rdt-client has a separate "delete after N minutes in error" setting
+distinct from its normal finished-download cleanup. `cleanup_error_after_days`
+(`config.Config`, `0` disabled by default) enables
+`Importer.cleanupErroredDownloads`, run alongside `cleanupOldDownloads` at
+the end of every `Tick` — `database.ListErroredDownloadsEligibleForCleanup`
+finds every `StateError` row whose `updated_at` is older than the cutoff,
+and each one is removed through the exact same `cleanupDownload` the
+retention policy already uses (local files if any, best-effort provider
+delete, tombstone, row removal). **Applies to both Managed and Manual
+downloads**, unlike the retention policy's Managed-only scope — an error
+already means AcerviNode gave up or the provider itself lost track of it,
+not an in-progress state like `provider_completed`/Manual that needs
+preserving until a user actually grabs it.
+
 ### Proactively detecting a vanished Manual download
 
 For a Managed download, a provider item vanishing self-corrects within a few

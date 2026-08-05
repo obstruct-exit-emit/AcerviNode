@@ -303,6 +303,19 @@ export interface GeneralSettings {
   tls_port: number
   tls_cert_file: string
   tls_key_file: string
+  // min_fetch_file_size_bytes/include_file_regex/exclude_file_regex skip a
+  // file entirely when fetching a download's files to local disk — 0/empty
+  // (the defaults) fetch everything, same as before these existed.
+  min_fetch_file_size_bytes: number
+  include_file_regex: string
+  exclude_file_regex: string
+  // stuck_download_timeout_minutes auto-errors a download that's sat
+  // queued/downloading with no genuine change reported for this long — 0
+  // (the default) disables the watchdog entirely.
+  stuck_download_timeout_minutes: number
+  // cleanup_error_after_days automatically removes a download that's sat
+  // in error for this many days — 0 (the default) disables it entirely.
+  cleanup_error_after_days: number
 }
 
 export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
@@ -333,6 +346,11 @@ export interface GeneralUpdateInput {
   tls_port: number
   tls_cert_file: string
   tls_key_file: string
+  min_fetch_file_size_bytes: number
+  include_file_regex: string
+  exclude_file_regex: string
+  stuck_download_timeout_minutes: number
+  cleanup_error_after_days: number
 }
 
 // updateGeneralSettings applies everything except port/data_dir/tls_*

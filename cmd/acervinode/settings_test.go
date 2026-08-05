@@ -304,6 +304,11 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		DownloadDirMode:  "0750", FastPollIntervalSeconds: 5,
 		ProviderRequestTimeoutSeconds: 45,
 		TLSPort:                       cfg.TLSPort, // unchanged — no restart needed
+		MinFetchFileSizeBytes:         1024,
+		IncludeFileRegex:              `\.mkv$`,
+		ExcludeFileRegex:              `sample`,
+		StuckDownloadTimeoutMinutes:   180,
+		CleanupErrorAfterDays:         3,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGeneral() error = %v", err)
@@ -340,6 +345,22 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	if got := imp.FastPollInterval(); got != 5*time.Second {
 		t.Errorf("importer FastPollInterval() = %v, want 5s applied live", got)
 	}
+	minBytes, include, exclude := imp.FileFilters()
+	if minBytes != 1024 {
+		t.Errorf("importer FileFilters() minBytes = %d, want 1024 applied live", minBytes)
+	}
+	if include == nil || include.String() != `\.mkv$` {
+		t.Errorf("importer FileFilters() include = %v, want compiled `\\.mkv$` applied live", include)
+	}
+	if exclude == nil || exclude.String() != `sample` {
+		t.Errorf("importer FileFilters() exclude = %v, want compiled `sample` applied live", exclude)
+	}
+	if got := imp.StuckDownloadTimeout(); got != 180*time.Minute {
+		t.Errorf("importer StuckDownloadTimeout() = %v, want 180m applied live", got)
+	}
+	if got := imp.CleanupErrorAfterDays(); got != 3 {
+		t.Errorf("importer CleanupErrorAfterDays() = %d, want 3 applied live", got)
+	}
 
 	reloaded, err := config.Load(configPath)
 	if err != nil {
@@ -349,7 +370,10 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 		reloaded.ImportIntervalSeconds != 42 || reloaded.ImportMaxRetries != 9 ||
 		reloaded.MaxConcurrentDownloads != 7 || reloaded.ImportFetchTimeoutSeconds != 120 ||
 		reloaded.CleanupAfterDays != 14 || reloaded.DownloadDirMode != "0750" ||
-		reloaded.FastPollIntervalSeconds != 5 || reloaded.ProviderRequestTimeoutSeconds != 45 {
+		reloaded.FastPollIntervalSeconds != 5 || reloaded.ProviderRequestTimeoutSeconds != 45 ||
+		reloaded.MinFetchFileSizeBytes != 1024 || reloaded.IncludeFileRegex != `\.mkv$` ||
+		reloaded.ExcludeFileRegex != "sample" || reloaded.StuckDownloadTimeoutMinutes != 180 ||
+		reloaded.CleanupErrorAfterDays != 3 {
 		t.Errorf("reloaded config = %+v, want the new values persisted", reloaded)
 	}
 }

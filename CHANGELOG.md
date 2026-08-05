@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Three settings gaps found by comparing AcerviNode's own settings
+  against rdt-client's, field by field:**
+  - **Per-file fetch filtering.** `min_fetch_file_size_bytes` skips a file
+    smaller than a configured size (samples, junk); `include_file_regex`/
+    `exclude_file_regex` skip a file by path pattern (unwanted types,
+    languages) — both can be set at once, a file must satisfy both. Applied
+    in `Importer.filterFiles`, right after a download's file list comes
+    back from the provider and before any of them are fetched to local
+    disk. Purely local — never changes what the provider itself considers
+    part of the download, or what `GET /api/v1/downloads/{id}`'s own
+    `files` list reports.
+  - **Stuck-download watchdog.** `stuck_download_timeout_minutes`
+    auto-errors a download that's sat `queued`/`downloading` with no
+    genuine change reported by the provider for too long —
+    `Importer.checkStuckDownloads`, keyed on `updated_at` (only ever moves
+    on a real state/progress/size/error change, never a no-op poll), not
+    simply elapsed time, so a large download still actively transferring on
+    a slow connection is never punished just for taking a while.
+  - **Error-state cleanup.** `cleanup_error_after_days` automatically
+    removes a download that's sat in `error` for too long — local files (if
+    any), the provider-side copy, and the row itself, the same removal the
+    existing `cleanup_after_days` retention policy already does for a
+    finished download. Applies to **both** Managed and Manual downloads,
+    unlike that policy's Managed-only scope, since an error already means a
+    real dead end either way — previously an errored download (retry-
+    exhausted, or a vanished Manual download) had no automatic cleanup path
+    at all.
+
+  All three default to disabled (`0`/empty), live-editable with no restart
+  via Settings → General or `PUT /api/v1/settings/general`. See
+  docs/providers.md#per-file-fetch-filtering (and the two sections
+  immediately after it).
+
 - **The web UI now detects when it's running a stale build and prompts you
   to reload.** It's a long-lived SPA — nothing re-fetches its own JS once
   loaded, so a tab left open across a deploy would silently keep running
