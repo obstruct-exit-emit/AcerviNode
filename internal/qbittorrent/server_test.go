@@ -2,6 +2,7 @@ package qbittorrent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -729,5 +730,89 @@ func TestHandleAdd_AcceptsPlainUrlencodedMagnetOnlyPost(t *testing.T) {
 	}
 	if items[0].Category != "tv-sonarr" {
 		t.Errorf("category = %q, want tv-sonarr", items[0].Category)
+	}
+}
+
+// TestHandleAdd_ClaimsAnExistingManualRow is the end-to-end regression for
+// an *arr-requested torrent ending up in the web UI's Manual tab. A row for
+// the provider id the add returns can already exist — TorBox dedupes by
+// content (handing back the torrent_id it already has for a hash), and the
+// importer's discovery pass can adopt a just-added item moments before the
+// shim inserts. The shim's plain insert then hit the (provider,
+// provider_download_id) UNIQUE constraint, so the add failed outright and
+// the surviving row stayed Manual: never auto-fetched to local disk, so
+// Sonarr/Radarr's import step never found it.
+func TestHandleAdd_ClaimsAnExistingManualRow(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Already tracked as Manual under the very id the fake provider hands
+	// back for the first add.
+	existing := &database.Download{
+		ID:                 "existing-manual-row",
+		Provider:           "faketorbox",
+		ProviderDownloadID: "fake-1",
+		Kind:               database.KindTorrent,
+		Hash:               "abcdef0123456789abcdef0123456789abcdef01",
+		Name:               "Some.Release.Name",
+		State:              "queued",
+		AddedVia:           database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, existing); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	ts := httptest.NewServer(NewServer(newFakeProvider(), db, staticAPIKey("test-api-key")))
+	t.Cleanup(ts.Close)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"},
+		"password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	loginResp.Body.Close()
+
+	addResp, err := client.PostForm(ts.URL+"/api/v2/torrents/add", url.Values{
+		"urls":     {testMagnet},
+		"category": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("add error = %v", err)
+	}
+	if b := readBody(t, addResp); addResp.StatusCode != http.StatusOK || b != "Ok." {
+		t.Fatalf("add status=%d body=%q, want 200 Ok. — the add must not fail on an already-tracked row",
+			addResp.StatusCode, b)
+	}
+
+	stored, err := db.GetDownloadByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if stored.AddedVia != database.AddedViaArr {
+		t.Errorf("added_via = %q, want %q — an *arr add must claim the row into Managed",
+			stored.AddedVia, database.AddedViaArr)
+	}
+	if stored.Category != "tv-sonarr" {
+		t.Errorf("category = %q, want the category the *arr app asked for", stored.Category)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows, want 1 — claiming must promote in place, not duplicate", len(rows))
 	}
 }

@@ -111,6 +111,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A download an *arr app asked for could end up in the Manual tab,
+  never auto-fetched.** Reported as "sometimes managed move to manual."
+  `added_via` is only ever written at insert and nothing updates it, so no
+  row was actually changing tabs — instead the *arr add was *losing a race
+  for the row*, and the Manual copy was the one that survived. Both compat
+  shims persisted an add with a plain `InsertDownload`, which trips the
+  `(provider, provider_download_id)` UNIQUE constraint whenever a row for
+  that provider id already exists. Two real ways it does:
+  - **The importer's discovery pass adopted the item first.** `refreshKind`
+    read its snapshot of tracked rows *before* the provider `List()` call —
+    a network round-trip that can take seconds — so an *arr add landing in
+    that window was missing from the snapshot, and `discoverManual` saw the
+    provider's copy of that brand-new Managed download as untracked and
+    adopted it as Manual. Whichever insert lost then failed: either the
+    adoption (harmless, logged) or the shim's own (the *arr add fails
+    outright, and the surviving row is Manual). This is the intermittent
+    one — it needs an add to overlap a discovery tick, which is exactly why
+    it only happened "sometimes."
+  - **TorBox deduped by content.** It hands back the `torrent_id` it
+    already has for a hash, so re-adding through *arr something already
+    tracked as Manual (added via "+ Add", or discovered earlier) collided
+    with that existing row every time, not just under a race.
+
+  Fixed on both sides. `refreshKind` now reads its tracked-rows snapshot
+  *after* `List()` returns, which narrows the window to an add landing
+  mid-call; and both shims now go through `InsertOrClaimForArr`, which
+  *claims* an existing row instead of colliding with it — promoting it to
+  `added_via = arr` and stamping the category/save_path the *arr app asked
+  for, on the principle that an explicit *arr request outranks a passive
+  discovery. The promotion is deliberately one-way: nothing ever demotes a
+  Managed row, so the two can't oscillate. Category/save_path are only
+  overwritten when non-empty (an empty `save_path` silently breaks *arr's
+  import step), and a missing `hash` is filled in but an existing one never
+  replaced, since the qBittorrent shim is keyed on infohash. SABnzbd's
+  `nzo_id` is an AcerviNode row id, so a claimed add now correctly reports
+  the *existing* row's id rather than a freshly generated one pointing at a
+  row that doesn't exist. Regression tests drive both shims end to end and
+  fail against the old code with the exact user-visible symptom — a
+  `400 Fails.` from the qBittorrent add and a `status:false` from
+  SABnzbd's.
+
 - **A usenet download's ETA/speed could stay frozen at a stale value
   (e.g. "1s") the entire time it showed "Processing".** Found live,
   immediately after the phase-badge fix below shipped: TorBox's own `eta`/

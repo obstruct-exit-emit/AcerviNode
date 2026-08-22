@@ -1,6 +1,7 @@
 package sabnzbd
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -640,5 +641,89 @@ func TestToQueueSlot_UsesPhaseSpecificStatus(t *testing.T) {
 				t.Errorf("status = %q, want %q", slot.Status, c.want)
 			}
 		})
+	}
+}
+
+// TestAddURL_ClaimsAnExistingManualRow is the end-to-end regression for an
+// *arr-requested download ending up in the web UI's Manual tab. A row for
+// the provider id the add returns can already exist — TorBox dedupes by
+// content, and the importer's discovery pass can adopt a just-added item
+// moments before the shim gets to insert. The shim's plain insert then hit
+// the (provider, provider_download_id) UNIQUE constraint, so the add failed
+// outright and the surviving row stayed Manual: never auto-fetched to local
+// disk, so Sonarr/Radarr's import step never found it.
+func TestAddURL_ClaimsAnExistingManualRow(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Already tracked as Manual under the very id the fake provider hands
+	// back for the first add.
+	existing := &database.Download{
+		ID:                 "existing-manual-row",
+		Provider:           "faketorbox",
+		ProviderDownloadID: "fake-usenet-1",
+		Kind:               database.KindUsenet,
+		Name:               "Some.NZB.Release",
+		State:              "queued",
+		AddedVia:           database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, existing); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	ts := httptest.NewServer(NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey)))
+	t.Cleanup(ts.Close)
+
+	addResp, err := http.PostForm(ts.URL+"/api", url.Values{
+		"mode":    {"addurl"},
+		"apikey":  {testAPIKey},
+		"name":    {"https://example.com/release.nzb"},
+		"cat":     {"tv-sonarr"},
+		"nzbname": {"Some.NZB.Release"},
+	})
+	if err != nil {
+		t.Fatalf("addurl error = %v", err)
+	}
+	var addResult map[string]any
+	json.NewDecoder(addResp.Body).Decode(&addResult)
+	addResp.Body.Close()
+
+	if addResult["status"] != true {
+		t.Fatalf("addurl result = %+v, want status:true — the add must not fail on an already-tracked row", addResult)
+	}
+	nzoIDs, _ := addResult["nzo_ids"].([]any)
+	if len(nzoIDs) != 1 {
+		t.Fatalf("addurl nzo_ids = %+v, want one id", addResult["nzo_ids"])
+	}
+	// The nzo_id is an AcerviNode row id, so a claimed row must report the
+	// existing row's id — handing back a freshly generated one would point
+	// the *arr app at a row that doesn't exist.
+	if got := nzoIDs[0].(string); got != existing.ID {
+		t.Errorf("nzo_id = %q, want the claimed row's id %q", got, existing.ID)
+	}
+
+	stored, err := db.GetDownloadByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if stored.AddedVia != database.AddedViaArr {
+		t.Errorf("added_via = %q, want %q — an *arr add must claim the row into Managed",
+			stored.AddedVia, database.AddedViaArr)
+	}
+	if stored.Category != "tv-sonarr" {
+		t.Errorf("category = %q, want the category the *arr app asked for", stored.Category)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindUsenet)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows, want 1 — claiming must promote in place, not duplicate", len(rows))
 	}
 }

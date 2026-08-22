@@ -696,14 +696,19 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		slog.Warn("importer: skipping provider list, still in rate-limit cooldown", "kind", kind, "until", until)
 		return
 	}
-	rows, err := im.db.ListDownloads(ctx, kind)
-	if err != nil {
-		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
-		return
-	}
-	// Unlike the old version of this check, rows being empty doesn't skip
-	// the List() call below — discoverManual still needs it to catch a
-	// first-ever manually-added download for a kind nothing's tracked yet.
+	// The provider listing is fetched first and the local snapshot read
+	// only after it returns, deliberately. List() is a network round-trip
+	// that can take seconds, and an *arr add landing during it would be
+	// absent from a snapshot taken beforehand — discoverManual would then
+	// see the provider's copy of that brand-new Managed download as
+	// untracked and adopt it as Manual, stranding an *arr-requested
+	// download in the Manual tab where it's never auto-fetched. Reading
+	// afterwards narrows the window to an add landing mid-List(), which
+	// database.InsertOrClaimForArr then resolves by claiming the row.
+	//
+	// Nothing is skipped when no rows are tracked yet: discoverManual still
+	// needs the listing to catch a first-ever manually-added download for a
+	// kind nothing's tracked.
 	fetchedAt := time.Now()
 	statuses, err := p.List(ctx)
 	if err != nil {
@@ -724,6 +729,12 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	im.statsMu.Lock()
 	im.successfulListAt[kind] = fetchedAt
 	im.statsMu.Unlock()
+
+	rows, err := im.db.ListDownloads(ctx, kind)
+	if err != nil {
+		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
+		return
+	}
 	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }

@@ -1752,3 +1752,174 @@ func TestRefreshFromProvider_StaleFetchDoesNotCacheStaleLiveStatus(t *testing.T)
 		t.Errorf("DownloadSpeedBytes = %d, want unchanged at 900000 (stale live snapshot must be rejected)", live.DownloadSpeedBytes)
 	}
 }
+
+// TestInsertOrClaimForArr_ClaimsExistingManualRow is the regression for an
+// *arr-requested download showing up in the web UI's Manual tab: whenever a
+// row for the provider id already existed (TorBox deduping by content, or
+// the importer's discovery pass adopting a just-added item first), the
+// shim's plain insert tripped the UNIQUE constraint, the *arr add failed,
+// and the only surviving row stayed Manual — so it was never auto-fetched.
+func TestInsertOrClaimForArr_ClaimsExistingManualRow(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	discovered := newTestDownload(KindTorrent)
+	discovered.AddedVia = AddedViaManual
+	discovered.Category = ""
+	discovered.SavePath = ""
+	discovered.MissingCount = 2
+	if err := db.InsertDownload(ctx, discovered); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	if err := db.UpdateMissingCount(ctx, discovered.ID, 2); err != nil {
+		t.Fatalf("UpdateMissingCount() error = %v", err)
+	}
+
+	// Same provider id, as the shim would build it for an *arr add.
+	arrAdd := newTestDownload(KindTorrent)
+	arrAdd.AddedVia = AddedViaArr
+
+	got, err := db.InsertOrClaimForArr(ctx, arrAdd)
+	if err != nil {
+		t.Fatalf("InsertOrClaimForArr() error = %v", err)
+	}
+	if got.ID != discovered.ID {
+		t.Errorf("claimed row id = %q, want the existing row %q", got.ID, discovered.ID)
+	}
+
+	stored, err := db.GetDownloadByID(ctx, discovered.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if stored.AddedVia != AddedViaArr {
+		t.Errorf("added_via = %q, want %q — an *arr add must claim the row", stored.AddedVia, AddedViaArr)
+	}
+	if stored.Category != arrAdd.Category {
+		t.Errorf("category = %q, want %q", stored.Category, arrAdd.Category)
+	}
+	if stored.SavePath != arrAdd.SavePath {
+		t.Errorf("save_path = %q, want %q", stored.SavePath, arrAdd.SavePath)
+	}
+	if stored.MissingCount != 0 {
+		t.Errorf("missing_count = %d, want 0 (Manual-only bookkeeping)", stored.MissingCount)
+	}
+
+	// The claim must promote in place, never leave a second row behind.
+	all, err := db.ListDownloads(ctx, KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("got %d rows, want 1 — claiming must not duplicate", len(all))
+	}
+}
+
+func TestInsertOrClaimForArr_InsertsWhenUntracked(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindUsenet)
+	d.AddedVia = AddedViaArr
+
+	got, err := db.InsertOrClaimForArr(ctx, d)
+	if err != nil {
+		t.Fatalf("InsertOrClaimForArr() error = %v", err)
+	}
+	if got.ID != d.ID {
+		t.Errorf("returned id = %q, want the inserted row %q", got.ID, d.ID)
+	}
+	stored, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if stored == nil || stored.AddedVia != AddedViaArr {
+		t.Errorf("stored row = %+v, want an AddedViaArr row", stored)
+	}
+}
+
+// A re-add that omits category/save_path must not blank out what the row
+// already had — an empty save_path in particular silently breaks *arr's
+// import step.
+func TestInsertOrClaimForArr_KeepsExistingCategoryAndSavePathWhenBlank(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	existing := newTestDownload(KindTorrent)
+	existing.AddedVia = AddedViaArr
+	if err := db.InsertDownload(ctx, existing); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	blank := newTestDownload(KindTorrent)
+	blank.Category = ""
+	blank.SavePath = ""
+	if _, err := db.InsertOrClaimForArr(ctx, blank); err != nil {
+		t.Fatalf("InsertOrClaimForArr() error = %v", err)
+	}
+
+	stored, err := db.GetDownloadByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if stored.Category != existing.Category {
+		t.Errorf("category = %q, want it preserved as %q", stored.Category, existing.Category)
+	}
+	if stored.SavePath != existing.SavePath {
+		t.Errorf("save_path = %q, want it preserved as %q", stored.SavePath, existing.SavePath)
+	}
+}
+
+// The qBittorrent shim is keyed on infohash, so a claimed row missing one
+// would be invisible to Sonarr/Radarr — but an existing hash is already the
+// provider's own answer for this provider id and must not be replaced.
+func TestInsertOrClaimForArr_FillsMissingHashButKeepsAnExistingOne(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("fills a missing hash", func(t *testing.T) {
+		db := openTestDB(t)
+		existing := newTestDownload(KindTorrent)
+		existing.AddedVia = AddedViaManual
+		existing.Hash = ""
+		if err := db.InsertDownload(ctx, existing); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+
+		arrAdd := newTestDownload(KindTorrent)
+		arrAdd.Hash = "freshhash"
+		if _, err := db.InsertOrClaimForArr(ctx, arrAdd); err != nil {
+			t.Fatalf("InsertOrClaimForArr() error = %v", err)
+		}
+
+		stored, err := db.GetDownloadByID(ctx, existing.ID)
+		if err != nil {
+			t.Fatalf("GetDownloadByID() error = %v", err)
+		}
+		if stored.Hash != "freshhash" {
+			t.Errorf("hash = %q, want it filled in as %q", stored.Hash, "freshhash")
+		}
+	})
+
+	t.Run("keeps an existing hash", func(t *testing.T) {
+		db := openTestDB(t)
+		existing := newTestDownload(KindTorrent)
+		existing.AddedVia = AddedViaManual
+		existing.Hash = "originalhash"
+		if err := db.InsertDownload(ctx, existing); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+
+		arrAdd := newTestDownload(KindTorrent)
+		arrAdd.Hash = "differenthash"
+		if _, err := db.InsertOrClaimForArr(ctx, arrAdd); err != nil {
+			t.Fatalf("InsertOrClaimForArr() error = %v", err)
+		}
+
+		stored, err := db.GetDownloadByID(ctx, existing.ID)
+		if err != nil {
+			t.Fatalf("GetDownloadByID() error = %v", err)
+		}
+		if stored.Hash != "originalhash" {
+			t.Errorf("hash = %q, want it preserved as %q", stored.Hash, "originalhash")
+		}
+	})
+}

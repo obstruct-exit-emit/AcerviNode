@@ -145,7 +145,12 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 	if d.Name == "" {
 		d.Name = d.Hash
 	}
-	return s.db.InsertDownload(ctx, d)
+	// Not a plain InsertDownload: a row for this provider id may already
+	// exist (TorBox dedupes by content, and the importer's discovery pass
+	// can adopt a just-added item first), in which case that row is claimed
+	// for *arr rather than colliding with it — see InsertOrClaimForArr.
+	_, err = s.db.InsertOrClaimForArr(ctx, d)
+	return err
 }
 
 // handleInfo implements GET /api/v2/torrents/info. It refreshes every

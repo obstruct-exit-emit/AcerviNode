@@ -58,6 +58,11 @@ const (
 	// internal/importer's discovery step) — never auto-fetched to local
 	// disk; the user grabs files on demand, the same way TorBox's own web
 	// UI works. Shown in the web UI's Manual tab.
+	//
+	// Not necessarily permanent: if an *arr app later adds the same item
+	// through a compat shim, the existing Manual row is promoted to
+	// AddedViaArr rather than duplicated — see InsertOrClaimForArr. The
+	// reverse never happens; nothing demotes a Managed row.
 	AddedViaManual AddedVia = "manual"
 )
 
@@ -131,8 +136,9 @@ type Download struct {
 	// GetSourceFile to fetch the bytes on demand.
 	SourceFile     []byte
 	SourceFileName string
-	// AddedVia is permanent from the moment this row is inserted — see the
-	// AddedVia type.
+	// AddedVia is fixed at insert with one deliberate exception: an *arr
+	// add that lands on a row already tracked as Manual promotes it to
+	// AddedViaArr — see InsertOrClaimForArr and the AddedVia type.
 	AddedVia AddedVia
 }
 
@@ -191,6 +197,100 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 		return fmt.Errorf("insert download %s: %w", d.ID, err)
 	}
 	return nil
+}
+
+// InsertOrClaimForArr records a download an *arr app just asked for, and is
+// how both compat shims persist an add (see the two storeNewDownload
+// functions, its only callers). It returns the row that actually represents
+// the download, which is not always d.
+//
+// A plain InsertDownload isn't enough, because a row for this exact
+// (provider, provider_download_id) may already exist — in which case the
+// insert trips the UNIQUE constraint and the *arr add fails outright.
+// There are two real ways that happens, and both end the same way: a
+// download *arr explicitly asked for is stranded in the Manual tab, never
+// auto-fetched to local disk, so *arr's own import step never sees it.
+//
+//   - The provider deduped by content. TorBox hands back the torrent_id it
+//     already has for a hash, so re-adding through *arr something already
+//     tracked as Manual (added through "+ Add", or discovered) collides
+//     with that existing row.
+//   - discoverManual adopted it first. The provider lists a just-added item
+//     immediately, so a discovery pass overlapping an *arr add can adopt it
+//     as Manual moments before the shim inserts its own Managed row. This
+//     is the intermittent one — refreshKind reads its tracked-rows snapshot
+//     after List() specifically to narrow that window, but can't fully
+//     close it, since the add can land during the List() call itself.
+//
+// Either way the resolution is the same: an explicit *arr request outranks
+// a passive discovery, so an existing Manual row is *claimed* — promoted to
+// AddedViaArr and stamped with the category/save_path *arr asked for —
+// rather than duplicated or rejected. Category/save_path are only
+// overwritten when non-empty, so a re-add that omits them can't blank out
+// what the row already had (an empty save_path in particular silently
+// breaks *arr's import — see UpdateDownloadSavePath).
+//
+// This is the only place added_via is ever rewritten after insert, and the
+// promotion is deliberately one-way: discovery never demotes a Managed row,
+// so Manual->Managed can't oscillate.
+func (db *DB) InsertOrClaimForArr(ctx context.Context, d *Download) (*Download, error) {
+	existing, err := db.GetDownloadByProviderID(ctx, d.Provider, d.ProviderDownloadID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		if err := db.InsertDownload(ctx, d); err != nil {
+			return nil, err
+		}
+		return d, nil
+	}
+
+	// hash is only ever filled in, never overwritten: the qBittorrent shim
+	// is keyed on infohash, so a claimed row that somehow has none is
+	// invisible to Sonarr/Radarr — but an existing hash is already the
+	// provider's own answer for this same provider id, so there's nothing
+	// to gain from replacing it.
+	//
+	// missing_count is Manual-only bookkeeping (see Download.MissingCount):
+	// a claimed row is no longer a candidate for vanished-download
+	// detection, so it shouldn't carry a stale count forward.
+	res, err := db.ExecContext(ctx, `
+		UPDATE downloads
+		SET added_via = ?,
+		    category = COALESCE(?, category),
+		    save_path = COALESCE(?, save_path),
+		    hash = COALESCE(NULLIF(hash, ''), ?),
+		    missing_count = 0,
+		    updated_at = ?
+		WHERE id = ?`,
+		string(AddedViaArr), nullable(d.Category), nullable(d.SavePath),
+		nullable(d.Hash), time.Now().UTC(), existing.ID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("claim download %s for arr: %w", existing.ID, err)
+	}
+	if err := checkRowsAffected(res, existing.ID); err != nil {
+		return nil, err
+	}
+
+	if existing.AddedVia != AddedViaArr {
+		slog.Info("database: claimed an existing Manual download for an *arr add",
+			"id", existing.ID, "provider_id", existing.ProviderDownloadID,
+			"kind", existing.Kind, "name", existing.Name)
+	}
+
+	existing.AddedVia = AddedViaArr
+	existing.MissingCount = 0
+	if d.Category != "" {
+		existing.Category = d.Category
+	}
+	if d.SavePath != "" {
+		existing.SavePath = d.SavePath
+	}
+	if existing.Hash == "" {
+		existing.Hash = d.Hash
+	}
+	return existing, nil
 }
 
 // GetDownloadByID looks up a download by its AcerviNode-assigned id.

@@ -122,8 +122,15 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		// import step — see database.AddedVia.
 		AddedVia: database.AddedViaArr,
 	}
-	if err := s.db.InsertDownload(ctx, d); err != nil {
+	// Not a plain InsertDownload: a row for this provider id may already
+	// exist (TorBox dedupes by content, and the importer's discovery pass
+	// can adopt a just-added item first), in which case that row is claimed
+	// for *arr rather than colliding with it — see InsertOrClaimForArr. The
+	// returned row's id is what must go back as the nzo_id: for a claimed
+	// row that's the existing row's id, not the one generated above.
+	stored, err := s.db.InsertOrClaimForArr(ctx, d)
+	if err != nil {
 		return "", err
 	}
-	return d.ID, nil
+	return stored.ID, nil
 }
