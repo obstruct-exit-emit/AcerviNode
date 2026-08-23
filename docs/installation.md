@@ -8,14 +8,28 @@ plus a [systemd unit](../packaging/acervinode.service).
 
 ```sh
 tar -xzf acervinode-v*-linux-amd64.tar.gz   # or -linux-arm64
-sudo install -m 755 acervinode-*/acervinode /opt/acervinode/acervinode
 sudo useradd -r -s /usr/sbin/nologin acervinode
-sudo mkdir -p /etc/acervinode /var/lib/acervinode
+sudo mkdir -p /opt/acervinode /etc/acervinode /var/lib/acervinode
+sudo install -m 755 acervinode-*/acervinode /opt/acervinode/acervinode
 sudo chown acervinode:acervinode /var/lib/acervinode
 sudo install -m 644 acervinode-*/acervinode.service /etc/systemd/system/acervinode.service
 ```
 
-Create `/etc/acervinode/config.yaml` (see [Configuration](configuration.md)), then:
+Create `/etc/acervinode/config.yaml` (see [Configuration](configuration.md)) and
+make it writable by the service account:
+
+```sh
+sudo chown acervinode:acervinode /etc/acervinode/config.yaml
+sudo chmod 600 /etc/acervinode/config.yaml
+```
+
+That ownership isn't optional. AcerviNode persists every live settings change
+by rewriting this file — the TorBox API key entered in the Settings UI, a
+category's save-path override, a changed poll interval — and it writes during
+an ordinary startup too, when the one-time default-category seeding runs
+before the server is even listening. A `config.yaml` the service can't write
+makes it exit non-zero having served nothing, which `Restart=always` turns
+into a restart loop. Then:
 
 ```sh
 sudo systemctl daemon-reload
@@ -28,8 +42,10 @@ Replacing `/opt/acervinode/acervinode` with a newer binary and restarting the
 service is normally all that's needed. The one exception: a binary update never
 touches an already-installed `/etc/systemd/system/acervinode.service` — if a
 release's own copy of that file changes (as it did to pick up `Restart=always`,
-needed for the settings UI's "Restart now" action to actually work), re-copy it
-and reload systemd once:
+needed for the settings UI's "Restart now" action to actually work, and again
+to add `/etc/acervinode` to `ReadWritePaths` — without which the service
+can't rewrite its own `config.yaml` and won't start at all), re-copy it and
+reload systemd once:
 
 ```sh
 sudo install -m 644 acervinode-*/acervinode.service /etc/systemd/system/acervinode.service

@@ -160,6 +160,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A stock systemd install could never start.** `packaging/acervinode.service`
+  set `ProtectSystem=strict` with `ReadWritePaths=/var/lib/acervinode` only,
+  on the stated assumption that AcerviNode "only needs to read its config
+  under /etc/acervinode". It doesn't: every live settings change is persisted
+  by rewriting `config.yaml` in place, and one such write happens during an
+  ordinary startup, before the server is even listening, when the one-time
+  default-category seeding runs. With `/etc/acervinode` read-only that write
+  fails, the process exits 1 having served nothing, and `Restart=always`
+  turns it into a permanent restart loop — following
+  [Installation](docs/installation.md)'s own steps exactly produced a service
+  that never came up. Found by doing precisely that on a clean machine.
+  `/etc/acervinode` is now in `ReadWritePaths`. Two documentation gaps in the
+  same steps are fixed alongside it: `install` doesn't create parent
+  directories, so `/opt/acervinode` has to be in the `mkdir -p` (the
+  documented order had `install` writing into it first), and the newly-created
+  `config.yaml` has to be `chown`ed to the service account for the same reason
+  the unit change is needed — an unwritable config is the restart loop again,
+  by a different route. An existing install needs the unit re-copied and
+  `systemctl daemon-reload`; a binary update alone never replaces it.
+
 - **A download an *arr app asked for could end up in the Manual tab,
   never auto-fetched.** Reported as "sometimes managed move to manual."
   `added_via` is only ever written at insert and nothing updates it, so no

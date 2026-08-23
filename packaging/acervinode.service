@@ -16,14 +16,24 @@ Environment=ACERVINODE_CONFIG=/etc/acervinode/config.yaml
 Restart=always
 RestartSec=5
 
-# Hardening — AcerviNode only needs to read its config under /etc/acervinode
-# and read/write its data and download directories under /var/lib/acervinode;
-# everything else stays read-only.
+# Hardening — AcerviNode reads and writes its config under /etc/acervinode
+# (see below) and its data and download directories under
+# /var/lib/acervinode; everything else stays read-only.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/acervinode
+# /etc/acervinode has to be writable, not merely readable: AcerviNode
+# persists every live settings change by rewriting its own config.yaml —
+# the TorBox API key set from the Settings UI, a category path, a changed
+# poll interval. It also writes during an ordinary startup, before the
+# server is even listening, when the one-time default-category seeding
+# runs. Without it here, ProtectSystem=strict makes that write fail, the
+# process exits 1 having served nothing, and Restart=always turns that
+# into a permanent restart loop — a stock install following
+# docs/installation.md exactly would never start at all. Found doing
+# precisely that on a clean machine.
+ReadWritePaths=/var/lib/acervinode /etc/acervinode
 
 [Install]
 WantedBy=multi-user.target
