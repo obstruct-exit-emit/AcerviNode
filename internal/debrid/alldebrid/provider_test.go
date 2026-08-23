@@ -312,3 +312,43 @@ func TestUpstream5xxIsReportedAsSuch(t *testing.T) {
 		t.Errorf("error = %v, want an upstream-status error rather than a JSON decode failure", err)
 	}
 }
+
+// TestStatus_AcceptsBothMagnetShapes is the regression for a bug that
+// silently disabled the fast per-download poll for AllDebrid: "magnets" is
+// an array when listing, but a bare object when the query is filtered to a
+// single id. Assuming the array shape made every Status call fail to
+// decode, which looked like nothing at all — the bulk list still worked, so
+// downloads still progressed, just a whole interval slower than they should
+// have. Confirmed against the live API; not something the docs mention.
+func TestStatus_AcceptsBothMagnetShapes(t *testing.T) {
+	const object = `{"status":"success","data":{"magnets":{"id":703365472,"filename":"Big Buck Bunny","size":10,"hash":"ABC","status":"Ready","statusCode":4}}}`
+	const array = `{"status":"success","data":{"magnets":[{"id":703365472,"filename":"Big Buck Bunny","size":10,"hash":"ABC","status":"Ready","statusCode":4}]}}`
+
+	for name, body := range map[string]string{"object (id-filtered)": object, "array (unfiltered)": array} {
+		p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(body))
+		})
+		got, err := p.Status(context.Background(), "703365472")
+		if err != nil {
+			t.Errorf("%s: Status() error = %v", name, err)
+			continue
+		}
+		if got.ID != "703365472" {
+			t.Errorf("%s: id = %q, want 703365472", name, got.ID)
+		}
+		if got.State != debrid.StateCompleted {
+			t.Errorf("%s: state = %v, want completed", name, got.State)
+		}
+	}
+}
+
+// A magnet that genuinely isn't there is an error, not a zero-valued
+// status that would read as a real download.
+func TestStatus_MissingMagnetIsAnError(t *testing.T) {
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":"success","data":{"magnets":[]}}`))
+	})
+	if _, err := p.Status(context.Background(), "nope"); err == nil {
+		t.Error("Status() error = nil for a magnet that isn't on the account")
+	}
+}

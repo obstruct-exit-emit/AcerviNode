@@ -218,6 +218,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **AllDebrid's fast per-download poll never worked.** `magnets` in a
+  `/v4.1/magnet/status` response is an array when listing but a bare
+  *object* when the query is filtered to a single id, so decoding it as an
+  array made every `Status` call fail. The failure was near-invisible:
+  the bulk listing still worked, so downloads still progressed — just a
+  whole poll interval slower than they should have, with a decode error in
+  the log after every add. Both shapes are now accepted. Confirmed against
+  the live API; not something AllDebrid's docs mention.
+
 - **A torrent-only default provider broke usenet and web downloads
   entirely.** "Default provider" is one setting across every kind, but
   providers differ in what they support — so making AllDebrid the default

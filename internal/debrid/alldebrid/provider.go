@@ -2,6 +2,7 @@ package alldebrid
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -114,18 +115,33 @@ func (p *Provider) List(ctx context.Context) ([]debrid.DownloadStatus, error) {
 // listing the whole account for one row — the same reasoning as
 // torbox.GetTorrent, and what internal/importer's fast poll relies on.
 func (p *Provider) Status(ctx context.Context, id debrid.ProviderDownloadID) (debrid.DownloadStatus, error) {
+	// "magnets" changes shape depending on the query: an array when
+	// listing, but a bare object when filtered to one id. Decoding it as
+	// json.RawMessage first is the only way to accept both — assuming the
+	// array shape here made every Status call fail, which silently disabled
+	// the fast per-download poll for this provider entirely. Confirmed
+	// against the live API; not something its docs mention.
 	var out struct {
-		Magnets []magnet `json:"magnets"`
+		Magnets json.RawMessage `json:"magnets"`
 	}
 	form := url.Values{}
 	form.Set("id", string(id))
 	if err := p.client.do(ctx, http.MethodGet, "/v4.1/magnet/status", form, &out); err != nil {
 		return debrid.DownloadStatus{}, fmt.Errorf("alldebrid: status: %w", err)
 	}
-	if len(out.Magnets) == 0 {
+
+	var single magnet
+	if err := json.Unmarshal(out.Magnets, &single); err == nil && single.ID != 0 {
+		return magnetToStatus(single), nil
+	}
+	var many []magnet
+	if err := json.Unmarshal(out.Magnets, &many); err != nil {
+		return debrid.DownloadStatus{}, fmt.Errorf("alldebrid: status: decode magnets: %w", err)
+	}
+	if len(many) == 0 {
 		return debrid.DownloadStatus{}, fmt.Errorf("alldebrid: status: magnet %s not found", id)
 	}
-	return magnetToStatus(out.Magnets[0]), nil
+	return magnetToStatus(many[0]), nil
 }
 
 // magnetFile is one entry from /v4/magnet/files. A folder has no link and
