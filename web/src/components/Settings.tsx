@@ -171,7 +171,9 @@ export function Settings({ apiKey }: Props) {
   // header row regardless of this) are usually all there is to check; the
   // key form/account detail/status/polling knobs underneath are needed far
   // less often.
-  const [providerExpanded, setProviderExpanded] = useState(false)
+  // Expanded per provider, not one flag for the whole tab: each provider is
+  // its own card, the same shape the single TorBox card always had.
+  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({})
   const [settings, setSettings] = useState<ProviderSetting[] | null>(null)
   // Keyed by provider name: with more than one configured, each card needs
   // its own draft key, save state and test result, or typing into one would
@@ -460,6 +462,13 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
+  // providerLabel prettifies the entry name for display only — the name
+  // itself is what routes a download, and a second account on the same
+  // service is a distinct entry, so anything unrecognised is shown as-is
+  // rather than guessed at.
+  const providerLabel = (name: string) =>
+    ({ torbox: 'TorBox', alldebrid: 'AllDebrid' } as Record<string, string>)[name] ?? name
+
   const providers = settings ?? []
   // Only worth offering a default when there is actually a choice to make.
   const showDefaultControls = providers.length > 1
@@ -639,49 +648,40 @@ export function Settings({ apiKey }: Props) {
       )}
 
       {group === 'Provider' && (
-        <section className="settings-card">
-          <div
-            className="settings-card-toggle"
-            onClick={() => setProviderExpanded((e) => !e)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                setProviderExpanded((v) => !v)
-              }
-            }}
-          >
-            <h2>Providers</h2>
-            <span className="settings-card-summary">
-              {providers.some((p) => p.configured) ? (
-                <span className="badge badge-ready_for_import">
-                  {providers.filter((p) => p.configured).length} configured
-                </span>
-              ) : (
-                <span className="badge badge-queued">Not configured</span>
-              )}
-            </span>
-            <span className={`settings-card-chevron${providerExpanded ? ' settings-card-chevron-open' : ''}`}>▸</span>
-          </div>
-
-          {providerExpanded && (
-            <>
-              {providers.map((p) => {
-                const saveState = status[p.name] ?? { kind: 'idle' as const }
-                const test = testStatus[p.name] ?? { kind: 'idle' as const }
-                const draft = providerKeys[p.name] ?? ''
-                return (
-                  <div key={p.name} className="provider-entry">
-                    <h3>
-                      {p.name}
-                      {p.default && showDefaultControls && <span className="badge badge-ready_for_import">Default</span>}
-                      {p.configured ? (
-                        <span className="badge badge-ready_for_import">Configured</span>
-                      ) : (
-                        <span className="badge badge-queued">Not configured</span>
-                      )}
-                    </h3>
+        <>
+          {providers.map((p) => {
+            const saveState = status[p.name] ?? { kind: 'idle' as const }
+            const test = testStatus[p.name] ?? { kind: 'idle' as const }
+            const draft = providerKeys[p.name] ?? ''
+            const expanded = expandedProviders[p.name] ?? false
+            const toggle = () => setExpandedProviders((e) => ({ ...e, [p.name]: !expanded }))
+            return (
+              <section className="settings-card" key={p.name}>
+                <div
+                  className="settings-card-toggle"
+                  onClick={toggle}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      toggle()
+                    }
+                  }}
+                >
+                  <h2>{providerLabel(p.name)}</h2>
+                  <span className="settings-card-summary">
+                    {p.default && showDefaultControls && <span className="badge badge-ready_for_import">Default</span>}
+                    {p.configured ? (
+                      <span className="badge badge-ready_for_import">Configured</span>
+                    ) : (
+                      <span className="badge badge-queued">Not configured</span>
+                    )}
+                  </span>
+                  <span className={`settings-card-chevron${expanded ? ' settings-card-chevron-open' : ''}`}>▸</span>
+                </div>
+                {expanded && (
+                  <>
                     <p className="settings-help">
                       {p.configured
                         ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
@@ -728,20 +728,24 @@ export function Settings({ apiKey }: Props) {
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
                       </>
                     )}
-                  </div>
-                )
-              })}
-              {defaultStatus.kind === 'error' && (
-                <p className="settings-error">Failed to set default: {defaultStatus.message}</p>
-              )}
-              {showDefaultControls && (
-                <p className="settings-help">
-                  New downloads go to the default provider unless the “+ Add” form names another. Both compat shims
-                  always use the default — neither the qBittorrent nor the SABnzbd protocol has a field to carry a
-                  provider.
-                </p>
-              )}
+                  </>
+                )}
+              </section>
+            )
+          })}
 
+          {defaultStatus.kind === 'error' && (
+            <p className="settings-error">Failed to set default: {defaultStatus.message}</p>
+          )}
+          {showDefaultControls && (
+            <p className="settings-help">
+              New downloads go to the default provider unless the “+ Add” form names another. Both compat shims
+              always use the default — neither the qBittorrent nor the SABnzbd protocol has a field to carry a
+              provider.
+            </p>
+          )}
+
+        <section className="settings-card">
           {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
             <p className="settings-error">
               ⚠ TorBox is restricting this account until{' '}
@@ -851,9 +855,8 @@ export function Settings({ apiKey }: Props) {
               {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
             </Section>
           )}
-            </>
-          )}
         </section>
+        </>
       )}
 
       {group === 'Import' && (

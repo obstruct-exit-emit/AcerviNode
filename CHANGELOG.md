@@ -248,6 +248,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The Provider settings tab had grown an extra layer.** Generalising the
+  single TorBox panel into a per-provider list wrapped everything in one
+  "Providers" card, so reaching a provider meant expanding that first and
+  then finding it inside — where before, TorBox was simply there. Each
+  provider is now its own card again, exactly the shape the TorBox one
+  always had: name, a Default/Configured badge, and its own expander, with
+  AllDebrid sitting beside it rather than nested under a heading. Account
+  and polling status moved into their own card rather than being buried in
+  the same collapsible. Display names are prettified (`torbox` → TorBox),
+  but only for known services — an entry name that isn't recognised is shown
+  as-is, since a second account on the same service is a distinct entry and
+  guessing at its label would be worse than showing what it's actually
+  called.
+
 - **A torrent in an unfamiliar state was reported as failed.** TorBox's
   torrent state mapping treated anything it didn't recognise as an error,
   deliberately — the reasoning being that TorBox documents an explicit error
