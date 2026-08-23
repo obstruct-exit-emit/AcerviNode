@@ -816,3 +816,30 @@ func TestHandleAdd_ClaimsAnExistingManualRow(t *testing.T) {
 		t.Errorf("got %d rows, want 1 — claiming must promote in place, not duplicate", len(rows))
 	}
 }
+
+// TestOwnsDownload_GuardsAnotherProvidersDownload covers the shim half of
+// routing by the download's own provider. A shim only ever holds one
+// provider, so there is no lookup to get wrong — but a row can still name a
+// different one, either because several are configured or because the API
+// key was swapped for a different account after the row was created. Its
+// provider_download_id means nothing to whoever is configured now.
+func TestOwnsDownload_GuardsAnotherProvidersDownload(t *testing.T) {
+	srv := &Server{provider: newFakeProvider()}
+
+	owned := &database.Download{ID: "a", Provider: "faketorbox"}
+	if !srv.ownsDownload(owned) {
+		t.Error("ownsDownload() = false for this provider's own download")
+	}
+
+	// An older row predating the field, or a fake that never set it, must
+	// not be locked out — there is nothing to contradict.
+	unattributed := &database.Download{ID: "b"}
+	if !srv.ownsDownload(unattributed) {
+		t.Error("ownsDownload() = false for a row with no provider recorded")
+	}
+
+	foreign := &database.Download{ID: "c", Provider: "some-other-provider"}
+	if srv.ownsDownload(foreign) {
+		t.Error("ownsDownload() = true for a download belonging to a different provider")
+	}
+}

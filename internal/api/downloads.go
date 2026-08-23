@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -235,26 +234,11 @@ func (s *Server) handleGetDownload(w http.ResponseWriter, r *http.Request) {
 // filesForDownload queries the provider for a download's current file list —
 // shared by handleGetDownload and handleGetFileLink.
 func (s *Server) filesForDownload(ctx context.Context, d *database.Download) ([]debrid.DownloadFile, error) {
-	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
-	switch d.Kind {
-	case database.KindTorrent:
-		if s.torrentProvider == nil {
-			return nil, debrid.ErrNoProvider
-		}
-		return s.torrentProvider.Files(ctx, id)
-	case database.KindUsenet:
-		if s.usenetProvider == nil {
-			return nil, debrid.ErrNoProvider
-		}
-		return s.usenetProvider.Files(ctx, id)
-	case database.KindWebDL:
-		if s.webDownloadProvider == nil {
-			return nil, debrid.ErrNoProvider
-		}
-		return s.webDownloadProvider.Files(ctx, id)
-	default:
-		return nil, fmt.Errorf("unknown download kind %q", d.Kind)
+	p, err := s.providerFor(d)
+	if err != nil {
+		return nil, err
 	}
+	return p.Files(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID))
 }
 
 // handleGetFileLink implements GET /api/v1/downloads/{id}/files/{fileId}/link
@@ -277,33 +261,12 @@ func (s *Server) handleGetFileLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
-	var (
-		url string
-		err error
-	)
-	switch d.Kind {
-	case database.KindTorrent:
-		if s.torrentProvider == nil {
-			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.torrentProvider.RequestDownloadLink(ctx, id, fileID)
-	case database.KindUsenet:
-		if s.usenetProvider == nil {
-			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.usenetProvider.RequestDownloadLink(ctx, id, fileID)
-	case database.KindWebDL:
-		if s.webDownloadProvider == nil {
-			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.webDownloadProvider.RequestDownloadLink(ctx, id, fileID)
-	default:
-		http.Error(w, "unknown download kind", http.StatusInternalServerError)
+	p, err := s.providerFor(d)
+	if err != nil {
+		writeProviderError(w, string(d.Kind), err)
 		return
 	}
+	url, err := p.RequestDownloadLink(ctx, id, fileID)
 	if err != nil {
 		writeProviderError(w, string(d.Kind), err)
 		return
@@ -330,29 +293,12 @@ func (s *Server) handleGetZipLink(w http.ResponseWriter, r *http.Request) {
 		url string
 		err error
 	)
-	switch d.Kind {
-	case database.KindTorrent:
-		if s.torrentProvider == nil {
-			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.torrentProvider.RequestZipDownloadLink(ctx, id)
-	case database.KindUsenet:
-		if s.usenetProvider == nil {
-			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.usenetProvider.RequestZipDownloadLink(ctx, id)
-	case database.KindWebDL:
-		if s.webDownloadProvider == nil {
-			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
-			return
-		}
-		url, err = s.webDownloadProvider.RequestZipDownloadLink(ctx, id)
-	default:
-		http.Error(w, "unknown download kind", http.StatusInternalServerError)
+	p, err := s.providerFor(d)
+	if err != nil {
+		writeProviderError(w, string(d.Kind), err)
 		return
 	}
+	url, err = p.RequestZipDownloadLink(ctx, id)
 	if err != nil {
 		writeProviderError(w, string(d.Kind), err)
 		return
@@ -394,7 +340,7 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	// database.RecordDeletedDownload. True when there's no provider to call
 	// at all: there's then no provider-side copy left to come back.
 	providerConfirmed := true
-	if provider := s.deleterFor(d); provider != nil {
+	if provider, err := s.providerFor(d); err == nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			providerConfirmed = false
 			slog.Error("api: provider delete failed, tombstoning for longer so it can't come back as a ghost",

@@ -256,10 +256,30 @@ func (s *Server) handleProperties(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ownsDownload reports whether d belongs to this shim's provider. A shim
+// only ever has one, so unlike the native API there is nothing to look up —
+// but a row can still name a different provider, either because more than
+// one is configured or because the API key was swapped for a different
+// account after the row was created. Its provider_download_id means nothing
+// to whoever is configured now, so acting on it would at best fail and at
+// worst hit an unrelated download that happens to share the id.
+func (s *Server) ownsDownload(d *database.Download) bool {
+	if d.Provider == "" || d.Provider == s.provider.Name() {
+		return true
+	}
+	slog.Warn("qbittorrent: skipping provider call, download belongs to a different provider",
+		"id", d.ID, "download_provider", d.Provider, "configured_provider", s.provider.Name())
+	return false
+}
+
 // handleFiles implements GET /api/v2/torrents/files?hash=...
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.downloadByHash(w, r)
 	if !ok {
+		return
+	}
+	if !s.ownsDownload(d) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	files, err := s.provider.Files(r.Context(), debrid.ProviderDownloadID(d.ProviderDownloadID))
@@ -299,7 +319,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		// account, where discovery would re-adopt it as a ghost once a
 		// short window lapsed — see database.RecordDeletedDownload.
 		providerConfirmed := true
-		if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
+		if !s.ownsDownload(d) {
+			providerConfirmed = false
+		} else if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			providerConfirmed = false
 			slog.Error("qbittorrent: provider delete failed", "hash", hash, "error", err)
 		}

@@ -180,6 +180,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The rest of the per-download provider calls now route by provider too.**
+  The first pass covered deletes and fetches, found by grepping the two
+  named lookups — which missed every site that inlined the same switch
+  instead of calling a helper. Six more were doing exactly that: the native
+  API's file list, file link and zip link (all three take a specific
+  download and resolve its provider from its kind alone), plus the
+  qBittorrent shim's file list and delete and the SABnzbd shim's delete.
+  All are the same bug class: a `provider_download_id` handed to a provider
+  that never issued it. The three API paths now share one `providerFor`
+  lookup, which collapsed three near-identical switches into a single
+  resolution, and the shims — which hold exactly one provider, so have
+  nothing to look up — guard on `ownsDownload` instead. The add paths are
+  deliberately untouched: a brand-new download has no provider yet, so
+  choosing one is a separate question.
+
 - **Provider calls are now routed by the download's own provider, not just
   its kind.** Every row already records which provider it came from
   (`downloads.provider`), and the API reported it — but nothing used it to

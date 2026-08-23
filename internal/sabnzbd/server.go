@@ -11,6 +11,7 @@ import (
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
+	"log/slog"
 )
 
 // settingsSource is the minimal interface needed to check the "apikey"
@@ -25,6 +26,22 @@ type settingsSource interface {
 	// see handleDelete. Delegates to internal/importer, the only place that
 	// knows how to resolve a download's actual destination directory live.
 	DeleteLocalFiles(d *database.Download) error
+}
+
+// ownsDownload reports whether d belongs to this shim's provider. A shim
+// only ever has one, so unlike the native API there is nothing to look up —
+// but a row can still name a different provider, either because more than
+// one is configured or because the API key was swapped for a different
+// account after the row was created. Its provider_download_id means nothing
+// to whoever is configured now, so acting on it would at best fail and at
+// worst hit an unrelated download that happens to share the id.
+func (s *Server) ownsDownload(d *database.Download) bool {
+	if d.Provider == "" || d.Provider == s.provider.Name() {
+		return true
+	}
+	slog.Warn("sabnzbd: skipping provider call, download belongs to a different provider",
+		"id", d.ID, "download_provider", d.Provider, "configured_provider", s.provider.Name())
+	return false
 }
 
 // Server is an http.Handler implementing the SABnzbd API surface AcerviNode

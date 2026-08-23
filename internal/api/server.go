@@ -62,13 +62,20 @@ type deleter interface {
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
 }
 
-// providerDeleter is a deleter that can also say which provider it is, so a
-// lookup can confirm it's the one a given download actually belongs to
-// rather than merely the one configured for that download's kind — see
-// deleterFor.
-type providerDeleter interface {
+// downloadProvider is everything the native API does with the provider a
+// *specific, already-tracked* download belongs to: delete it, list its
+// files, and hand out links. All three adder interfaces below satisfy it,
+// which is what lets one lookup (providerFor) serve every one of those
+// paths instead of each re-deriving the provider from the download's kind.
+//
+// Name is what makes that lookup able to check it has the right provider
+// and not merely one that handles the same kind — see providerFor.
+type downloadProvider interface {
 	deleter
 	Name() string
+	Files(ctx context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error)
+	RequestDownloadLink(ctx context.Context, id debrid.ProviderDownloadID, fileID string) (string, error)
+	RequestZipDownloadLink(ctx context.Context, id debrid.ProviderDownloadID) (string, error)
 }
 
 // torrentAdder is what POST /api/v1/downloads/torrent needs from a

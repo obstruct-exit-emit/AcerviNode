@@ -373,7 +373,7 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	// Best-effort cleanup of the old, presumably-gone provider-side entry —
 	// matches handleDeleteDownload's "provider call is best-effort" stance;
 	// it's already lost to us either way.
-	if provider := s.deleterFor(d); provider != nil {
+	if provider, err := s.providerFor(d); err == nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), false); err != nil {
 			slog.Warn("api: best-effort delete of old provider download failed during re-add", "id", d.ID, "error", err)
 		}
@@ -537,24 +537,26 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deleterFor returns the deleter for the provider d actually belongs to, or
-// nil if that provider isn't currently reachable.
+// errWrongProvider is returned by providerFor when a download belongs to a
+// provider other than the one currently configured for its kind.
+var errWrongProvider = errors.New("download belongs to a different provider")
+
+// providerFor returns the provider d actually belongs to.
 //
 // Resolving by kind alone would be wrong the moment more than one provider
 // is configured: every download row already records which provider it came
-// from (database.Download.Provider), and a torrent belonging to one account
-// can't be deleted by calling another's API with an id that means nothing
-// there. Today the check also catches a real single-provider case — a
-// download added under one API key, still tracked, after the key has been
-// swapped for a different account.
+// from (database.Download.Provider), and a provider_download_id means
+// nothing to a different account — the call would at best fail and at worst
+// act on an unrelated download that happens to share the id. Today the
+// check also catches a real single-provider case: a download added under
+// one API key, still tracked, after the key has been swapped for a
+// different account.
 //
-// A mismatch returns nil rather than erroring: every caller treats the
-// provider-side delete as best-effort and removes the local row regardless,
-// which stays the right behaviour here. The download is tombstoned as
-// unconfirmed either way, so it can't come back as a ghost — see
-// database.RecordDeletedDownload.
-func (s *Server) deleterFor(d *database.Download) providerDeleter {
-	var p providerDeleter
+// Callers that treat the provider call as best-effort (the delete paths)
+// simply skip it on any error; callers that need to answer the request
+// (files, links) surface it.
+func (s *Server) providerFor(d *database.Download) (downloadProvider, error) {
+	var p downloadProvider
 	switch d.Kind {
 	case database.KindTorrent:
 		p = s.torrentProvider
@@ -563,17 +565,17 @@ func (s *Server) deleterFor(d *database.Download) providerDeleter {
 	case database.KindWebDL:
 		p = s.webDownloadProvider
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown download kind %q", d.Kind)
 	}
 	if p == nil {
-		return nil
+		return nil, debrid.ErrNoProvider
 	}
 	if d.Provider != "" && p.Name() != d.Provider {
 		slog.Warn("api: skipping provider call, download belongs to a different provider",
 			"id", d.ID, "download_provider", d.Provider, "configured_provider", p.Name())
-		return nil
+		return nil, fmt.Errorf("%w: %s", errWrongProvider, d.Provider)
 	}
-	return p
+	return p, nil
 }
 
 // existingOrInsert returns an already-tracked download for provider+id if
