@@ -291,6 +291,43 @@ var knownProviderCapabilities = map[string]providerCapabilities{
 	"alldebrid": {torrent: true},
 }
 
+// providerIdentity is what makes two config entries the same account: the
+// implementation they use plus the credentials they use it with.
+type providerIdentity struct {
+	providerType string
+	apiKey       string
+}
+
+// warnOnDuplicateProviderKeys flags two entries pointing at the same
+// account, which is almost always a mistake rather than an intent.
+//
+// Multiple entries exist so several *different* accounts can be used at
+// once. Pointing two at one account instead makes both discover everything
+// on it, so every download is adopted twice, and deleting it through one
+// entry strands the other's row as "no longer found in the provider's
+// account". Observed exactly that while testing two entries against a
+// single TorBox key.
+//
+// A warning rather than a refusal: it is a coherent thing to ask for even
+// if it is rarely what someone means, and refusing to start over it would
+// be a worse failure than saying so.
+func warnOnDuplicateProviderKeys(cfg *config.Config) {
+	seen := map[providerIdentity]string{}
+	for _, name := range providerEntryNames(cfg) {
+		pc, ok := cfg.Providers[name]
+		if !ok || pc.APIKey == "" {
+			continue
+		}
+		key := providerIdentity{providerType: pc.ResolvedType(name), apiKey: pc.APIKey}
+		if first, dup := seen[key]; dup {
+			slog.Warn("two providers are configured with the same credentials, so both will discover the same downloads",
+				"provider", name, "duplicate_of", first)
+			continue
+		}
+		seen[key] = name
+	}
+}
+
 // defaultProviderName picks which provider new downloads go to: the
 // explicitly configured one when it is actually registered, otherwise the
 // first registered provider that holds credentials, otherwise nothing (and
@@ -406,6 +443,8 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *l
 		}
 		registry.Register(name, t, u, w)
 	}
+
+	warnOnDuplicateProviderKeys(cfg)
 
 	// Registry's own fallback is "first registered", which is the wrong
 	// answer once more than one provider type is known: every known type is

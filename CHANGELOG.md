@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A warning when two providers are configured with the same credentials.**
+  Multiple entries exist so several *different* accounts can be used at
+  once; pointing two at one account instead makes both discover everything
+  on it, so every download is adopted twice and deleting it through one
+  entry strands the other's row as "no longer found in the provider's
+  account". Observed exactly that while testing two entries against a single
+  TorBox key. A warning rather than a refusal: it is a coherent thing to ask
+  for even if it is rarely what someone means, and refusing to start would be
+  a worse failure than saying so.
+
 - **AllDebrid, the second debrid provider.** Torrent-only, and deliberately
   so: AllDebrid has no usenet service at all, and its hoster debriding is a
   synchronous `/v4/link/unlock` with no pollable object behind it — there is
