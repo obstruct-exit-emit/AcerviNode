@@ -149,7 +149,7 @@ type accountStatusResponse struct {
 // settings UI just doesn't show the section rather than erroring the whole
 // page.
 func (s *Server) handleGetAccountStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := s.settings.AccountStatus(r.Context())
+	status, err := s.settings.AccountStatus(r.Context(), s.settings.DefaultProvider())
 	if err != nil {
 		writeJSON(w, accountStatusResponse{Available: false, Error: err.Error()})
 		return

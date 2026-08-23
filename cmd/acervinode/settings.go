@@ -728,15 +728,24 @@ func (s *liveSettings) CancelFetch(id string) {
 // see debrid.DynamicTorrentProvider.Account, which this delegates to
 // directly (the wrapper already holds whichever concrete provider is
 // currently active, live-swapped the same way as everything else here).
-// Reports the default provider's account — the settings UI still shows a
-// single account panel; one panel per configured provider comes with the
-// rest of the multi-provider settings surface.
-func (s *liveSettings) AccountStatus(ctx context.Context) (debrid.AccountStatus, error) {
-	t := s.registry.Torrent(s.registry.Default())
-	if t == nil {
-		return debrid.AccountStatus{}, debrid.ErrNoProvider
+// Reported per provider: each account has its own plan, expiry and
+// restrictions, so a single instance-wide panel could only ever show one of
+// them under a heading that might mean either.
+//
+// Tries whichever kind the provider supports, so one that doesn't do
+// torrents is still reportable — a provider's account is a property of the
+// account, not of any particular kind.
+func (s *liveSettings) AccountStatus(ctx context.Context, provider string) (debrid.AccountStatus, error) {
+	if t := s.registry.Torrent(provider); t != nil {
+		return t.Account(ctx)
 	}
-	return t.Account(ctx)
+	if u := s.registry.Usenet(provider); u != nil {
+		return u.Account(ctx)
+	}
+	if w := s.registry.WebDL(provider); w != nil {
+		return w.Account(ctx)
+	}
+	return debrid.AccountStatus{}, debrid.ErrNoProvider
 }
 
 // Status assembles api.StatusInfo from the Importer's own live health

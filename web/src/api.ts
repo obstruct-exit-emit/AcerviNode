@@ -471,7 +471,7 @@ export function removeCategory(apiKey: string, category: string): Promise<void> 
 // provider doesn't support reporting account status at all — that's routine,
 // not a failure, so the Settings page just hides the section rather than
 // showing an error state.
-export interface TorBoxAccount {
+export interface ProviderAccount {
   available: boolean
   error?: string
   plan_name?: string
@@ -485,16 +485,20 @@ export interface TorBoxAccount {
   cooldown_until?: string
 }
 
-export function getTorBoxAccount(apiKey: string): Promise<TorBoxAccount> {
-  return request('/api/v1/settings/account', apiKey)
+// getProviderAccount reports one provider's own account state. Asked per
+// provider because each account has its own plan, expiry and restrictions —
+// a single instance-wide panel could only show one of them, under a heading
+// that might mean either.
+export function getProviderAccount(apiKey: string, provider: string): Promise<ProviderAccount> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}/account`, apiKey)
 }
 
 // StatusInfo is GET /api/v1/status's response — internal/importer's own
 // health signals (tick liveness, per-kind rate-limit cooldowns, per-kind
-// error counts), distinct from TorBoxAccount above (the provider's own
+// error counts), distinct from ProviderAccount above (the provider's own
 // account state, e.g. cooldown_until) — this answers "is polling itself
 // working," not "is the provider account restricted." A fast, purely local
-// call (no live network call to the provider), unlike getTorBoxAccount.
+// call (no live network call to the provider), unlike getProviderAccount.
 export interface KindStatus {
   last_successful_list_at?: string
   rate_limited_until?: string

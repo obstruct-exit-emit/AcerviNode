@@ -285,7 +285,10 @@ type Settings interface {
 	// snapshot, so it always reflects the actual current TorBox account. An
 	// error here (e.g. not configured yet, or the provider doesn't support
 	// this) is routine and shown as "unavailable" rather than a hard failure.
-	AccountStatus(ctx context.Context) (debrid.AccountStatus, error)
+	// AccountStatus reports the named provider's own account state. Each
+	// provider has its own plan, expiry and restrictions, so this is asked
+	// per provider rather than once for the instance.
+	AccountStatus(ctx context.Context, provider string) (debrid.AccountStatus, error)
 	// Status reports internal/importer's own health signals (tick liveness,
 	// per-kind rate-limit cooldowns, per-kind error counts) for
 	// GET /api/v1/status — see StatusInfo.
@@ -474,6 +477,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/settings/categories/path", s.requireAdmin(s.handleSetCategoryPath))
 	s.mux.HandleFunc("DELETE /api/v1/settings/categories/{category}", s.requireAdmin(s.handleRemoveCategory))
 	s.mux.HandleFunc("GET /api/v1/settings/account", s.requireAdmin(s.handleGetAccountStatus))
+	s.mux.HandleFunc("GET /api/v1/settings/providers/{name}/account", s.requireAdmin(s.handleGetProviderAccountStatus))
 	s.mux.HandleFunc("GET /api/v1/settings/users", s.requireAdmin(s.handleListUsers))
 	s.mux.HandleFunc("POST /api/v1/settings/users", s.requireAdmin(s.handleAddUser))
 	s.mux.HandleFunc("DELETE /api/v1/settings/users/{username}", s.requireAdmin(s.handleRemoveUser))

@@ -131,3 +131,34 @@ func (s *Server) providerRegistered(name string) bool {
 	}
 	return false
 }
+
+// handleGetProviderAccountStatus implements
+// GET /api/v1/settings/providers/{name}/account — that provider's own
+// account state (plan, expiry, any restriction it has applied).
+//
+// Per provider rather than one call for the instance: each account has its
+// own plan and its own restrictions, and showing one provider's cooldown
+// under a heading that could mean either would be worse than showing
+// nothing. Always HTTP 200 with available:false on failure, matching
+// GET /api/v1/settings/account — a provider being unreachable is a state to
+// display, not an error to handle.
+func (s *Server) handleGetProviderAccountStatus(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.providerRegistered(name) {
+		http.Error(w, "unknown provider "+name, http.StatusNotFound)
+		return
+	}
+	status, err := s.settings.AccountStatus(r.Context(), name)
+	if err != nil {
+		writeJSON(w, accountStatusResponse{Available: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, accountStatusResponse{
+		Available:            true,
+		PlanName:             status.PlanName,
+		IsSubscribed:         status.IsSubscribed,
+		PremiumExpiresAt:     status.PremiumExpiresAt,
+		TotalBytesDownloaded: status.TotalBytesDownloaded,
+		CooldownUntil:        status.CooldownUntil,
+	})
+}

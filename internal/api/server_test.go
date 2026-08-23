@@ -438,7 +438,7 @@ func (f *fakeSettings) RemoveCategory(_ context.Context, category string) error 
 	return nil
 }
 
-func (f *fakeSettings) AccountStatus(_ context.Context) (debrid.AccountStatus, error) {
+func (f *fakeSettings) AccountStatus(context.Context, string) (debrid.AccountStatus, error) {
 	if f.accountErr != nil {
 		return debrid.AccountStatus{}, f.accountErr
 	}

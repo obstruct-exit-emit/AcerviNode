@@ -283,6 +283,23 @@ func (d *DynamicUsenetProvider) ListCached(ctx context.Context) ([]DownloadStatu
 	return d.listCache.List(ctx, d.List)
 }
 
+// Account satisfies AccountProvider by delegating to the current inner
+// provider, if it implements it — same type-assertion-through-the-live-swap
+// approach as DynamicTorrentProvider.Account. Present on every wrapper
+// because an account belongs to the provider, not to one kind: a provider
+// that doesn't do torrents still has a plan and an expiry worth reporting.
+func (d *DynamicUsenetProvider) Account(ctx context.Context) (AccountStatus, error) {
+	p, err := d.current()
+	if err != nil {
+		return AccountStatus{}, err
+	}
+	ap, ok := p.(AccountProvider)
+	if !ok {
+		return AccountStatus{}, fmt.Errorf("debrid: provider %q does not support account status", d.name)
+	}
+	return ap.Account(ctx)
+}
+
 // ListFresh is ListCached without reading the cache — it always fetches,
 // and stores the result for everyone else. See ListCache.Refresh.
 func (d *DynamicUsenetProvider) ListFresh(ctx context.Context) ([]DownloadStatus, time.Time, error) {
@@ -409,6 +426,23 @@ func (d *DynamicWebDownloadProvider) List(ctx context.Context) ([]DownloadStatus
 // the fetch timestamp this returns.
 func (d *DynamicWebDownloadProvider) ListCached(ctx context.Context) ([]DownloadStatus, time.Time, error) {
 	return d.listCache.List(ctx, d.List)
+}
+
+// Account satisfies AccountProvider by delegating to the current inner
+// provider, if it implements it — same type-assertion-through-the-live-swap
+// approach as DynamicTorrentProvider.Account. Present on every wrapper
+// because an account belongs to the provider, not to one kind: a provider
+// that doesn't do torrents still has a plan and an expiry worth reporting.
+func (d *DynamicWebDownloadProvider) Account(ctx context.Context) (AccountStatus, error) {
+	p, err := d.current()
+	if err != nil {
+		return AccountStatus{}, err
+	}
+	ap, ok := p.(AccountProvider)
+	if !ok {
+		return AccountStatus{}, fmt.Errorf("debrid: provider %q does not support account status", d.name)
+	}
+	return ap.Account(ctx)
 }
 
 // ListFresh is ListCached without reading the cache — it always fetches,

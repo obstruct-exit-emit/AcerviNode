@@ -4,7 +4,7 @@ import {
   getGeneralSettings,
   getProviderSettings,
   getStatus,
-  getTorBoxAccount,
+  getProviderAccount,
   regenerateApiKey,
   regenerateCertificate,
   removeCategory,
@@ -20,7 +20,7 @@ import {
   type GeneralUpdateInput,
   type ProviderSetting,
   type StatusInfo,
-  type TorBoxAccount,
+  type ProviderAccount,
 } from '../api'
 import { getDefaultDirectory, pickAndRememberDirectory, forgetDefaultDirectory, supportsDirectoryPicker } from '../fsAccess'
 import { formatBytes, formatRelativeTime } from '../format'
@@ -192,7 +192,9 @@ export function Settings({ apiKey }: Props) {
     Record<string, { kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>
   >({})
   const [defaultStatus, setDefaultStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
-  const [account, setAccount] = useState<TorBoxAccount | null>(null)
+  // Keyed by provider: each account is its own live call and its own
+  // panel, inside that provider's card.
+  const [accounts, setAccounts] = useState<Record<string, ProviderAccount>>({})
   // Whether the (separately-fetched, potentially slow — see load()) account
   // status call is still in flight, so the Provider tab can say so instead
   // of just silently showing nothing until it resolves.
@@ -214,17 +216,23 @@ export function Settings({ apiKey }: Props) {
   const [regenCertStatus, setRegenCertStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   async function load() {
+    // Captured from the settled response rather than read back from state:
+    // setSettings won't have applied by the time the account fetch below
+    // runs, and asking for the accounts of providers we haven't loaded yet
+    // would fetch nothing.
+    let providerList: ProviderSetting[] = []
     try {
       const [providerSettings, generalSettings, cats, statusInfo] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
         // Fast and purely local (no live provider network call — see
-        // getStatus's own doc comment), unlike getTorBoxAccount below, so
+        // getStatus's own doc comment), unlike getProviderAccount below, so
         // it's safe to bundle here with everything else.
         getStatus(apiKey),
       ])
       setSettings(providerSettings)
+      providerList = providerSettings
       setGeneral(generalSettings)
       setForm({
         port: generalSettings.port,
@@ -259,19 +267,29 @@ export function Settings({ apiKey }: Props) {
       // this view just leaves the form usable either way.
     }
 
-    // Deliberately NOT part of the Promise.all above — this is a live call
-    // to the provider itself (see getTorBoxAccount's own doc comment), which
-    // can take up to the provider client's own timeout (seen live taking a
-    // real 30s when TorBox itself was degraded) before resolving, even
-    // though it's designed to resolve with available:false rather than
-    // throw. Bundling it with the rest of load() meant the *entire* Settings
-    // page — API key, Import & cleanup, Categories, none of which have
-    // anything to do with TorBox's own health — sat blank that whole time.
-    // Fetched independently so the rest of the page is usable immediately
-    // regardless of how slow or broken the provider connection is right now.
+    // Deliberately NOT part of the Promise.all above — each of these is a
+    // live call to the provider itself (see getProviderAccount's own doc
+    // comment), which can take up to the provider client's own timeout
+    // (seen live taking a real 30s when TorBox itself was degraded) before
+    // resolving, even though it's designed to resolve with available:false
+    // rather than throw. Bundling them with the rest of load() meant the
+    // *entire* Settings page — API key, Import & cleanup, Categories, none
+    // of which have anything to do with a provider's health — sat blank
+    // that whole time. Fetched independently so the rest of the page is
+    // usable immediately regardless of how slow or broken any provider is.
+    //
+    // Settled together rather than sequentially so one unreachable provider
+    // doesn't delay another's panel.
     setAccountLoading(true)
     try {
-      setAccount(await getTorBoxAccount(apiKey))
+      const results = await Promise.allSettled(
+        providerList.map(async (p) => [p.name, await getProviderAccount(apiKey, p.name)] as const),
+      )
+      const next: Record<string, ProviderAccount> = {}
+      for (const r of results) {
+        if (r.status === 'fulfilled') next[r.value[0]] = r.value[1]
+      }
+      setAccounts(next)
     } catch {
       // Same treatment as the block above — routine, not fatal.
     } finally {
@@ -653,6 +671,7 @@ export function Settings({ apiKey }: Props) {
             const saveState = status[p.name] ?? { kind: 'idle' as const }
             const test = testStatus[p.name] ?? { kind: 'idle' as const }
             const draft = providerKeys[p.name] ?? ''
+            const account = accounts[p.name]
             const expanded = expandedProviders[p.name] ?? false
             const toggle = () => setExpandedProviders((e) => ({ ...e, [p.name]: !expanded }))
             return (
@@ -728,6 +747,43 @@ export function Settings({ apiKey }: Props) {
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
                       </>
                     )}
+
+                    {/* This provider's own account — its plan, its expiry,
+                        its restrictions. Inside its card because none of it
+                        generalises: two providers have two different plans,
+                        and a cooldown belongs to whichever account applied
+                        it. */}
+                    {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
+                      <p className="settings-error">
+                        ⚠ {providerLabel(p.name)} is restricting this account until{' '}
+                        {new Date(account.cooldown_until).toLocaleString()} — every download's progress can look
+                        frozen with no other visible cause while this is active. Not something AcerviNode can do
+                        anything about; it'll clear on its own.
+                      </p>
+                    )}
+                    {account?.available && (
+                      <dl className="detail-meta account-status">
+                        <dt>Plan</dt>
+                        <dd>
+                          {account.plan_name}
+                          {account.is_subscribed ? ' (subscribed)' : ''}
+                        </dd>
+                        {account.premium_expires_at && (
+                          <>
+                            <dt>Premium expires</dt>
+                            <dd>{new Date(account.premium_expires_at).toLocaleDateString()}</dd>
+                          </>
+                        )}
+                        <dt>Total downloaded</dt>
+                        <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
+                      </dl>
+                    )}
+                    {/* Only while a fetch is actually in flight: account
+                        doesn't distinguish "never fetched" from "fetched,
+                        unavailable". */}
+                    {p.configured && !account && accountLoading && (
+                      <p className="settings-help">Checking account status…</p>
+                    )}
                   </>
                 )}
               </section>
@@ -746,37 +802,6 @@ export function Settings({ apiKey }: Props) {
           )}
 
         <section className="settings-card">
-          {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
-            <p className="settings-error">
-              ⚠ TorBox is restricting this account until{' '}
-              {new Date(account.cooldown_until).toLocaleString()} — every download's progress can look frozen with
-              no other visible cause while this is active. Not something AcerviNode can do anything about; it'll
-              clear on its own.
-            </p>
-          )}
-
-          {account?.available && (
-            <dl className="detail-meta account-status">
-              <dt>Plan</dt>
-              <dd>
-                {account.plan_name}
-                {account.is_subscribed ? ' (subscribed)' : ''}
-              </dd>
-              {account.premium_expires_at && (
-                <>
-                  <dt>Premium expires</dt>
-                  <dd>{new Date(account.premium_expires_at).toLocaleDateString()}</dd>
-                </>
-              )}
-              <dt>Total downloaded</dt>
-              <dd>{formatBytes(account.total_bytes_downloaded ?? 0)}</dd>
-            </dl>
-          )}
-          {/* configured but not yet resolved (or currently re-checking) —
-              account itself doesn't distinguish "never fetched" from
-              "fetched, unavailable", so this only shows while a fetch is
-              actually in flight, not just whenever account is null. */}
-          {providers.some((p) => p.configured) && accountLoading && <p className="settings-help">Checking account status…</p>}
 
           {health && (
             <Section

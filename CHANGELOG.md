@@ -248,6 +248,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Account status is now reported per provider, inside that provider's own
+  card.** It was a single instance-wide panel showing whichever provider was
+  the default, with the cooldown warning hardcoded to say "TorBox" — so with
+  two providers configured, one account's plan, expiry and restrictions were
+  displayed under a heading that could have meant either, and the other's
+  weren't shown at all. Each account has its own plan and its own
+  restrictions; none of it generalises. New endpoint
+  `GET /api/v1/settings/providers/{name}/account`; the existing
+  `GET /api/v1/settings/account` stays, reporting the default provider, for
+  anything already pointed at it. The warning now names the provider that
+  actually applied the restriction. `Account` is also available on all three
+  `Dynamic*Provider` wrappers rather than only the torrent one, since an
+  account belongs to a provider rather than to a kind — a provider that
+  doesn't do torrents still has a plan worth reporting. The per-provider
+  fetches settle together, so one unreachable provider doesn't delay
+  another's panel.
+
 - **The Provider settings tab had grown an extra layer.** Generalising the
   single TorBox panel into a per-provider list wrapped everything in one
   "Providers" card, so reaching a provider meant expanding that first and
