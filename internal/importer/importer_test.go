@@ -147,7 +147,7 @@ func TestTick_DownloadsFilesAndMarksReadyForImport(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Show", Category: "tv-sonarr", SavePath: destDir,
 		State: database.StateProviderCompleted,
 	}
@@ -212,7 +212,7 @@ func TestTick_MinFileSizeFiltersSmallFiles(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Show", Category: "tv-sonarr", SavePath: destDir,
 		State: database.StateProviderCompleted,
 	}
@@ -272,7 +272,7 @@ func TestTick_MaxFileSizeFiltersLargeFiles(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Show", Category: "tv-sonarr", SavePath: destDir,
 		State: database.StateProviderCompleted,
 	}
@@ -328,7 +328,7 @@ func TestTick_IncludeExcludeRegexFilterFiles(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Movie", Category: "radarr", SavePath: destDir,
 		State: database.StateProviderCompleted,
 	}
@@ -369,7 +369,7 @@ func TestTick_AllFilesFilteredOutStillReachesReadyForImport(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Movie", Category: "radarr", SavePath: t.TempDir(),
 		State: database.StateProviderCompleted,
 	}
@@ -410,7 +410,7 @@ func TestTick_UsesDownloadDirWhenNoSavePath(t *testing.T) {
 
 	downloadDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-2", Provider: "fake", ProviderDownloadID: "provider-2", Kind: database.KindUsenet,
+		ID: "dl-2", Provider: "faketorbox", ProviderDownloadID: "provider-2", Kind: database.KindUsenet,
 		Name: "Some Release", Category: "radarr", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -719,7 +719,7 @@ func TestCheckStuckDownloads_DisabledByDefault(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Stuck", State: database.StateDownloading,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -748,7 +748,7 @@ func TestCheckStuckDownloads_MarksStuckDownloadAsError(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "Stuck", State: database.StateDownloading, Progress: 0.4,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -781,7 +781,7 @@ func TestCheckStuckDownloads_LeavesRecentlyUpdatedDownloadAlone(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "StillGoing", State: database.StateDownloading, Progress: 0.9,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -813,15 +813,15 @@ func TestCheckStuckDownloads_IgnoresStatesOutsideQueuedOrDownloading(t *testing.
 
 	old := time.Now().UTC().Add(-2 * time.Hour)
 	completed := &database.Download{
-		ID: "dl-completed", Provider: "fake", ProviderDownloadID: "p-1", Kind: database.KindTorrent,
+		ID: "dl-completed", Provider: "faketorbox", ProviderDownloadID: "p-1", Kind: database.KindTorrent,
 		Hash: "a", Name: "Completed", State: database.StateProviderCompleted,
 	}
 	ready := &database.Download{
-		ID: "dl-ready", Provider: "fake", ProviderDownloadID: "p-2", Kind: database.KindTorrent,
+		ID: "dl-ready", Provider: "faketorbox", ProviderDownloadID: "p-2", Kind: database.KindTorrent,
 		Hash: "b", Name: "Ready", State: database.StateReadyForImport,
 	}
 	alreadyError := &database.Download{
-		ID: "dl-error", Provider: "fake", ProviderDownloadID: "p-3", Kind: database.KindTorrent,
+		ID: "dl-error", Provider: "faketorbox", ProviderDownloadID: "p-3", Kind: database.KindTorrent,
 		Hash: "c", Name: "AlreadyError", State: database.StateError, ErrorMessage: "some other reason",
 	}
 	for _, d := range []*database.Download{completed, ready, alreadyError} {
@@ -861,7 +861,7 @@ func TestCleanupErroredDownloads_DisabledByDefault(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-1", Provider: "fake", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "OldError", State: database.StateError, ErrorMessage: "gave up",
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -896,7 +896,7 @@ func TestCleanupErroredDownloads_RemovesOldErroredDownload(t *testing.T) {
 	db := openTestDB(t)
 
 	old := &database.Download{
-		ID: "dl-old", Provider: "fake", ProviderDownloadID: "provider-old", Kind: database.KindTorrent,
+		ID: "dl-old", Provider: "faketorbox", ProviderDownloadID: "provider-old", Kind: database.KindTorrent,
 		Hash: "abc123", Name: "OldError", State: database.StateError, ErrorMessage: "gave up", AddedVia: database.AddedViaArr,
 	}
 	if err := db.InsertDownload(ctx, old); err != nil {
@@ -905,7 +905,7 @@ func TestCleanupErroredDownloads_RemovesOldErroredDownload(t *testing.T) {
 	backdateUpdatedAt(t, db, old.ID, time.Now().UTC().AddDate(0, 0, -10))
 
 	recent := &database.Download{
-		ID: "dl-recent", Provider: "fake", ProviderDownloadID: "provider-recent", Kind: database.KindTorrent,
+		ID: "dl-recent", Provider: "faketorbox", ProviderDownloadID: "provider-recent", Kind: database.KindTorrent,
 		Hash: "def456", Name: "RecentError", State: database.StateError, ErrorMessage: "gave up", AddedVia: database.AddedViaArr,
 	}
 	if err := db.InsertDownload(ctx, recent); err != nil {
@@ -913,7 +913,7 @@ func TestCleanupErroredDownloads_RemovesOldErroredDownload(t *testing.T) {
 	}
 
 	manual := &database.Download{
-		ID: "dl-manual", Provider: "fake", ProviderDownloadID: "provider-manual", Kind: database.KindTorrent,
+		ID: "dl-manual", Provider: "faketorbox", ProviderDownloadID: "provider-manual", Kind: database.KindTorrent,
 		Hash: "ghi789", Name: "VanishedManual", State: database.StateError,
 		ErrorMessage: "no longer found in the provider's account", AddedVia: database.AddedViaManual,
 	}
@@ -971,7 +971,7 @@ func TestTick_SkipsAlreadyDownloadedFiles(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-3", Provider: "fake", ProviderDownloadID: "provider-3", Kind: database.KindTorrent,
+		ID: "dl-3", Provider: "faketorbox", ProviderDownloadID: "provider-3", Kind: database.KindTorrent,
 		Hash: "def456", Name: "X", SavePath: destDir, State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1009,7 +1009,7 @@ func TestTick_LeavesRowForRetryOnFailure(t *testing.T) {
 	// ever be dereferenced.
 
 	d := &database.Download{
-		ID: "dl-4", Provider: "fake", ProviderDownloadID: "provider-4", Kind: database.KindTorrent,
+		ID: "dl-4", Provider: "faketorbox", ProviderDownloadID: "provider-4", Kind: database.KindTorrent,
 		Hash: "fail1", Name: "Y", SavePath: t.TempDir(), State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1048,7 +1048,7 @@ func TestHandleFailure_BackoffGrowsWithEachAttempt(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-backoff", Provider: "fake", ProviderDownloadID: "provider-backoff", Kind: database.KindTorrent,
+		ID: "dl-backoff", Provider: "faketorbox", ProviderDownloadID: "provider-backoff", Kind: database.KindTorrent,
 		Hash: "backoff1", Name: "Backoff Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1089,7 +1089,7 @@ func TestHandleFailure_GivesUpAfterMaxRetries(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-giveup", Provider: "fake", ProviderDownloadID: "provider-giveup", Kind: database.KindTorrent,
+		ID: "dl-giveup", Provider: "faketorbox", ProviderDownloadID: "provider-giveup", Kind: database.KindTorrent,
 		Hash: "giveup1", Name: "Give Up Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1131,7 +1131,7 @@ func TestTick_DoesNotRetryBeforeNextRetryAt(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-backoff-wait", Provider: "fake", ProviderDownloadID: "provider-backoff-wait", Kind: database.KindTorrent,
+		ID: "dl-backoff-wait", Provider: "faketorbox", ProviderDownloadID: "provider-backoff-wait", Kind: database.KindTorrent,
 		Hash: "waiting1", Name: "Waiting", SavePath: t.TempDir(), State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1169,7 +1169,7 @@ func TestTick_RejectsPathTraversal(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-5", Provider: "fake", ProviderDownloadID: "provider-5", Kind: database.KindTorrent,
+		ID: "dl-5", Provider: "faketorbox", ProviderDownloadID: "provider-5", Kind: database.KindTorrent,
 		Hash: "evil1", Name: "Z", SavePath: destDir, State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1222,7 +1222,7 @@ func TestTick_ProactivelyRefreshesAndFetchesWithinOneTick(t *testing.T) {
 
 	destDir := t.TempDir()
 	d := &database.Download{
-		ID: "dl-6", Provider: "fake", ProviderDownloadID: "provider-6", Kind: database.KindTorrent,
+		ID: "dl-6", Provider: "faketorbox", ProviderDownloadID: "provider-6", Kind: database.KindTorrent,
 		Hash: "proactive1", Name: "Proactive", SavePath: destDir, State: database.StateQueued,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -1262,7 +1262,7 @@ func TestTick_RefreshDoesNotRegressReadyForImport(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-7", Provider: "fake", ProviderDownloadID: "provider-7", Kind: database.KindTorrent,
+		ID: "dl-7", Provider: "faketorbox", ProviderDownloadID: "provider-7", Kind: database.KindTorrent,
 		Hash: "ready1", Name: "Already Ready", SavePath: t.TempDir(),
 		State: database.StateReadyForImport, Progress: 1,
 	}
@@ -1985,7 +1985,7 @@ func TestTick_NeverAutoFetchesManualDownloads(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-manual-1", Provider: "fake", ProviderDownloadID: "provider-manual-1", Kind: database.KindTorrent,
+		ID: "dl-manual-1", Provider: "faketorbox", ProviderDownloadID: "provider-manual-1", Kind: database.KindTorrent,
 		Hash: "manualhash", Name: "Manually Added Movie", SavePath: t.TempDir(),
 		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
 	}
@@ -2021,7 +2021,7 @@ func TestTick_ToleratesNoProviderConfiguredDuringRefresh(t *testing.T) {
 
 	provider := &fakeProvider{listErr: debrid.ErrNoProvider}
 	d := &database.Download{
-		ID: "dl-8", Provider: "fake", ProviderDownloadID: "provider-8", Kind: database.KindTorrent,
+		ID: "dl-8", Provider: "faketorbox", ProviderDownloadID: "provider-8", Kind: database.KindTorrent,
 		Hash: "noprovider1", Name: "No Provider Yet", SavePath: t.TempDir(), State: database.StateQueued,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2113,7 +2113,7 @@ func TestSetConfig_DownloadDirAppliesLive(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-setconfig", Provider: "fake", ProviderDownloadID: "provider-setconfig", Kind: database.KindTorrent,
+		ID: "dl-setconfig", Provider: "faketorbox", ProviderDownloadID: "provider-setconfig", Kind: database.KindTorrent,
 		Hash: "setconfig1", Name: "Some Release", Category: "tv", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2154,7 +2154,7 @@ func TestSetCategoryPaths_OverridesDownloadDir(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-catpath", Provider: "fake", ProviderDownloadID: "provider-catpath", Kind: database.KindTorrent,
+		ID: "dl-catpath", Provider: "faketorbox", ProviderDownloadID: "provider-catpath", Kind: database.KindTorrent,
 		Hash: "catpath1", Name: "Some Movie", Category: "movies", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2213,7 +2213,7 @@ func TestTick_RespectsMaxConcurrent(t *testing.T) {
 	const numDownloads = 4
 	for i := 0; i < numDownloads; i++ {
 		d := &database.Download{
-			ID: fmt.Sprintf("dl-conc-%d", i), Provider: "fake", ProviderDownloadID: fmt.Sprintf("provider-conc-%d", i),
+			ID: fmt.Sprintf("dl-conc-%d", i), Provider: "faketorbox", ProviderDownloadID: fmt.Sprintf("provider-conc-%d", i),
 			Kind: database.KindTorrent, Hash: fmt.Sprintf("conchash%d", i), Name: fmt.Sprintf("Release %d", i),
 			Category: "tv", State: database.StateProviderCompleted,
 		}
@@ -2282,7 +2282,7 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-timeout", Provider: "fake", ProviderDownloadID: "provider-timeout", Kind: database.KindTorrent,
+		ID: "dl-timeout", Provider: "faketorbox", ProviderDownloadID: "provider-timeout", Kind: database.KindTorrent,
 		Hash: "timeouthash", Name: "Slow Release", Category: "tv", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2344,7 +2344,7 @@ func TestCancelFetch_StopsInFlightFetch(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-cancel", Provider: "fake", ProviderDownloadID: "provider-cancel", Kind: database.KindTorrent,
+		ID: "dl-cancel", Provider: "faketorbox", ProviderDownloadID: "provider-cancel", Kind: database.KindTorrent,
 		Hash: "cancelhash", Name: "Cancel Me", Category: "tv", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2438,7 +2438,7 @@ func TestProcessDownload_SkipsIfAlreadyActivelyFetching(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-overlap", Provider: "fake", ProviderDownloadID: "provider-overlap", Kind: database.KindTorrent,
+		ID: "dl-overlap", Provider: "faketorbox", ProviderDownloadID: "provider-overlap", Kind: database.KindTorrent,
 		Hash: "overlaphash", Name: "Overlap Me", Category: "tv", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2499,7 +2499,7 @@ func TestFetchFile_SucceedsWithSlowButActiveTransfer(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-slow-active", Provider: "fake", ProviderDownloadID: "provider-slow-active", Kind: database.KindTorrent,
+		ID: "dl-slow-active", Provider: "faketorbox", ProviderDownloadID: "provider-slow-active", Kind: database.KindTorrent,
 		Hash: "slowactivehash", Name: "Slow But Active Release", Category: "tv", State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2565,7 +2565,7 @@ func TestProcessDownload_MakesDestinationDirectoryWorldWritable(t *testing.T) {
 	}
 
 	d := &database.Download{
-		ID: "dl-perm", Provider: "fake", ProviderDownloadID: "provider-perm", Kind: database.KindTorrent,
+		ID: "dl-perm", Provider: "faketorbox", ProviderDownloadID: "provider-perm", Kind: database.KindTorrent,
 		Hash: "permhash", Name: "Permission Test", Category: "tv", SavePath: destDir,
 		State: database.StateProviderCompleted, SizeBytes: 5,
 	}
@@ -2623,7 +2623,7 @@ func TestProcessDownload_ReportsLiveFetchProgress(t *testing.T) {
 	provider := &fakeProvider{cdn: cdn, files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.bin", SizeBytes: 20}}}
 
 	d := &database.Download{
-		ID: "dl-progress", Provider: "fake", ProviderDownloadID: "provider-progress", Kind: database.KindTorrent,
+		ID: "dl-progress", Provider: "faketorbox", ProviderDownloadID: "provider-progress", Kind: database.KindTorrent,
 		Hash: "progresshash", Name: "Progress Test", Category: "tv", SavePath: t.TempDir(),
 		State: database.StateProviderCompleted, SizeBytes: 20,
 	}
@@ -2674,7 +2674,7 @@ func TestSetConfig_MaxRetriesAppliesLive(t *testing.T) {
 	db := openTestDB(t)
 
 	d := &database.Download{
-		ID: "dl-setconfig-retries", Provider: "fake", ProviderDownloadID: "provider-setconfig-retries", Kind: database.KindTorrent,
+		ID: "dl-setconfig-retries", Provider: "faketorbox", ProviderDownloadID: "provider-setconfig-retries", Kind: database.KindTorrent,
 		Hash: "setconfig2", Name: "Retry Test", SavePath: t.TempDir(), State: database.StateProviderCompleted,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2715,7 +2715,7 @@ func TestSetConfig_ResetsTickerInterval(t *testing.T) {
 	// nothing's tracked — a row needs to exist for a tick to be observable
 	// via provider.listCalls at all.
 	d := &database.Download{
-		ID: "dl-ticker-reset", Provider: "fake", ProviderDownloadID: "provider-ticker-reset", Kind: database.KindTorrent,
+		ID: "dl-ticker-reset", Provider: "faketorbox", ProviderDownloadID: "provider-ticker-reset", Kind: database.KindTorrent,
 		Hash: "tickerreset1", Name: "Ticker Reset Test", State: database.StateQueued,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
@@ -2807,7 +2807,7 @@ func TestSetDirMode_AppliesLive(t *testing.T) {
 
 	destDir := filepath.Join(t.TempDir(), "release-folder")
 	d := &database.Download{
-		ID: "dl-dirmode", Provider: "fake", ProviderDownloadID: "provider-dirmode", Kind: database.KindTorrent,
+		ID: "dl-dirmode", Provider: "faketorbox", ProviderDownloadID: "provider-dirmode", Kind: database.KindTorrent,
 		Hash: "dirmodehash", Name: "Dir Mode Test", Category: "tv", SavePath: destDir,
 		State: database.StateProviderCompleted, SizeBytes: 5,
 	}
@@ -2898,5 +2898,41 @@ func TestSetWebDownloadProvider_DiscoversManualWebDownloads(t *testing.T) {
 	}
 	if got.Name != "Dragon Ball Z" || got.SizeBytes != 2048 {
 		t.Errorf("adopted row = %+v, want it to reflect the provider's status", got)
+	}
+}
+
+// TestProcessDownload_RefusesAnotherProvidersDownload is the importer half
+// of routing by the download's own provider. Fetching a download means
+// asking a provider for file links by an id only that provider knows; the
+// configured one has no idea what it refers to. Refusing outright beats
+// making the call and interpreting whatever comes back.
+func TestProcessDownload_RefusesAnotherProvidersDownload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{files: []debrid.DownloadFile{{ProviderFileID: "1", Path: "file.bin", SizeBytes: 4}}}
+	d := &database.Download{
+		ID: "dl-other", Provider: "some-other-provider", ProviderDownloadID: "p-other",
+		Kind: database.KindTorrent, Hash: "h", Name: "Elsewhere", SavePath: t.TempDir(),
+		State: database.StateProviderCompleted, SizeBytes: 4,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	if err := im.processDownload(ctx, d); err == nil {
+		t.Fatal("processDownload() error = nil, want a refusal for a download belonging to another provider")
+	}
+
+	// Nothing should have been fetched: asserted on the filesystem rather
+	// than the fake's internals, so this keeps holding if the fetch path is
+	// reworked later.
+	entries, err := os.ReadDir(d.SavePath)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", d.SavePath, err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("save path has %d entries, want 0 — nothing should have been fetched", len(entries))
 	}
 }

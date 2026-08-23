@@ -373,7 +373,7 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	// Best-effort cleanup of the old, presumably-gone provider-side entry —
 	// matches handleDeleteDownload's "provider call is best-effort" stance;
 	// it's already lost to us either way.
-	if provider := s.deleterForKind(d.Kind); provider != nil {
+	if provider := s.deleterFor(d); provider != nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), false); err != nil {
 			slog.Warn("api: best-effort delete of old provider download failed during re-add", "id", d.ID, "error", err)
 		}
@@ -537,19 +537,43 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deleterForKind returns the deleter for a download's kind, mirroring
-// handleDeleteDownload's own switch.
-func (s *Server) deleterForKind(kind database.Kind) deleter {
-	switch kind {
+// deleterFor returns the deleter for the provider d actually belongs to, or
+// nil if that provider isn't currently reachable.
+//
+// Resolving by kind alone would be wrong the moment more than one provider
+// is configured: every download row already records which provider it came
+// from (database.Download.Provider), and a torrent belonging to one account
+// can't be deleted by calling another's API with an id that means nothing
+// there. Today the check also catches a real single-provider case — a
+// download added under one API key, still tracked, after the key has been
+// swapped for a different account.
+//
+// A mismatch returns nil rather than erroring: every caller treats the
+// provider-side delete as best-effort and removes the local row regardless,
+// which stays the right behaviour here. The download is tombstoned as
+// unconfirmed either way, so it can't come back as a ghost — see
+// database.RecordDeletedDownload.
+func (s *Server) deleterFor(d *database.Download) providerDeleter {
+	var p providerDeleter
+	switch d.Kind {
 	case database.KindTorrent:
-		return s.torrentProvider
+		p = s.torrentProvider
 	case database.KindUsenet:
-		return s.usenetProvider
+		p = s.usenetProvider
 	case database.KindWebDL:
-		return s.webDownloadProvider
+		p = s.webDownloadProvider
 	default:
 		return nil
 	}
+	if p == nil {
+		return nil
+	}
+	if d.Provider != "" && p.Name() != d.Provider {
+		slog.Warn("api: skipping provider call, download belongs to a different provider",
+			"id", d.ID, "download_provider", d.Provider, "configured_provider", p.Name())
+		return nil
+	}
+	return p
 }
 
 // existingOrInsert returns an already-tracked download for provider+id if

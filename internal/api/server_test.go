@@ -2971,3 +2971,29 @@ func TestHandleAddTorrent_OtherProviderErrorStays502(t *testing.T) {
 		t.Errorf("status = %d, want 502, body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestHandleDeleteDownload_SkipsProviderCallForAnotherProvidersDownload
+// covers routing by the download's own provider rather than merely by its
+// kind. Calling the configured provider with an id that belongs to a
+// different account would at best fail and at worst act on an unrelated
+// download that happens to share the id. The local row is still removed —
+// the provider call has always been best-effort here.
+func TestHandleDeleteDownload_SkipsProviderCallForAnotherProvidersDownload(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox"}
+	srv, db := newTestServer(t, provider, nil, nil)
+
+	// seedDownload records Provider "fake"; the configured one is "torbox".
+	d := seedDownload(t, db, database.KindTorrent, "p1")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.deleteCalled {
+		t.Error("provider Delete was called for a download belonging to a different provider")
+	}
+	if got, _ := db.GetDownloadByID(context.Background(), d.ID); got != nil {
+		t.Error("local row should still be removed — the provider call is best-effort")
+	}
+}

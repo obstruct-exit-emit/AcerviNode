@@ -231,7 +231,7 @@ func TestHandleDelete_RemovesFromQueueAndHistory(t *testing.T) {
 	// prove mode=history&name=delete works the same way for a history row.
 	ctx := t.Context()
 	failed := &database.Download{
-		ID: "dl-failed", Provider: "fake", ProviderDownloadID: "provider-failed",
+		ID: "dl-failed", Provider: "faketorbox", ProviderDownloadID: "provider-failed",
 		Kind: database.KindUsenet, Name: "Failed Release", Category: "tv-sonarr",
 		State: database.StateError, ErrorMessage: "simulated",
 	}
@@ -354,12 +354,12 @@ func TestHandleHistory_ReportsBytes(t *testing.T) {
 	ctx := t.Context()
 
 	completed := &database.Download{
-		ID: "dl-completed", Provider: "fake", ProviderDownloadID: "provider-completed",
+		ID: "dl-completed", Provider: "faketorbox", ProviderDownloadID: "provider-completed",
 		Kind: database.KindUsenet, Name: "Completed Release", Category: "tv-sonarr",
 		State: database.StateReadyForImport, SizeBytes: 292301045,
 	}
 	failed := &database.Download{
-		ID: "dl-failed-bytes", Provider: "fake", ProviderDownloadID: "provider-failed-bytes",
+		ID: "dl-failed-bytes", Provider: "faketorbox", ProviderDownloadID: "provider-failed-bytes",
 		Kind: database.KindUsenet, Name: "Failed Release", Category: "tv-sonarr",
 		State: database.StateError, ErrorMessage: "simulated", SizeBytes: 12345,
 	}

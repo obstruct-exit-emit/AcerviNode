@@ -62,6 +62,15 @@ type deleter interface {
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
 }
 
+// providerDeleter is a deleter that can also say which provider it is, so a
+// lookup can confirm it's the one a given download actually belongs to
+// rather than merely the one configured for that download's kind — see
+// deleterFor.
+type providerDeleter interface {
+	deleter
+	Name() string
+}
+
 // torrentAdder is what POST /api/v1/downloads/torrent needs from a
 // torrent-capable debrid provider — enough to add a torrent directly
 // (magnet or an uploaded .torrent file), mirroring internal/qbittorrent's

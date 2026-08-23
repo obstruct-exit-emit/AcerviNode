@@ -180,6 +180,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Provider calls are now routed by the download's own provider, not just
+  its kind.** Every row already records which provider it came from
+  (`downloads.provider`), and the API reported it — but nothing used it to
+  *route a call*. Deletes and fetches resolved purely by kind, which is
+  identical behaviour while one provider is configured and wrong the moment
+  two are: a `provider_download_id` means nothing to a different account, so
+  the call would at best fail and at worst act on an unrelated download that
+  happened to share the id. `deleterFor` (`internal/api`) and `providerFor`
+  (`internal/importer`) now resolve by provider *and* kind, skipping the
+  call and logging when a row belongs to something else; the local row is
+  still removed, since the provider-side delete has always been
+  best-effort. The bulk polling paths keep a kind-only lookup, which is
+  correct — they are inherently per-kind, not per-download. This also fixes
+  a real single-provider case: a download added under one API key, still
+  tracked after the key was swapped for a different account, would
+  previously have had its delete or fetch aimed at the new account using an
+  id it has never heard of. Groundwork for multi-provider support, and
+  correct on its own merits today.
+
 - **A download deleted while the provider was unreachable came back as a
   ghost.** The delete tombstone that stops `discoverManual` re-adopting a
   just-deleted item lived for five minutes, on the reasoning that a

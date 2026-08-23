@@ -394,7 +394,7 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	// database.RecordDeletedDownload. True when there's no provider to call
 	// at all: there's then no provider-side copy left to come back.
 	providerConfirmed := true
-	if provider := s.deleterForKind(d.Kind); provider != nil {
+	if provider := s.deleterFor(d); provider != nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			providerConfirmed = false
 			slog.Error("api: provider delete failed, tombstoning for longer so it can't come back as a ghost",

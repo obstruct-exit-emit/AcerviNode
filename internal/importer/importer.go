@@ -1129,9 +1129,10 @@ func (im *Importer) backoff(attempt int) time.Duration {
 	return d
 }
 
-// providerForKind returns the configured provider for d's kind, or nil if
-// none is — shared by processDownload and cleanupDownload, both of which
-// need to reach the same provider a given download belongs to.
+// providerForKind returns the configured provider for a kind, with no
+// regard for any particular download — for the bulk polling paths, which
+// are inherently per-kind (refreshStatuses, refreshActiveDownloads).
+// Anything acting on a *specific* download must use providerFor instead.
 func (im *Importer) providerForKind(kind database.Kind) provider {
 	switch kind {
 	case database.KindTorrent:
@@ -1143,6 +1144,30 @@ func (im *Importer) providerForKind(kind database.Kind) provider {
 	default:
 		return nil
 	}
+}
+
+// providerFor returns the provider d actually belongs to, or nil if that
+// provider isn't currently reachable — shared by processDownload and
+// cleanupDownload, both of which act on one specific download.
+//
+// Resolving by kind alone would be wrong the moment more than one provider
+// is configured: every row already records which provider it came from
+// (database.Download.Provider), and its provider_download_id means nothing
+// to a different account. Today the check also catches a real
+// single-provider case — a download added under one API key, still tracked,
+// after the key has been swapped for a different account. Fetching it would
+// otherwise ask the new account for an id it has never heard of.
+func (im *Importer) providerFor(d *database.Download) provider {
+	p := im.providerForKind(d.Kind)
+	if p == nil {
+		return nil
+	}
+	if d.Provider != "" && p.Name() != d.Provider {
+		slog.Warn("importer: skipping provider call, download belongs to a different provider",
+			"id", d.ID, "download_provider", d.Provider, "configured_provider", p.Name())
+		return nil
+	}
+	return p
 }
 
 // resolveDestDir computes where d's files land (or landed) on local disk —
@@ -1272,9 +1297,11 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	// telling the user or an *arr app it was still doing anything at all.
 	defer im.db.ClearFetchProgress(d.ID)
 
-	p := im.providerForKind(d.Kind)
+	p := im.providerFor(d)
 	if p == nil {
-		return fmt.Errorf("no provider configured for kind %q", d.Kind)
+		// Either nothing is configured for this kind, or what is doesn't
+		// belong to this download — providerFor logs which.
+		return fmt.Errorf("no provider available for download %s (kind %q, provider %q)", d.ID, d.Kind, d.Provider)
 	}
 
 	id := debrid.ProviderDownloadID(d.ProviderDownloadID)
@@ -1477,7 +1504,7 @@ func (im *Importer) cleanupDownload(ctx context.Context, d *database.Download) {
 	// where discovery would re-adopt it as a ghost once a short window
 	// lapsed — see database.RecordDeletedDownload.
 	providerConfirmed := true
-	if p := im.providerForKind(d.Kind); p != nil {
+	if p := im.providerFor(d); p != nil {
 		if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), true); err != nil {
 			providerConfirmed = false
 			slog.Warn("importer: cleanup best-effort provider delete failed", "id", d.ID, "error", err)
