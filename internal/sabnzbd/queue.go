@@ -8,7 +8,19 @@ import (
 	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/debrid"
 )
+
+// listCachedProvider is the optional half of this shim's provider,
+// implemented by debrid's Dynamic*Provider wrapper — the same pointer
+// internal/importer holds. Going through it means one provider listing per
+// interval serves the importer and every connected *arr app at once,
+// instead of this handler fetching its own copy on every request. Optional
+// so a plain provider (this package's test fake) still works, fetching
+// directly as before.
+type listCachedProvider interface {
+	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
+}
 
 // refreshFromProvider syncs every tracked usenet download's local state
 // against one provider List() call. See database.RefreshFromProvider, which
@@ -25,7 +37,15 @@ import (
 // them are persisted to the database, just read fresh and attached to the
 // response here (see toQueueSlot/handleQueue).
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string, totalSpeedBytes int64) {
-	statuses, fetchedAt, err := s.listCache.List(ctx, s.provider.List)
+	var statuses []debrid.DownloadStatus
+	var fetchedAt time.Time
+	var err error
+	if lc, ok := s.provider.(listCachedProvider); ok {
+		statuses, fetchedAt, err = lc.ListCached(ctx)
+	} else {
+		fetchedAt = time.Now()
+		statuses, err = s.provider.List(ctx)
+	}
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
 		return nil, nil, 0

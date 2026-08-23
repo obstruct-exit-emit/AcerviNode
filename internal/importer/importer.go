@@ -46,6 +46,31 @@ type provider interface {
 	Delete(ctx context.Context, id debrid.ProviderDownloadID, deleteFiles bool) error
 }
 
+// listCachedProvider is the optional half of provider, implemented by
+// debrid's Dynamic*Provider wrappers — the same pointers the compat shims
+// hold. Going through it means one provider listing per kind per interval
+// serves the importer and every *arr app at once, instead of each fetching
+// its own; see debrid.ListCache. Optional rather than folded into provider
+// so a plain provider (a test fake, or any implementation that has no
+// reason to know about caching) still satisfies the interface — such a
+// caller just fetches directly, exactly as before.
+type listCachedProvider interface {
+	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
+	SetListCacheTTL(ttl time.Duration)
+}
+
+// listWithCache prefers p's shared cache when it has one, falling back to a
+// direct fetch. The returned time is when the underlying call started — see
+// ListCached, and database.RefreshFromProvider's ordering guard.
+func listWithCache(ctx context.Context, p provider) ([]debrid.DownloadStatus, time.Time, error) {
+	if lc, ok := p.(listCachedProvider); ok {
+		return lc.ListCached(ctx)
+	}
+	fetchedAt := time.Now()
+	statuses, err := p.List(ctx)
+	return statuses, fetchedAt, err
+}
+
 // maxBackoff caps how long a failing download waits between retries,
 // regardless of how the exponential backoff computation grows — a hardcoded
 // ceiling rather than another config knob, since "eventually give up" is the
@@ -229,6 +254,7 @@ const ensureWritableDirModeDefault = os.FileMode(0o777)
 // applies right after construction to match the configured values (mirroring
 // how it already does for category paths — see SetCategoryPaths).
 func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
+	setListCacheTTL(interval, torrentProvider, usenetProvider)
 	return &Importer{
 		db:                      db,
 		torrentProvider:         torrentProvider,
@@ -250,6 +276,17 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 	}
 }
 
+// setListCacheTTL points every provider that has a shared listing cache at
+// ttl, skipping any that doesn't (see listCachedProvider) and any that
+// isn't configured yet.
+func setListCacheTTL(ttl time.Duration, providers ...provider) {
+	for _, p := range providers {
+		if lc, ok := p.(listCachedProvider); ok {
+			lc.SetListCacheTTL(ttl)
+		}
+	}
+}
+
 // SetConfig updates downloadDir/interval/maxRetries live, with no restart —
 // the next Tick (and every one after) uses the new downloadDir/maxRetries
 // immediately, and Run's ticker is reset to the new interval right away
@@ -265,6 +302,14 @@ func (im *Importer) SetConfig(downloadDir string, interval time.Duration, maxRet
 	if !changed {
 		return
 	}
+	// The shared listing cache's lifetime tracks this interval: it's already
+	// the user's answer to how often the provider should be asked, and a
+	// shim request has no reason to answer it differently.
+	im.mu.Lock()
+	providers := []provider{im.torrentProvider, im.usenetProvider, im.webDownloadProvider}
+	im.mu.Unlock()
+	setListCacheTTL(interval, providers...)
+
 	select {
 	case im.intervalChanged <- interval:
 	default:
@@ -330,7 +375,10 @@ func (im *Importer) CategoryPaths() map[string]string {
 func (im *Importer) SetWebDownloadProvider(p provider) {
 	im.mu.Lock()
 	im.webDownloadProvider = p
+	interval := im.interval
 	im.mu.Unlock()
+	// Attached after New, so it misses the TTL set there.
+	setListCacheTTL(interval, p)
 }
 
 func (im *Importer) getWebDownloadProvider() provider {
@@ -709,8 +757,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	// Nothing is skipped when no rows are tracked yet: discoverManual still
 	// needs the listing to catch a first-ever manually-added download for a
 	// kind nothing's tracked.
-	fetchedAt := time.Now()
-	statuses, err := p.List(ctx)
+	statuses, fetchedAt, err := listWithCache(ctx, p)
 	if err != nil {
 		if errors.Is(err, debrid.ErrRateLimited) {
 			until := im.recordRateLimitHit(kind)

@@ -1396,6 +1396,50 @@ whenever it's set to a future time. Without this, the exact same "why has nothin
 updated in hours" investigation would otherwise require reading logs or querying
 TorBox directly by hand, same as how this was actually found.
 
+### One provider listing per interval, shared by everything
+
+`internal/importer`'s background poll and both compat shims' reactive
+refreshes (qBittorrent's `/torrents/info`, SABnzbd's `mode=queue` and
+`mode=history`) all need the same thing: the provider's current listing for
+a kind. Each of them used to fetch its own — the shims on *every single
+request*, so provider load scaled directly with how many *arr apps were
+connected and how fast they polled. Sonarr, Radarr, Readarr and Lidarr each
+polling more than one of those endpoints per cycle multiplies fast, and
+since TorBox meters rate limits per API key across its servers (v8.4.1),
+tripping that limit stalls *every* kind at once — while a kind is in
+rate-limit backoff `refreshKind` skips its listing entirely, so nothing
+advances and the whole app looks frozen.
+
+A single `debrid.ListCache` now lives on each shared `Dynamic*Provider`
+wrapper — the same pointer the importer and the shims already hold — so one
+fetch per kind per interval serves all of them, and concurrent callers share
+an in-flight call instead of each starting another. Its TTL tracks
+`import_interval_seconds` (`Importer.SetConfig` retunes it live): that
+setting is already the user's answer to how often the provider should be
+asked, and a shim request has no reason to answer it differently. Measured
+against the real API, four simulated *arr apps polling continuously for 30
+seconds: **3 provider calls, 2,227 requests served** — and that call count
+doesn't move as more *arr apps are added.
+
+Two details the implementation depends on:
+
+- **A reused response keeps its original fetch timestamp.** `ListCached`
+  returns when the underlying call *started*, not now.
+  `database.RefreshFromProvider` gates writes on that timestamp, so
+  reporting a reused response as current would let it overwrite fresher
+  state that landed in between — the exact regression that guard exists to
+  prevent. This is why the cache isn't simply buried inside `List()`, where
+  callers would have nowhere to read the real timestamp from.
+- **`ListCached` is deliberately not part of the `TorrentProvider`/
+  `UsenetProvider` interfaces.** Callers reach it through an optional
+  interface, so a plain provider (a test fake, or any implementation with no
+  reason to know about caching) still satisfies the interface and simply
+  fetches directly.
+
+The importer's *fast* per-download poll is untouched: it uses a targeted
+`Status()` lookup rather than `List()`, and exists precisely to get
+genuinely fresh data on demand for one in-flight download.
+
 ### Cached & metadata previews
 
 `CheckCached` existed on `debrid.TorrentProvider` (and `Client.CheckCachedTorrents`)

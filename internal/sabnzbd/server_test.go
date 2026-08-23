@@ -49,12 +49,6 @@ func newTestServerWithSettings(t *testing.T, settings settingsSource) *httptest.
 	t.Cleanup(func() { db.Close() })
 
 	srv := NewServer(newFakeProvider(), db, settings)
-	// Reuse is disabled for tests: they drive a fake provider whose state
-	// advances on each call and poll it twice back to back to observe a
-	// transition. Real *arr polling is orders of magnitude slower than the
-	// cache's TTL, so this restores what these tests were written against
-	// without weakening what they assert — see debrid.ListCache.TTL.
-	srv.listCache.TTL = -1
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts

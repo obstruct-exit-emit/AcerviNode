@@ -16,6 +16,7 @@ import (
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
+	"time"
 )
 
 // handleAdd implements POST /api/v2/torrents/add. qBittorrent's real
@@ -197,6 +198,17 @@ type liveTorrentInfo struct {
 	DownloadSpeedBytes int64
 }
 
+// listCachedProvider is the optional half of this shim's provider,
+// implemented by debrid's Dynamic*Provider wrapper — the same pointer
+// internal/importer holds. Going through it means one provider listing per
+// interval serves the importer and every connected *arr app at once,
+// instead of this handler fetching its own copy on every request. Optional
+// so a plain provider (this package's test fake) still works, fetching
+// directly as before.
+type listCachedProvider interface {
+	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
+}
+
 // refreshFromProvider syncs every row's local state against one provider
 // List() call — a single bulk request rather than one Status() call per row.
 // See database.RefreshFromProvider, which this and internal/importer's own
@@ -204,7 +216,15 @@ type liveTorrentInfo struct {
 // gets the freshest possible view even between importer ticks. Also returns
 // each row's current liveTorrentInfo keyed by provider download ID.
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]liveTorrentInfo {
-	statuses, fetchedAt, err := s.listCache.List(ctx, s.provider.List)
+	var statuses []debrid.DownloadStatus
+	var fetchedAt time.Time
+	var err error
+	if lc, ok := s.provider.(listCachedProvider); ok {
+		statuses, fetchedAt, err = lc.ListCached(ctx)
+	} else {
+		fetchedAt = time.Now()
+		statuses, err = s.provider.List(ctx)
+	}
 	if err != nil {
 		slog.Error("qbittorrent: provider list failed", "error", err)
 		return nil

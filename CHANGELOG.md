@@ -104,6 +104,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **One provider listing per interval now serves the importer and every
+  connected *arr app**, instead of each fetching its own. The compat shims'
+  reactive refreshes previously called `provider.List()` on every single
+  request, so provider load scaled directly with how many *arr apps were
+  connected and how fast they polled — the exact axis that trips TorBox's
+  per-API-key rate limit, which stalls every kind at once (a kind in
+  rate-limit backoff has its listing skipped entirely, so nothing advances).
+  A single `debrid.ListCache` now lives on each shared `Dynamic*Provider`
+  wrapper, which the importer and both shims already hold the same pointer
+  to, with its TTL tracking `import_interval_seconds` and retuned live by
+  `Importer.SetConfig`. Measured against the real API with four simulated
+  *arr apps polling continuously for 30 seconds: **3 provider calls, 2,227
+  requests served**, down from 32 — and that count no longer grows as more
+  *arr apps are added. A reused response deliberately keeps its *original*
+  fetch timestamp so `RefreshFromProvider`'s ordering guard still treats it
+  as the older data it is; that requirement is why the cache isn't buried
+  inside `List()` itself. The importer's fast per-download poll is untouched
+  — it uses a targeted `Status()` lookup and exists to get fresh data on
+  demand.
+
 - **A provider rate limit on an add is now `429`, not `502`.** Every
   provider failure except "no provider configured" was reported as
   `502 Bad Gateway` by the native API's add/re-add endpoints, which tells a

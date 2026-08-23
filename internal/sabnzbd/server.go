@@ -38,11 +38,6 @@ type Server struct {
 	// docs/configuration.md).
 	settings settingsSource
 
-	// listCache collapses the full provider List() call the reactive
-	// refreshes in this shim's handlers would otherwise each make on every
-	// single *arr poll — see debrid.ListCache.
-	listCache debrid.ListCache
-
 	mux        *http.ServeMux
 	categories *categoryStore
 }

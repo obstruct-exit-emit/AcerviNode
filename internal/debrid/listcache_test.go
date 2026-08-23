@@ -104,3 +104,56 @@ func TestListCache_DoesNotCacheErrors(t *testing.T) {
 		t.Errorf("fetch called %d times, want 2", calls)
 	}
 }
+
+// countingListProvider counts how many times the underlying provider was
+// actually asked for a listing, whatever the caller did.
+type countingListProvider struct {
+	stubTorrentProvider
+	calls int
+}
+
+func (c *countingListProvider) List(context.Context) ([]DownloadStatus, error) {
+	c.calls++
+	return []DownloadStatus{{ID: "a"}}, nil
+}
+
+// TestDynamicTorrentProvider_ListCachedIsSharedAcrossCallers is the point of
+// putting the cache on the wrapper rather than in each caller: the importer
+// and both compat shims hold this same pointer, so provider load stops
+// scaling with how many *arr apps are connected or how fast they poll. Every
+// caller here stands in for one of those.
+func TestDynamicTorrentProvider_ListCachedIsSharedAcrossCallers(t *testing.T) {
+	inner := &countingListProvider{stubTorrentProvider: stubTorrentProvider{name: "torbox"}}
+	d := NewDynamicTorrentProvider("torbox")
+	d.Set(inner)
+	d.SetListCacheTTL(time.Minute)
+
+	var firstAt time.Time
+	for i := 0; i < 12; i++ {
+		got, at, err := d.ListCached(context.Background())
+		if err != nil {
+			t.Fatalf("ListCached() error = %v", err)
+		}
+		if len(got) != 1 || got[0].ID != "a" {
+			t.Fatalf("ListCached() = %+v, want the provider's listing", got)
+		}
+		if i == 0 {
+			firstAt = at
+		} else if !at.Equal(firstAt) {
+			t.Errorf("reused fetchedAt = %v, want the original %v — a reused response must not look current", at, firstAt)
+		}
+	}
+	if inner.calls != 1 {
+		t.Errorf("provider List called %d times across 12 callers, want 1", inner.calls)
+	}
+
+	// Retuning the TTL down must take effect immediately, so a live change
+	// to the importer's poll interval is honoured without a restart.
+	d.SetListCacheTTL(-1)
+	if _, _, err := d.ListCached(context.Background()); err != nil {
+		t.Fatalf("ListCached() after retune error = %v", err)
+	}
+	if inner.calls != 2 {
+		t.Errorf("provider List called %d times after disabling reuse, want 2", inner.calls)
+	}
+}

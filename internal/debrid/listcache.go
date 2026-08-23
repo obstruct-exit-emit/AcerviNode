@@ -14,10 +14,11 @@ import (
 const reactiveListTTL = 2 * time.Second
 
 // ListCache coalesces and briefly reuses a provider's full List() response
-// for the *reactive* refreshes both compat shims do inside their HTTP
-// handlers — qBittorrent's /torrents/info, SABnzbd's mode=queue and
-// mode=history. Each of those originally made its own unconditional
-// List() call on every single request.
+// across every caller that would otherwise fetch its own copy: both compat
+// shims' reactive refreshes inside their HTTP handlers (qBittorrent's
+// /torrents/info, SABnzbd's mode=queue and mode=history) and
+// internal/importer's own background poll. Each of those originally made
+// its own unconditional List() call — the shims on every single request.
 //
 // That is a lot of duplicated work in a real setup. Sonarr, Radarr, Readarr
 // and Lidarr each poll their download client on their own schedule, and a
@@ -31,10 +32,18 @@ const reactiveListTTL = 2 * time.Second
 // and its state look stuck, for usenet and torrents alike, rather than just
 // making the shims themselves slow.
 //
-// Deliberately not applied to internal/importer's own polling: those calls
-// are already interval-driven and deduplicated by construction, and the
-// fast per-download poll depends on getting genuinely fresh data on demand.
-// This only removes redundancy that had no design intent behind it.
+// One instance per kind lives on the shared Dynamic*Provider wrapper, which
+// the importer and the shims already hold the same pointer to — so a single
+// fetch per interval serves all of them, and provider load stops scaling
+// with how many *arr apps are connected or how fast they poll. The TTL is
+// driven by the importer's own poll interval (see SetTTL): that setting is
+// already the user's answer to "how often should we ask the provider", and
+// there's no reason for a shim request to answer it differently.
+//
+// Deliberately NOT applied to the importer's fast per-download poll, which
+// uses a targeted Status() lookup rather than List(): that path exists
+// precisely to get genuinely fresh data on demand for one active download,
+// and is untouched by any of this.
 type ListCache struct {
 	// TTL is how long a response may be reused. Zero selects
 	// reactiveListTTL; a negative value disables reuse entirely, so every
@@ -49,12 +58,23 @@ type ListCache struct {
 	statuses  []DownloadStatus
 }
 
-// ttl resolves TTL's zero value to the package default.
+// ttl resolves TTL's zero value to the package default. Callers hold c.mu.
 func (c *ListCache) ttl() time.Duration {
 	if c.TTL == 0 {
 		return reactiveListTTL
 	}
 	return c.TTL
+}
+
+// SetTTL changes how long a response may be reused, for a cache whose
+// lifetime should track a live-configurable setting rather than staying
+// fixed at construction — see the Dynamic*Provider wrappers, which tie it
+// to internal/importer's own poll interval. Same conventions as the TTL
+// field: zero selects the package default, negative disables reuse.
+func (c *ListCache) SetTTL(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.TTL = d
 }
 
 // List returns fetch's result, reusing the previous one when it is still

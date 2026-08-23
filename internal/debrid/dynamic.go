@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // ErrNoProvider is returned by a Dynamic*Provider's methods when no
@@ -32,6 +33,10 @@ type DynamicTorrentProvider struct {
 	name  string
 	mu    sync.RWMutex
 	inner TorrentProvider
+	// listCache is shared by every caller holding this wrapper —
+	// internal/importer's poll and the compat shims' reactive refreshes —
+	// so one fetch per interval serves all of them. See ListCached.
+	listCache ListCache
 }
 
 // NewDynamicTorrentProvider creates a wrapper with no provider configured
@@ -95,6 +100,25 @@ func (d *DynamicTorrentProvider) List(ctx context.Context) ([]DownloadStatus, er
 		return nil, err
 	}
 	return p.List(ctx)
+}
+
+// ListCached is List through the shared cache, and is what every periodic
+// caller should use — see ListCache for why. The returned time is when the
+// underlying provider call was *started*, which for a reused response is
+// the original call's start time, not now: database.RefreshFromProvider
+// gates its writes on that timestamp, so reporting a reused response as
+// current would let it overwrite fresher state that landed in between.
+//
+// List itself is deliberately left uncached: it's part of the TorrentProvider
+// interface, and a caller holding only that interface has nowhere to put
+// the fetch timestamp this returns.
+func (d *DynamicTorrentProvider) ListCached(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.List(ctx, d.List)
+}
+
+// SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.
+func (d *DynamicTorrentProvider) SetListCacheTTL(ttl time.Duration) {
+	d.listCache.SetTTL(ttl)
 }
 
 func (d *DynamicTorrentProvider) Files(ctx context.Context, id ProviderDownloadID) ([]DownloadFile, error) {
@@ -174,6 +198,10 @@ type DynamicUsenetProvider struct {
 	name  string
 	mu    sync.RWMutex
 	inner UsenetProvider
+	// listCache is shared by every caller holding this wrapper —
+	// internal/importer's poll and the compat shims' reactive refreshes —
+	// so one fetch per interval serves all of them. See ListCached.
+	listCache ListCache
 }
 
 func NewDynamicUsenetProvider(name string) *DynamicUsenetProvider {
@@ -235,6 +263,25 @@ func (d *DynamicUsenetProvider) List(ctx context.Context) ([]DownloadStatus, err
 	return p.List(ctx)
 }
 
+// ListCached is List through the shared cache, and is what every periodic
+// caller should use — see ListCache for why. The returned time is when the
+// underlying provider call was *started*, which for a reused response is
+// the original call's start time, not now: database.RefreshFromProvider
+// gates its writes on that timestamp, so reporting a reused response as
+// current would let it overwrite fresher state that landed in between.
+//
+// List itself is deliberately left uncached: it's part of the UsenetProvider
+// interface, and a caller holding only that interface has nowhere to put
+// the fetch timestamp this returns.
+func (d *DynamicUsenetProvider) ListCached(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.List(ctx, d.List)
+}
+
+// SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.
+func (d *DynamicUsenetProvider) SetListCacheTTL(ttl time.Duration) {
+	d.listCache.SetTTL(ttl)
+}
+
 func (d *DynamicUsenetProvider) Files(ctx context.Context, id ProviderDownloadID) ([]DownloadFile, error) {
 	p, err := d.current()
 	if err != nil {
@@ -281,6 +328,10 @@ type DynamicWebDownloadProvider struct {
 	name  string
 	mu    sync.RWMutex
 	inner WebDownloadProvider
+	// listCache is shared by every caller holding this wrapper —
+	// internal/importer's poll and the compat shims' reactive refreshes —
+	// so one fetch per interval serves all of them. See ListCached.
+	listCache ListCache
 }
 
 func NewDynamicWebDownloadProvider(name string) *DynamicWebDownloadProvider {
@@ -332,6 +383,25 @@ func (d *DynamicWebDownloadProvider) List(ctx context.Context) ([]DownloadStatus
 		return nil, err
 	}
 	return p.List(ctx)
+}
+
+// ListCached is List through the shared cache, and is what every periodic
+// caller should use — see ListCache for why. The returned time is when the
+// underlying provider call was *started*, which for a reused response is
+// the original call's start time, not now: database.RefreshFromProvider
+// gates its writes on that timestamp, so reporting a reused response as
+// current would let it overwrite fresher state that landed in between.
+//
+// List itself is deliberately left uncached: it's part of the WebDownloadProvider
+// interface, and a caller holding only that interface has nowhere to put
+// the fetch timestamp this returns.
+func (d *DynamicWebDownloadProvider) ListCached(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.List(ctx, d.List)
+}
+
+// SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.
+func (d *DynamicWebDownloadProvider) SetListCacheTTL(ttl time.Duration) {
+	d.listCache.SetTTL(ttl)
 }
 
 func (d *DynamicWebDownloadProvider) Files(ctx context.Context, id ProviderDownloadID) ([]DownloadFile, error) {
