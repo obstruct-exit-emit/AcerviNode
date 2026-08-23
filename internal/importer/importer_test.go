@@ -3054,3 +3054,68 @@ func TestRefreshStatuses_RateLimitIsPerProvider(t *testing.T) {
 		t.Errorf("rows = %+v, want the healthy provider's item adopted despite the other being limited", rows)
 	}
 }
+
+// TestRefreshKind_DoesNotDetectMissingUntilProviderIsSteady covers the other
+// half: even the bulk pass must not conclude a download vanished until the
+// provider has answered reliably for a few passes in a row. A provider that
+// is erroring, or has only just started working again, is exactly the one
+// whose listings can come back short.
+func TestRefreshKind_DoesNotDetectMissingUntilProviderIsSteady(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := &database.Download{
+		ID: "dl-manual", Provider: fakeProviderName, ProviderDownloadID: "gone-1",
+		Kind: database.KindTorrent, Hash: "h", Name: "Still On The Account",
+		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	// The provider answers, but never mentions this download.
+	provider := &fakeProvider{}
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
+
+	missingCount := func() int {
+		t.Helper()
+		got, err := db.GetDownloadByID(ctx, d.ID)
+		if err != nil {
+			t.Fatalf("GetDownloadByID() error = %v", err)
+		}
+		return got.MissingCount
+	}
+
+	// The first two successful listings are below the trust threshold, so
+	// nothing is concluded from them.
+	for i := 1; i <= trustedListStreak-1; i++ {
+		if err := im.Tick(ctx); err != nil {
+			t.Fatalf("Tick() %d error = %v", i, err)
+		}
+		if got := missingCount(); got != 0 {
+			t.Fatalf("missing_count = %d after %d listings, want 0 until the provider has proven steady", got, i)
+		}
+	}
+
+	// The third consecutive success is trusted, so the miss now counts.
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	if got := missingCount(); got != 1 {
+		t.Errorf("missing_count = %d once the provider is trusted, want 1", got)
+	}
+
+	// A failure resets the streak: the provider has to prove itself again
+	// before anything more is concluded.
+	provider.listErr = errors.New("provider wobbled")
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() during failure error = %v", err)
+	}
+	provider.listErr = nil
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() after recovery error = %v", err)
+	}
+	if got := missingCount(); got != 1 {
+		t.Errorf("missing_count = %d on the first listing after a failure, want it unchanged at 1", got)
+	}
+}

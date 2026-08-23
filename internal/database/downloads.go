@@ -916,7 +916,35 @@ func LocalStateFromProvider(s debrid.DownloadState) string {
 // a slower request that started earlier can finish (and try to write) after
 // a faster one that started later, and without this guard it would silently
 // regress progress/state back to stale data.
-func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus, fetchedAt time.Time) {
+// RefreshOptions tunes a single RefreshFromProvider pass.
+type RefreshOptions struct {
+	// DetectMissing enables vanished-download detection for this pass: a
+	// tracked Manual row absent from statuses has its missing_count
+	// incremented and is eventually flagged error (see
+	// handleMissingFromProvider).
+	//
+	// Off by default, and deliberately so. Deciding a download is gone is
+	// the one destructive inference this refresh makes, and it is only
+	// sound when the listing can be trusted to be complete. Both compat
+	// shims refresh reactively on every *arr poll — far more often than the
+	// importer's own pass, with no rate-limit backoff and no view of
+	// whether the provider has been answering reliably — so a truncated or
+	// briefly-degraded listing seen there would erode missing_count quickly
+	// and flag downloads that were never gone. Only internal/importer's
+	// bulk poll opts in, and only while that provider has been consistently
+	// healthy, which is what the surrounding code always claimed anyway:
+	// "the slower bulk refreshStatuses pass is what actually owns deciding
+	// a download is genuinely gone."
+	//
+	// Found the hard way during a real multi-day provider outage: rows
+	// vanished from listings a few at a time, staying under the
+	// mass-vanish guard's more-than-half threshold, and real downloads were
+	// marked "no longer found in the provider's account" while still
+	// sitting on the account.
+	DetectMissing bool
+}
+
+func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus, fetchedAt time.Time, opts RefreshOptions) {
 	byID := make(map[string]debrid.DownloadStatus, len(statuses))
 	for _, st := range statuses {
 		byID[string(st.ID)] = st
@@ -929,7 +957,10 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 	// tracked item genuinely having vanished at once). Computed once per
 	// call rather than per row: a real mass-vanish would affect this whole
 	// batch identically, so there's nothing row-specific to decide.
-	suspectMassVanish := isSuspectedMassVanish(rows, byID)
+	// Cheap short-circuit: with detection off there is nothing for the
+	// guard to protect, and computing it would only produce a misleading
+	// warning about a pass that was never going to act on it.
+	suspectMassVanish := opts.DetectMissing && isSuspectedMassVanish(rows, byID)
 	if suspectMassVanish {
 		slog.Warn("database: suspected mass-vanish from provider listing, skipping missing-download detection this pass",
 			"tracked_rows", len(rows), "statuses_returned", len(statuses))
@@ -938,7 +969,7 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 	for _, d := range rows {
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
-			if !suspectMassVanish {
+			if opts.DetectMissing && !suspectMassVanish {
 				db.handleMissingFromProvider(ctx, d)
 			}
 			continue

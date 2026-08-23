@@ -921,3 +921,44 @@ func TestRefreshFromProvider_GroupsRowsByProvider(t *testing.T) {
 		t.Errorf("beta ETA = %d, want 22 — its own account's number", got.ETASeconds)
 	}
 }
+
+// TestRefreshFromProvider_NeverFlagsDownloadsAsVanished is the shim half of
+// the fix. This refresh runs on every *arr poll, with no rate-limit backoff
+// and no view of whether the provider has been answering reliably, so a
+// listing that comes back short here must not be allowed to conclude that a
+// download is gone. That decision belongs to internal/importer's bulk pass.
+func TestRefreshFromProvider_NeverFlagsDownloadsAsVanished(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	d := &database.Download{
+		ID: "dl-1", Provider: fakeProviderName, ProviderDownloadID: "gone-1",
+		Kind: database.KindTorrent, Hash: "h1", Name: "Still There",
+		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	// The provider knows nothing about it — an empty listing, exactly what a
+	// degraded provider returns.
+	srv := &Server{registry: testRegistry(newFakeProvider()), db: db}
+	for i := 0; i < 5; i++ {
+		srv.refreshFromProvider(ctx, []*database.Download{d})
+	}
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.MissingCount != 0 {
+		t.Errorf("missing_count = %d after 5 shim refreshes, want 0", got.MissingCount)
+	}
+	if got.State == database.StateError {
+		t.Errorf("download was flagged %q by a shim refresh, want it untouched", got.State)
+	}
+}

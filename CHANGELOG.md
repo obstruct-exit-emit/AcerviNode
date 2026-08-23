@@ -180,6 +180,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A degraded provider could mark downloads as vanished while they were
+  still on the account.** Two separate holes, both found during a real
+  multi-day TorBox outage that flagged live downloads as "no longer found in
+  the provider's account":
+  - **Both compat shims could trigger the detection.** Their reactive
+    refresh runs on every *arr poll — far more often than the importer's own
+    pass, with no rate-limit backoff and no view of whether the provider has
+    been answering reliably — so a listing that came back short there eroded
+    `missing_count` quickly. That contradicted what the surrounding code
+    already claimed: the bulk pass "owns deciding a download is genuinely
+    gone". Detection is now opt-in (`database.RefreshOptions.DetectMissing`)
+    and only the importer's bulk poll opts in.
+  - **The mass-vanish guard only catches a *mass* vanish.** It trips when
+    more than half of tracked rows disappear at once, so a provider shedding
+    rows a few at a time stays under the threshold indefinitely — exactly
+    what a degraded provider does. The bulk poll now additionally requires
+    `trustedListStreak` consecutive successful listings from that provider
+    before concluding anything, and any failure resets the streak. A
+    sustained outage therefore never reaches the threshold and never flags
+    anything, rather than quietly eroding toward it.
+
+  The two guards are deliberately complementary: `missingDetectionThreshold`
+  requires a row to be absent from several consecutive listings, and this
+  requires those listings to have come from a provider that was actually
+  answering reliably.
+
 - **The rest of the per-download provider calls now route by provider too.**
   The first pass covered deletes and fetches, found by grepping the two
   named lookups — which missed every site that inlined the same switch

@@ -63,7 +63,11 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 			slog.Error("sabnzbd: provider list failed", "provider", name, "error", err)
 			continue
 		}
-		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt)
+		// Deliberately no missing-detection: this runs on every *arr poll,
+		// with no rate-limit backoff and no view of whether the provider has
+		// been answering reliably. Concluding a download vanished is
+		// internal/importer's bulk pass's job — see database.RefreshOptions.
+		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt, database.RefreshOptions{})
 		for _, st := range statuses {
 			k := liveKey{provider: name, id: string(st.ID)}
 			eta[k] = st.ETASeconds

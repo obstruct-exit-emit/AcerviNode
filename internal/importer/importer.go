@@ -160,6 +160,10 @@ type Importer struct {
 	statsMu          sync.Mutex
 	tickAt           time.Time
 	successfulListAt map[providerKind]time.Time
+	// listStreak counts consecutive successful bulk listings per provider
+	// and kind, reset to zero by any failure. Vanished-download detection
+	// is gated on it — see trustedListStreak.
+	listStreak map[providerKind]int
 
 	// activeFetchesMu guards activeFetches — one entry per download
 	// currently inside processDownload, keyed by download id. Two jobs:
@@ -194,6 +198,40 @@ type activeFetch struct {
 
 // kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
 // see refreshKind.
+// trustedListStreak is how many consecutive successful bulk listings a
+// provider must answer before its listings are trusted enough to conclude a
+// download has vanished. Anything less and a listing that came back short
+// during a wobble would erode missing_count toward flagging downloads that
+// are still perfectly present.
+//
+// Deliberately paired with database.missingDetectionThreshold rather than
+// replacing it: that one requires a row to be absent from several
+// consecutive listings, this one requires those listings to have come from
+// a provider that was actually answering reliably. A sustained outage
+// simply never reaches the streak, so nothing is ever flagged during one —
+// which is the behaviour a real multi-day provider outage showed was
+// missing.
+const trustedListStreak = 3
+
+// recordListSuccess advances pk's consecutive-success streak and reports
+// whether the provider is now trusted enough for vanished-download
+// detection.
+func (im *Importer) recordListSuccess(pk providerKind, at time.Time) bool {
+	im.statsMu.Lock()
+	defer im.statsMu.Unlock()
+	im.successfulListAt[pk] = at
+	im.listStreak[pk]++
+	return im.listStreak[pk] >= trustedListStreak
+}
+
+// recordListFailure resets pk's streak, so a provider that just failed has
+// to prove itself again before anything is concluded from its listings.
+func (im *Importer) recordListFailure(pk providerKind) {
+	im.statsMu.Lock()
+	defer im.statsMu.Unlock()
+	im.listStreak[pk] = 0
+}
+
 // providerKind identifies one provider's handling of one kind — the unit
 // both rate-limit backoff and list-success bookkeeping are tracked against,
 // since a provider is limited (or healthy) per account, not globally.
@@ -287,6 +325,7 @@ func New(db *database.DB, registry *debrid.Registry, downloadDir string, interva
 		fastPollIntervalChanged: make(chan time.Duration, 1),
 		rateLimitState:          map[providerKind]*kindBackoff{},
 		successfulListAt:        map[providerKind]time.Time{},
+		listStreak:              map[providerKind]int{},
 		activeFetches:           map[string]*activeFetch{},
 	}
 	im.applyListCacheTTL(interval)
@@ -785,9 +824,11 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name st
 	if err != nil {
 		if errors.Is(err, debrid.ErrRateLimited) {
 			until := im.recordRateLimitHit(pk)
+			im.recordListFailure(pk)
 			slog.Error("importer: provider rate limited, backing off", "provider", name, "kind", kind, "until", until, "error", err)
 			return
 		}
+		im.recordListFailure(pk)
 		// Not yet configured is routine (e.g. no TorBox key set yet) and
 		// would otherwise log an error every single tick — everything else
 		// is worth surfacing.
@@ -797,16 +838,16 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name st
 		return
 	}
 	im.clearRateLimitHit(pk)
-	im.statsMu.Lock()
-	im.successfulListAt[pk] = fetchedAt
-	im.statsMu.Unlock()
+	trusted := im.recordListSuccess(pk, fetchedAt)
 
 	rows, err := im.db.ListDownloads(ctx, kind)
 	if err != nil {
 		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
 		return
 	}
-	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
+	// Only this pass ever concludes a download has vanished, and only once
+	// the provider has proven steady — see database.RefreshOptions.
+	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt, database.RefreshOptions{DetectMissing: trusted})
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }
 
@@ -865,7 +906,7 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, n
 			continue
 		}
 		im.clearRateLimitHit(pk)
-		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st}, fetchedAt)
+		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st}, fetchedAt, database.RefreshOptions{})
 	}
 }
 

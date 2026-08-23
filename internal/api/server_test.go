@@ -1208,7 +1208,7 @@ func TestHandleListDownloads_IncludesLiveStatus(t *testing.T) {
 	db.RefreshFromProvider(context.Background(), []*database.Download{d}, []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID("p1"), State: debrid.StateDownloading, Progress: 0.5,
 			ETASeconds: 754, Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117},
-	}, time.Now())
+	}, time.Now(), database.RefreshOptions{DetectMissing: true})
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/downloads"))
