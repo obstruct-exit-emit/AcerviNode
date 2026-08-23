@@ -248,6 +248,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **An AllDebrid rate limit signalled by HTTP status was missed entirely.**
+  Rate limiting was recognised only from the error code inside the response
+  envelope, but AllDebrid caps requests at 12/second and 600/minute and
+  answers **HTTP 429** when either is crossed — and a limiter sitting in
+  front of the application returns that with no parseable body at all. A
+  bare 429 therefore surfaced as `unexpected end of JSON input`, which
+  unwraps to nothing, so `internal/importer` never backed off and kept
+  hammering the very limit it had just hit. Now checked on status before the
+  body is parsed, so the shape of the response can't affect whether the
+  backoff happens. TorBox already worked this way; this brings AllDebrid in
+  line.
+
+  AllDebrid's quota errors (`FREE_TRIAL_LIMIT_REACHED`, `MUST_BE_PREMIUM`,
+  `LINK_HOST_LIMIT_REACHED`) are deliberately *not* treated as rate limits:
+  backing off would hide them behind a silent pause and a "rate-limited
+  until" banner, when they are things only the account holder can resolve
+  and are far more useful as the error text on the download itself.
+  `MAGNET_TOO_MANY_ACTIVE` stays a rate limit by contrast, because it is a
+  concurrency cap that clears on its own as transfers finish.
+
 - **Account status is now reported per provider, inside that provider's own
   card.** It was a single instance-wide panel showing whichever provider was
   the default, with the cooldown warning hardcoded to say "TorBox" — so with

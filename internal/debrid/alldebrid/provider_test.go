@@ -422,3 +422,70 @@ func TestAddTorrentFile_PerFileErrorIsReported(t *testing.T) {
 		t.Fatal("AddTorrentFile() error = nil, want the per-file error surfaced")
 	}
 }
+
+// TestHTTP429IsRateLimited covers rate limiting signalled by status rather
+// than by an error code in the envelope. AllDebrid caps requests at
+// 12/second and 600/minute and answers 429 when either is crossed; a
+// limiter sitting in front of the application may return that with no
+// parseable body at all. Matching only on the body code would miss it, and
+// internal/importer would keep hammering instead of backing off.
+func TestHTTP429IsRateLimited(t *testing.T) {
+	for _, body := range []string{
+		``,                          // no body at all
+		`<html>rate limited</html>`, // an HTML page from a proxy
+		`{"status":"error","error":{"code":"SOMETHING_ELSE","message":"x"}}`,
+	} {
+		p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(body))
+		})
+
+		_, err := p.List(context.Background())
+		if err == nil {
+			t.Fatalf("List() error = nil for a 429 with body %q", body)
+		}
+		if !errors.Is(err, debrid.ErrRateLimited) {
+			t.Errorf("429 with body %q gave %v, want it to unwrap to ErrRateLimited", body, err)
+		}
+	}
+}
+
+// Quota errors are deliberately NOT rate limits: backing off would hide them
+// behind a silent pause and a "rate-limited until" banner, when they are
+// things only the account holder can resolve.
+func TestQuotaErrorsAreNotRateLimits(t *testing.T) {
+	for _, code := range []string{"FREE_TRIAL_LIMIT_REACHED", "MUST_BE_PREMIUM", "LINK_HOST_LIMIT_REACHED", "AUTH_BAD_APIKEY"} {
+		p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]any{
+				"status": "error",
+				"error":  map[string]any{"code": code, "message": "nope"},
+			})
+		})
+
+		_, err := p.List(context.Background())
+		if err == nil {
+			t.Fatalf("List() error = nil for %s", code)
+		}
+		if errors.Is(err, debrid.ErrRateLimited) {
+			t.Errorf("%s unwrapped to ErrRateLimited — it would be hidden behind a backoff instead of shown", code)
+		}
+		if !strings.Contains(err.Error(), code) {
+			t.Errorf("%s: error text %q should name the code so it's actionable", code, err)
+		}
+	}
+}
+
+// A concurrency cap is a rate limit: it clears on its own as transfers
+// finish, so waiting is exactly the right response.
+func TestTooManyActiveMagnetsIsRateLimited(t *testing.T) {
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  map[string]any{"code": "MAGNET_TOO_MANY_ACTIVE", "message": "too many active"},
+		})
+	})
+
+	if _, err := p.List(context.Background()); !errors.Is(err, debrid.ErrRateLimited) {
+		t.Errorf("MAGNET_TOO_MANY_ACTIVE gave %v, want ErrRateLimited", err)
+	}
+}

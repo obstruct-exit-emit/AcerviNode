@@ -68,11 +68,25 @@ func (e *APIError) Error() string {
 // docs/providers.md. Every other code ends the chain here.
 func (e *APIError) Unwrap() error {
 	switch e.Code {
-	case "TOO_MANY_REQUESTS", "MAGNET_TOO_MANY_ACTIVE":
+	case rateLimitedCode, "TOO_MANY_REQUESTS", "MAGNET_TOO_MANY_ACTIVE":
 		return debrid.ErrRateLimited
 	}
 	return nil
 }
+
+// rateLimitedCode is what send records for an HTTP 429, so a status-level
+// rate limit and a body-level one produce the same error to callers.
+//
+// Deliberately narrow: AllDebrid's quota errors (FREE_TRIAL_LIMIT_REACHED,
+// MUST_BE_PREMIUM, LINK_HOST_LIMIT_REACHED) are *not* mapped here. Backing
+// off would hide them behind a silent pause and a "rate-limited until"
+// banner, when they are things only the account holder can resolve — much
+// better surfaced as the error text on the download itself.
+const rateLimitedCode = "HTTP_429"
+
+// MAGNET_TOO_MANY_ACTIVE is mapped, by contrast, because it is a
+// concurrency cap (30 active magnets) that clears on its own as transfers
+// finish — waiting is exactly the right response.
 
 // Client is a low-level AllDebrid API client: one call in, one decoded
 // response out. It knows nothing about debrid.TorrentProvider — see
@@ -206,6 +220,17 @@ func (c *Client) send(req *http.Request, out any) error {
 	// "unexpected end of JSON" would be a poor way to report it.
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("alldebrid: upstream returned status %d", resp.StatusCode)
+	}
+	// Rate limiting is signalled by HTTP status, not only by an error code
+	// in the envelope: AllDebrid caps requests at 12/second and 600/minute
+	// and answers 429 when you cross either. Relying on the body alone
+	// would miss a 429 that carries no code — or no parseable body at all,
+	// which is exactly what a limiter in front of the application tends to
+	// return — and internal/importer would keep hammering instead of
+	// backing off. Checked before parsing so the shape of the body can't
+	// affect whether the backoff happens.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &APIError{Code: rateLimitedCode, Message: "too many requests"}
 	}
 
 	var env envelope
