@@ -84,6 +84,14 @@ type DownloadStatus struct {
 	Seeders            int64
 	Leechers           int64
 	DownloadSpeedBytes int64
+	// Airlocked reports whether the provider is keeping this download in
+	// permanent storage, exempt from the retention policy that would
+	// otherwise eventually remove it (TorBox calls this AirLock). Never
+	// persisted, same treatment as ETASeconds/Phase/Seeders: it's the
+	// provider's own state, not AcerviNode's, and it can change from
+	// outside AcerviNode at any time, so it's read fresh on every poll
+	// rather than stored. False for a provider with no such concept.
+	Airlocked bool
 }
 
 // DownloadFile is one file within a download.

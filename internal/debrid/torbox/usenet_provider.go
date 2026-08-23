@@ -162,6 +162,7 @@ func usenetToStatus(d UsenetDownload) debrid.DownloadStatus {
 		OriginalURL:        d.OriginalURL,
 		Phase:              phase,
 		DownloadSpeedBytes: int64(d.DownloadSpeed),
+		Airlocked:          d.Airlocked,
 	}
 }
 

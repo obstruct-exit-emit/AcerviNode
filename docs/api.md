@@ -99,7 +99,8 @@ necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
   "seeders": 3,
   "leechers": 1,
   "download_speed_bytes": 191117,
-  "phase": ""
+  "phase": "",
+  "airlocked": false
 }
 ```
 
@@ -167,9 +168,9 @@ exactly this — see
 False for a discovered download with nothing known, or a torrent/webdl added
 via an uploaded `.torrent` file. The web UI's Re-add button is gated on this
 rather than `added_via`, since it works for Managed and Manual alike.
-`eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/`phase` are
-fast-moving, provider-reported fields deliberately never persisted to the
-database — read from an in-memory cache (`database.DB.LiveStatus`) populated
+`eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/`phase`/
+`airlocked` are fast-moving, provider-reported fields deliberately never
+persisted to the database — read from an in-memory cache (`database.DB.LiveStatus`) populated
 as a side effect of whichever poller last refreshed this download (either
 compat shim's own reactive refresh, or `internal/importer`'s bulk/fast
 polls), not a synchronous provider call this endpoint makes itself. Zero
@@ -178,8 +179,12 @@ provider/kind with no such concept — `seeders`/`leechers`/
 `download_speed_bytes` are torrent-only; `phase` is usenet-only
 (`"verifying"`/`"repairing"`/`"extracting"`/`"processing"`, or `""` for
 plain transfer — see
-[Providers](providers.md#usenet-post-processing-states)). Same "0 might
-mean unknown, not necessarily zero" tradeoff both compat shims already
+[Providers](providers.md#usenet-post-processing-states)). `airlocked`
+reports whether the provider is keeping this download in permanent storage,
+exempt from the retention policy that would otherwise eventually remove it
+(TorBox calls this AirLock); it is set from the provider's own side, never
+by AcerviNode, and reads `false` until this download has been polled once.
+Same "0 might mean unknown, not necessarily zero" tradeoff both compat shims already
 accept for their own equivalent fields.
 
 `GET /api/v1/downloads/{id}` additionally embeds a `files` array
@@ -220,8 +225,11 @@ genuinely link-only — a plain `application/x-www-form-urlencoded` body, not
 file-upload variant either. Errors: `400` if neither a link
 (`magnet`/`url`/`link`) nor a `file` is given (`webdl` only ever accepts
 `link`, never a `file`), `503` if the relevant provider isn't configured yet,
-`502` for any other provider-side failure (e.g. an invalid magnet, an
-unsupported hoster, or a real upstream error).
+`429` if the provider rate-limited the add (retryable — TorBox meters
+`createtorrent` at 60/hour for *uncached* torrents, and counts limits per
+API key across its servers, so anything else sharing the key draws from the
+same bucket), `502` for any other provider-side failure (e.g. an invalid
+magnet, an unsupported hoster, or a real upstream error).
 
 **`added_via` (optional, admin-only): add straight into the Managed
 pipeline.** Set to `"arr"` (any other value, or omitting it, keeps the

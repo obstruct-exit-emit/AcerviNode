@@ -119,6 +119,18 @@ type Torrent struct {
 	DownloadFinished bool          `json:"download_finished"`
 	Eta              float64       `json:"eta"`
 	Files            []TorrentFile `json:"files"`
+	// Airlocked reports whether this download is in TorBox AirLock, its
+	// permanent storage: an airlocked item is exempt from the 30-day
+	// retention policy that otherwise removes an inactive download from the
+	// account. Added to all three mylist responses in TorBox v9 (2026-07-01)
+	// and not yet in the published SDK model docs, which still lag that
+	// release. Purely informational here — AcerviNode never sets it (that
+	// needs the separate edit endpoints) and never acts on it; it's
+	// surfaced so the web UI can show which Manual downloads are actually
+	// safe from expiry and which are on the retention clock, the same thing
+	// vanished-download detection exists to catch after the fact (see
+	// database.handleMissingFromProvider).
+	Airlocked bool `json:"airlocked"`
 	// Seeds/Peers/DownloadSpeed are real, documented fields on TorBox's own
 	// SDK response schema (torbox-sdk-js's GetTorrentListOkResponseData)
 	// that weren't modeled here until the qBittorrent shim needed something
@@ -401,6 +413,8 @@ type UsenetDownload struct {
 	// this feeds a sum rather than a per-row field — see
 	// internal/sabnzbd/queue.go's handleQueue.
 	DownloadSpeed float64 `json:"download_speed"`
+	// Airlocked is TorBox AirLock — see Torrent.Airlocked.
+	Airlocked bool `json:"airlocked"`
 }
 
 // ListUsenetDownloads returns every usenet download on the account. Same
@@ -479,8 +493,10 @@ func formatID(n float64) string {
 // --- Web Downloads -----------------------------------------------------------
 //
 // TorBox's "Web Downloads" service debrids direct links from ~160 supported
-// hosters (Mega, 1Fichier, Mediafire, PixelDrain, and more — see
-// GetHosterList), confirmed live against the real account: Mega itself is
+// hosters (Mega, 1Fichier, Mediafire, PixelDrain, and more — TorBox's own
+// /webdl/hosters endpoint lists them, deliberately not modeled here since
+// nothing in AcerviNode consumes it), confirmed live against the real
+// account: Mega itself is
 // active right now, and a real (if since-expired) Mega folder download
 // already existed in the account's own history, confirming the shape below
 // against real data rather than SDK docs alone — see docs/providers.md.
@@ -600,6 +616,8 @@ type WebDownload struct {
 	// download's original_url was the real mega.nz link). Not in any
 	// published TorBox docs.
 	OriginalURL string `json:"original_url"`
+	// Airlocked is TorBox AirLock — see Torrent.Airlocked.
+	Airlocked bool `json:"airlocked"`
 }
 
 // ListWebDownloads returns every web download on the account. Same
@@ -636,30 +654,6 @@ func (c *Client) GetWebDownload(ctx context.Context, id string) (WebDownload, er
 // computing it is the caller's job (see internal/api's md5Hex).
 func (c *Client) CheckCachedWebDownloads(ctx context.Context, hashes []string) (map[string]bool, error) {
 	return c.checkCached(ctx, "/webdl/checkcached", hashes)
-}
-
-// Hoster is one entry from GetHosterList — TorBox's currently-supported
-// hoster list for Web Downloads. Confirmed live: 160 entries as of this
-// writing, Mega active (status true) among them.
-type Hoster struct {
-	Name    string   `json:"name"`
-	Domains []string `json:"domains"`
-	Status  bool     `json:"status"`
-	Type    string   `json:"type"` // "hoster" or "stream" (e.g. YouTube, Twitch)
-}
-
-// GetHosterList returns every hoster Web Downloads currently supports —
-// dynamic and TorBox-authoritative rather than a hardcoded (and inevitably
-// stale) list AcerviNode would otherwise have to maintain itself.
-func (c *Client) GetHosterList(ctx context.Context) ([]Hoster, error) {
-	var env envelope[[]Hoster]
-	if err := c.doGet(ctx, "/webdl/hosters", nil, &env); err != nil {
-		return nil, err
-	}
-	if err := checkSuccess(env.Success, env.Detail); err != nil {
-		return nil, err
-	}
-	return env.Data, nil
 }
 
 // --- User -------------------------------------------------------------------

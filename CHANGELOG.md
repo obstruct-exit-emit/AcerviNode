@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`airlocked`, surfacing TorBox AirLock on every download.** TorBox v9
+  (2026-07-01) added an `airlocked` boolean to all three `mylist`
+  responses; AirLock is its permanent storage, which exempts an item from
+  the 30-day retention policy that otherwise removes an inactive download
+  from the account. Now parsed for torrents, usenet, and web downloads
+  alike, carried on `debrid.DownloadStatus`, and reported by
+  `GET /api/v1/downloads` as `airlocked`. Never persisted — cached in
+  `database.DB.LiveStatus` the same way `eta_seconds`/`phase`/`seeders`
+  already are, since it's the provider's own state and can change from
+  outside AcerviNode at any time. The download detail view shows a
+  "Storage: AirLock" row when it's set, and only then: an airlocked
+  download is the exception, so a row saying "not airlocked" on everything
+  else would be noise. Purely informational — AcerviNode never sets it
+  (that needs TorBox's separate edit endpoints) and nothing branches on it,
+  though it's directly relevant to vanished-download detection, which
+  exists precisely to catch a download the retention policy removed.
+  Attested by TorBox's changelog rather than its SDK docs, whose published
+  model files still lag v9 and don't list the field at all.
+
 - **A `Makefile`, so updating a from-source install can't silently skip the
   frontend build.** `go:embed` bakes in whatever's already on disk in
   `web/dist` at build time, not what's in git — the actual built frontend
@@ -85,6 +104,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A provider rate limit on an add is now `429`, not `502`.** Every
+  provider failure except "no provider configured" was reported as
+  `502 Bad Gateway` by the native API's add/re-add endpoints, which tells a
+  caller "upstream is broken" when what's actually true is "slow down and
+  try again". That distinction stopped being academic in TorBox v9
+  (2026-07-01), which meters `createtorrent` at 60/hour for *uncached*
+  torrents (300/minute for cached ones), and in v8.4.1, which moved rate
+  limiting from per-IP to per-API-key counted synchronously across TorBox's
+  servers — so anything else using the same key draws from the same bucket,
+  and hitting the limit is now a routine, recoverable condition rather than
+  an exceptional one. `debrid.ErrRateLimited` (already plumbed through for
+  the importer's own polling backoff) now maps to `429` with the provider's
+  own detail message preserved. Both compat shims keep their existing
+  protocol-shaped responses — real qBittorrent answers `Ok.`/`Fails.` and
+  real SABnzbd `{"status": false, "error": ...}`, so neither has an HTTP
+  status to carry this, and SABnzbd's already passes the provider's message
+  through.
+
 - **Settings reorganized: three new focused groups split out of a General
   tab that had grown to a 10-field "Import & cleanup" section covering five
   genuinely unrelated concerns.** Requested directly, after Settings itself
@@ -108,6 +145,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from. No backend change — purely a UI reorganization, same shared
   settings object and save path (`handleGeneralSubmit`) every section
   already used.
+
+### Removed
+
+- **`GetHosterList` and the `Hoster` type.** Fully implemented and tested
+  against `GET /webdl/hosters`, but nothing ever called it outside its own
+  test — no API endpoint, no UI, and its `Domains` field was never read
+  anywhere. Noticed while auditing what TorBox v8.4.3 (2026-03-31) changed
+  (that release added regex link-matching patterns to the endpoint), which
+  made the dead code's cost concrete: keeping it current would mean
+  modeling a field nothing consumes. Deleted rather than extended; TorBox's
+  hoster list is still described in [Providers](docs/providers.md#web-downloads)
+  and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
 

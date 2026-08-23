@@ -585,11 +585,26 @@ func (s *Server) writeAddResponse(w http.ResponseWriter, d *database.Download, e
 }
 
 // writeProviderError maps a provider Add* failure to an HTTP response —
-// debrid.ErrNoProvider (no key configured yet) is a routine 503, distinct
-// from every other provider failure (a real upstream error), reported as 502.
+// debrid.ErrNoProvider (no key configured yet) is a routine 503 and a
+// provider rate limit is a 429, both distinct from every other provider
+// failure (a real upstream error), reported as 502.
+//
+// The rate-limit case is reported as 429 rather than folded into the
+// generic 502 because it's genuinely retryable and increasingly routine
+// rather than exceptional: TorBox v9 (2026-07-01) set /createtorrent to
+// 60/hour for *uncached* torrents (300/minute for cached ones), and since
+// v8.4.1 rate limits are counted per API key across all its servers rather
+// than per IP — so anything else sharing the same key draws from the same
+// bucket. A 502 tells a caller "upstream is broken"; a 429 tells it
+// "slow down and try again", which is what's actually true. The provider's
+// own error detail is passed through either way (see torbox.APIError).
 func writeProviderError(w http.ResponseWriter, kind string, err error) {
 	if errors.Is(err, debrid.ErrNoProvider) {
 		http.Error(w, fmt.Sprintf("no %s-capable provider configured", kind), http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, debrid.ErrRateLimited) {
+		http.Error(w, "provider rate limit reached, try again later: "+err.Error(), http.StatusTooManyRequests)
 		return
 	}
 	http.Error(w, "provider error: "+err.Error(), http.StatusBadGateway)

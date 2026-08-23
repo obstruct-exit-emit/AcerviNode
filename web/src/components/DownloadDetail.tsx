@@ -193,6 +193,17 @@ export function DownloadDetail({ apiKey, id, onClose, onDownloadAll, busy, progr
                   )}
                 </>
               )}
+              {/* Only rendered when true: an airlocked download is the
+                  exception, so a row saying "not airlocked" on everything
+                  else would be noise. Tells the user this one is safe from
+                  the provider's retention policy — the thing that
+                  otherwise eventually makes a download vanish. */}
+              {detail.airlocked && (
+                <div>
+                  <dt>Storage</dt>
+                  <dd>AirLock — exempt from provider retention</dd>
+                </div>
+              )}
               <div>
                 <dt>Protocol</dt>
                 <dd>{detail.protocol}</dd>

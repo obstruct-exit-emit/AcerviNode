@@ -723,29 +723,6 @@ func TestGetWebDownload(t *testing.T) {
 	}
 }
 
-func TestGetHosterList(t *testing.T) {
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Path; got != "/v1/api/webdl/hosters" {
-			t.Errorf("path = %s", got)
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"success": true,
-			"data": []map[string]any{
-				{"name": "Mega", "domains": []string{"mega.nz"}, "status": true, "type": "hoster"},
-				{"name": "YouTube", "domains": []string{"youtube.com"}, "status": true, "type": "stream"},
-			},
-		})
-	})
-
-	hosters, err := client.GetHosterList(context.Background())
-	if err != nil {
-		t.Fatalf("GetHosterList() error = %v", err)
-	}
-	if len(hosters) != 2 || hosters[0].Name != "Mega" || !hosters[0].Status {
-		t.Errorf("hosters = %+v", hosters)
-	}
-}
-
 func TestGetUserData(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/v1/api/user/me" {

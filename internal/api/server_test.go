@@ -2940,3 +2940,34 @@ func TestHandleStatus_RequiresAuth(t *testing.T) {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
+
+// TestHandleAddTorrent_RateLimitedIsRetryable pins a provider rate limit to
+// 429 rather than the generic 502 every other provider failure gets. It's a
+// genuinely retryable, increasingly routine condition rather than an
+// upstream fault: TorBox v9 set /createtorrent to 60/hour for uncached
+// torrents, counted per API key across its servers since v8.4.1.
+func TestHandleAddTorrent_RateLimitedIsRetryable(t *testing.T) {
+	provider := &fakeProvider{addErr: fmt.Errorf("torbox: too many requests: %w", debrid.ErrRateLimited)}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// A non-rate-limit provider failure must still be a 502 — the 429 above is
+// a specific carve-out, not a new default.
+func TestHandleAddTorrent_OtherProviderErrorStays502(t *testing.T) {
+	provider := &fakeProvider{addErr: errors.New("torbox: upstream exploded")}
+	srv, _ := newTestServer(t, provider, nil, nil)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502, body=%s", rec.Code, rec.Body.String())
+	}
+}

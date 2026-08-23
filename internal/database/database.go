@@ -89,6 +89,11 @@ type LiveStatus struct {
 	DownloadSpeedBytes int64
 	// Phase is usenet-only — see debrid.DownloadStatus.Phase.
 	Phase string
+	// Airlocked is provider-side permanent storage (TorBox AirLock) — see
+	// debrid.DownloadStatus.Airlocked. Cached here rather than persisted
+	// for the same reason as the rest of this struct: it's the provider's
+	// state, changeable from outside AcerviNode at any time.
+	Airlocked bool
 }
 
 // Open opens (creating if necessary) the SQLite database at dsn and applies

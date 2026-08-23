@@ -1710,6 +1710,7 @@ func TestRefreshFromProvider_CachesLiveStatus(t *testing.T) {
 	statuses := []debrid.DownloadStatus{{
 		ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.5,
 		ETASeconds: 754, Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117,
+		Airlocked: true,
 	}}
 	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
 
@@ -1719,6 +1720,9 @@ func TestRefreshFromProvider_CachesLiveStatus(t *testing.T) {
 	}
 	if live.ETASeconds != 754 || live.Seeders != 3 || live.Leechers != 1 || live.DownloadSpeedBytes != 191117 {
 		t.Errorf("LiveStatus() = %+v, want ETASeconds=754 Seeders=3 Leechers=1 DownloadSpeedBytes=191117", live)
+	}
+	if !live.Airlocked {
+		t.Error("LiveStatus() Airlocked = false, want true — provider-side AirLock must survive the cache round-trip")
 	}
 }
 

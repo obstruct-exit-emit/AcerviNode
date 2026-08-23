@@ -124,5 +124,6 @@ func webDownloadToStatus(d WebDownload) debrid.DownloadStatus {
 		ETASeconds:  int64(d.Eta),
 		RawState:    d.DownloadState,
 		OriginalURL: d.OriginalURL,
+		Airlocked:   d.Airlocked,
 	}
 }

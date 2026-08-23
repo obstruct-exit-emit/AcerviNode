@@ -943,6 +943,7 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 			Leechers:           st.Leechers,
 			DownloadSpeedBytes: st.DownloadSpeedBytes,
 			Phase:              st.Phase,
+			Airlocked:          st.Airlocked,
 		}) {
 			slog.Debug("database: skipping stale refresh, a fresher update already landed", "id", d.ID)
 			continue

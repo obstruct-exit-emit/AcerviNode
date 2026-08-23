@@ -647,3 +647,22 @@ func TestUsenetProvider_CheckCached(t *testing.T) {
 		t.Errorf("result = %+v", result)
 	}
 }
+
+// TestToStatus_PopulatesAirlocked covers all three services: "airlocked"
+// was added to every mylist response in TorBox v9 (2026-07-01) and isn't in
+// the published SDK model docs yet, so this pins the field name the
+// changelog specifies.
+func TestToStatus_PopulatesAirlocked(t *testing.T) {
+	if got := torrentToStatus(Torrent{ID: 1, Airlocked: true}); !got.Airlocked {
+		t.Error("torrentToStatus: Airlocked = false, want true")
+	}
+	if got := torrentToStatus(Torrent{ID: 1}); got.Airlocked {
+		t.Error("torrentToStatus: Airlocked = true for a non-airlocked torrent")
+	}
+	if got := usenetToStatus(UsenetDownload{ID: 1, Airlocked: true}); !got.Airlocked {
+		t.Error("usenetToStatus: Airlocked = false, want true")
+	}
+	if got := webDownloadToStatus(WebDownload{ID: 1, Airlocked: true}); !got.Airlocked {
+		t.Error("webDownloadToStatus: Airlocked = false, want true")
+	}
+}

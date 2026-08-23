@@ -57,6 +57,13 @@ export interface Download {
   leechers: number
   download_speed_bytes: number
   phase?: string
+  // airlocked reports whether the provider is keeping this download in
+  // permanent storage, exempt from the retention policy that would
+  // otherwise eventually remove it (TorBox calls this AirLock). Same
+  // never-persisted treatment as the fields above, so it reads false until
+  // the download has actually been polled once. Set from the provider's
+  // own side, never by AcerviNode.
+  airlocked: boolean
 }
 
 export interface DownloadFile {

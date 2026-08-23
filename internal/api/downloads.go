@@ -80,6 +80,12 @@ type downloadResponse struct {
 	Leechers           int64  `json:"leechers"`
 	DownloadSpeedBytes int64  `json:"download_speed_bytes"`
 	Phase              string `json:"phase,omitempty"`
+	// Airlocked reports whether the provider is keeping this download in
+	// permanent storage, exempt from the retention policy that would
+	// otherwise eventually remove it (TorBox AirLock). Same never-persisted
+	// treatment as the fields above, so it reads false until this download
+	// has actually been polled once.
+	Airlocked bool `json:"airlocked"`
 }
 
 type downloadFileResponse struct {
@@ -146,6 +152,7 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus, fetchPro
 		Leechers:           live.Leechers,
 		DownloadSpeedBytes: live.DownloadSpeedBytes,
 		Phase:              live.Phase,
+		Airlocked:          live.Airlocked,
 	}
 }
 
