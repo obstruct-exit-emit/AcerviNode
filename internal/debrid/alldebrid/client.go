@@ -215,6 +215,22 @@ func (c *Client) send(req *http.Request, out any) error {
 	if err != nil {
 		return fmt.Errorf("alldebrid read response: %w", err)
 	}
+	// 503 is how AllDebrid actually sheds load. Confirmed live: 80
+	// concurrent requests produced no 429s at all but 21 nginx "503 Service
+	// Temporarily Unavailable" pages — its edge turns requests away before
+	// they ever reach the application, so the response is HTML rather than
+	// the usual envelope and carries no error code to match on. Treated as
+	// a rate limit so internal/importer backs off, which is the right
+	// response whether the cause is load shedding or a brief outage:
+	// either way the answer is to stop asking for a while.
+	//
+	// Narrower than "any 5xx" on purpose — 500/502/504 read more like a
+	// genuine fault than a deliberate "not now", and reporting those as a
+	// rate limit would put a misleading "rate-limited until" banner in
+	// front of a real outage.
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		return &APIError{Code: rateLimitedCode, Message: "service temporarily unavailable"}
+	}
 	// A transport-level failure is still worth distinguishing: an HTML
 	// error page or a 502 from a proxy never parses as the envelope, and
 	// "unexpected end of JSON" would be a poor way to report it.

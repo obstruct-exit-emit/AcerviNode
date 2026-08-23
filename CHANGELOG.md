@@ -248,6 +248,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **AllDebrid sheds load with 503, not 429**, so a rate limit went
+  unrecognised. Confirmed live: 80 concurrent requests produced no 429s at
+  all and 21 nginx "503 Service Temporarily Unavailable" pages — AllDebrid's
+  edge turns requests away before they reach the application, so the body is
+  HTML with no error code to match on, and the previous handling reported it
+  as a generic upstream failure that `internal/importer` did not back off
+  for. A 503 now maps to the rate-limit sentinel. Deliberately narrower than
+  "any 5xx": 500/502/504 read as a genuine fault rather than a deliberate
+  "not now", and reporting those as a rate limit would put a misleading
+  "rate-limited until" banner in front of a real outage.
+
 - **An AllDebrid rate limit signalled by HTTP status was missed entirely.**
   Rate limiting was recognised only from the error code inside the response
   envelope, but AllDebrid caps requests at 12/second and 600/minute and

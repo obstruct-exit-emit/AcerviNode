@@ -489,3 +489,42 @@ func TestTooManyActiveMagnetsIsRateLimited(t *testing.T) {
 		t.Errorf("MAGNET_TOO_MANY_ACTIVE gave %v, want ErrRateLimited", err)
 	}
 }
+
+// TestHTTP503IsRateLimited covers how AllDebrid actually sheds load.
+// Confirmed live: 80 concurrent requests produced no 429s at all, but 21
+// nginx "503 Service Temporarily Unavailable" pages — its edge turns
+// requests away before they reach the application, so the body is HTML with
+// no error code to match on. Without this the importer would keep polling
+// straight through it.
+func TestHTTP503IsRateLimited(t *testing.T) {
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("<html><head><title>503 Service Temporarily Unavailable</title></head></html>"))
+	})
+
+	_, err := p.List(context.Background())
+	if err == nil {
+		t.Fatal("List() error = nil for a 503")
+	}
+	if !errors.Is(err, debrid.ErrRateLimited) {
+		t.Errorf("503 gave %v, want it to unwrap to ErrRateLimited", err)
+	}
+}
+
+// Other 5xx read as a genuine fault rather than a deliberate "not now", so
+// they stay plain errors — a real outage shouldn't be shown behind a
+// "rate-limited until" banner.
+func TestOther5xxAreNotRateLimits(t *testing.T) {
+	for _, code := range []int{500, 502, 504} {
+		p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+		})
+		_, err := p.List(context.Background())
+		if err == nil {
+			t.Fatalf("List() error = nil for %d", code)
+		}
+		if errors.Is(err, debrid.ErrRateLimited) {
+			t.Errorf("%d unwrapped to ErrRateLimited — a real fault would look like a rate limit", code)
+		}
+	}
+}
