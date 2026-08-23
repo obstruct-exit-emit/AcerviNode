@@ -43,6 +43,9 @@ const PROTOCOL_LABELS: Record<Protocol, string> = {
 }
 
 export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClose, onAdded }: Props) {
+  // Only offered when there is genuinely a choice — with one provider the
+  // picker would be a control with a single option.
+  const [provider, setProvider] = useState('')
   const torrentAvailable = providers.some((p) => p.torrent_capable)
   const usenetAvailable = providers.some((p) => p.usenet_capable)
   const webdlAvailable = providers.some((p) => p.webdl_capable)
@@ -144,14 +147,16 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
       // category concept at all (see ROADMAP.md's "Manual categories" entry).
       const categoryToSend = managed ? category.trim() : undefined
       const addedVia = managed ? 'arr' : undefined
+      // Empty means "didn't choose", which the server reads as the default.
+      const providerToSend = provider || undefined
       if (protocol === 'torrent') {
-        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia })
-        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia })
+        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend })
+        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
       } else if (protocol === 'usenet') {
-        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia })
-        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia })
+        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend })
+        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
       } else {
-        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia })
+        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
       }
       onAdded(managed)
     } catch (err) {
@@ -167,6 +172,12 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
 
   const protocolAvailable =
     protocol === 'torrent' ? torrentAvailable : protocol === 'usenet' ? usenetAvailable : webdlAvailable
+
+  // Which providers can actually take the protocol currently selected — a
+  // torrent-only provider shouldn't be offered for a usenet add.
+  const capableProviders = providers.filter((p) =>
+    protocol === 'torrent' ? p.torrent_capable : protocol === 'usenet' ? p.usenet_capable : p.webdl_capable,
+  )
 
   return (
     <div className="detail-overlay" onClick={onClose}>
@@ -211,6 +222,23 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               </button>
             ))}
           </div>
+        )}
+
+        {/* Only shown when more than one provider can handle the selected
+            protocol — otherwise there is nothing to choose between, and a
+            picker with one option is just noise. */}
+        {capableProviders.length > 1 && (
+          <label className="add-provider">
+            Provider
+            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+              <option value="">Default</option>
+              {capableProviders.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
 
         {availableProtocols.length === 0 && (

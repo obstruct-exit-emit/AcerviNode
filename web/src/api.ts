@@ -179,13 +179,16 @@ export type AddedVia = 'arr' | 'manual'
 
 export function addTorrent(
   apiKey: string,
-  input: { magnet: string; category?: string; addedVia?: AddedVia } | { file: File; category?: string; addedVia?: AddedVia },
+  input: ({ magnet: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string },
 ): Promise<Download> {
   const form = new FormData()
   if ('magnet' in input) form.set('magnet', input.magnet)
   else form.set('file', input.file)
   if (input.category) form.set('category', input.category)
   if (input.addedVia) form.set('added_via', input.addedVia)
+  // Omitted rather than sent empty when unset: the server treats an absent
+  // provider as "use the default", and an empty string as a name to look up.
+  if (input.provider) form.set('provider', input.provider)
   // No Content-Type header here on purpose — the browser sets
   // multipart/form-data with the correct boundary itself when the body is a
   // FormData; setting it manually would drop the boundary parameter.
@@ -194,13 +197,16 @@ export function addTorrent(
 
 export function addUsenet(
   apiKey: string,
-  input: { url: string; category?: string; addedVia?: AddedVia } | { file: File; category?: string; addedVia?: AddedVia },
+  input: ({ url: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string },
 ): Promise<Download> {
   const form = new FormData()
   if ('url' in input) form.set('url', input.url)
   else form.set('file', input.file)
   if (input.category) form.set('category', input.category)
   if (input.addedVia) form.set('added_via', input.addedVia)
+  // Omitted rather than sent empty when unset: the server treats an absent
+  // provider as "use the default", and an empty string as a name to look up.
+  if (input.provider) form.set('provider', input.provider)
   return request('/api/v1/downloads/usenet', apiKey, { method: 'POST', body: form })
 }
 
@@ -208,11 +214,12 @@ export function addUsenet(
 // ~160 others TorBox's Web Downloads service supports) — link-only, unlike
 // addTorrent/addUsenet: there's no file-upload variant for this endpoint
 // (TorBox's own createwebdownload API has none either).
-export function addWebDownload(apiKey: string, input: { link: string; category?: string; addedVia?: AddedVia }): Promise<Download> {
+export function addWebDownload(apiKey: string, input: { link: string; category?: string; addedVia?: AddedVia; provider?: string }): Promise<Download> {
   const body = new URLSearchParams()
   body.set('link', input.link)
   if (input.category) body.set('category', input.category)
   if (input.addedVia) body.set('added_via', input.addedVia)
+  if (input.provider) body.set('provider', input.provider)
   return request('/api/v1/downloads/webdl', apiKey, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -263,19 +270,42 @@ export function getTorrentInfo(apiKey: string, magnet: string): Promise<TorrentI
   return request(`/api/v1/downloads/torrent/info?magnet=${encodeURIComponent(magnet)}`, apiKey)
 }
 
-export interface ProviderSettings {
-  [providerName: string]: { configured: boolean }
+// ProviderSetting is one configurable provider. Every registered provider
+// appears here, including ones holding no credentials yet — this is the
+// surface you configure them from, so one has to be visible before it can
+// be set up. That's the opposite of getProviders(), which answers "what can
+// I use right now" and omits them.
+export interface ProviderSetting {
+  name: string
+  configured: boolean
+  torrent_capable: boolean
+  usenet_capable: boolean
+  webdl_capable: boolean
+  // default marks which provider a new download goes to when the add
+  // doesn't name one.
+  default: boolean
 }
 
-export function getProviderSettings(apiKey: string): Promise<ProviderSettings> {
+export function getProviderSettings(apiKey: string): Promise<ProviderSetting[]> {
   return request('/api/v1/settings/providers', apiKey)
 }
 
-export function setTorBoxApiKey(apiKey: string, torboxApiKey: string): Promise<void> {
-  return request('/api/v1/settings/providers/torbox', apiKey, {
+// setProviderApiKey applies a key to one provider. An empty key clears its
+// credentials, which is how a provider is switched off without editing
+// config.yaml — it stays listed and can be configured again later.
+export function setProviderApiKey(apiKey: string, provider: string, providerKey: string): Promise<void> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}`, apiKey, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ api_key: torboxApiKey }),
+    body: JSON.stringify({ api_key: providerKey }),
+  })
+}
+
+export function setDefaultProvider(apiKey: string, provider: string): Promise<void> {
+  return request('/api/v1/settings/providers/default', apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
   })
 }
 
@@ -393,12 +423,12 @@ export function regenerateCertificate(apiKey: string): Promise<{ restart_require
   return request('/api/v1/settings/tls/regenerate', apiKey, { method: 'POST' })
 }
 
-// testTorBoxConnection makes one real, live call to TorBox with the
+// testProviderConnection makes one real, live call to a provider with its
 // currently configured key. A failed connection test is still a successful
 // API call (200) — the failure is reported in the body via ok:false, not an
 // HTTP error status.
-export function testTorBoxConnection(apiKey: string): Promise<{ ok: boolean; latency_ms?: number; error?: string }> {
-  return request('/api/v1/settings/providers/torbox/test', apiKey, { method: 'POST' })
+export function testProviderConnection(apiKey: string, provider: string): Promise<{ ok: boolean; latency_ms?: number; error?: string }> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}/test`, apiKey, { method: 'POST' })
 }
 
 export interface Categories {

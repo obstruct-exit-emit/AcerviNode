@@ -10,14 +10,15 @@ import {
   removeCategory,
   restartServer,
   setCategoryPath,
-  setTorBoxApiKey,
-  testTorBoxConnection,
+  setProviderApiKey,
+  setDefaultProvider,
+  testProviderConnection,
   updateGeneralSettings,
   ApiError,
   type Categories,
   type GeneralSettings,
   type GeneralUpdateInput,
-  type ProviderSettings,
+  type ProviderSetting,
   type StatusInfo,
   type TorBoxAccount,
 } from '../api'
@@ -171,9 +172,12 @@ export function Settings({ apiKey }: Props) {
   // key form/account detail/status/polling knobs underneath are needed far
   // less often.
   const [providerExpanded, setProviderExpanded] = useState(false)
-  const [settings, setSettings] = useState<ProviderSettings | null>(null)
-  const [torboxKey, setTorboxKey] = useState('')
-  const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>({ kind: 'idle' })
+  const [settings, setSettings] = useState<ProviderSetting[] | null>(null)
+  // Keyed by provider name: with more than one configured, each card needs
+  // its own draft key, save state and test result, or typing into one would
+  // show progress on all of them.
+  const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
+  const [status, setStatus] = useState<Record<string, { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }>>({})
   const [general, setGeneral] = useState<GeneralSettings | null>(null)
   const [form, setForm] = useState<GeneralUpdateInput | null>(null)
   const [keyRevealed, setKeyRevealed] = useState(false)
@@ -182,9 +186,10 @@ export function Settings({ apiKey }: Props) {
   const [generalStatus, setGeneralStatus] = useState<{ kind: 'idle' | 'saving' | 'saved' | 'restart' | 'error'; message?: string }>({
     kind: 'idle',
   })
-  const [testStatus, setTestStatus] = useState<{ kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>({
-    kind: 'idle',
-  })
+  const [testStatus, setTestStatus] = useState<
+    Record<string, { kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>
+  >({})
+  const [defaultStatus, setDefaultStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   const [account, setAccount] = useState<TorBoxAccount | null>(null)
   // Whether the (separately-fetched, potentially slow — see load()) account
   // status call is still in flight, so the Provider tab can say so instead
@@ -356,32 +361,59 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleProviderSubmit(e: FormEvent, provider: string) {
     e.preventDefault()
-    if (!torboxKey.trim()) return
-    setStatus({ kind: 'saving' })
+    const key = (providerKeys[provider] ?? '').trim()
+    if (!key) return
+    setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
     try {
-      await setTorBoxApiKey(apiKey, torboxKey.trim())
-      setTorboxKey('')
-      setStatus({ kind: 'saved' })
-      setTestStatus({ kind: 'idle' })
+      await setProviderApiKey(apiKey, provider, key)
+      setProviderKeys((k) => ({ ...k, [provider]: '' }))
+      setStatus((s) => ({ ...s, [provider]: { kind: 'saved' } }))
+      setTestStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
       await load()
     } catch (err) {
-      setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+      setStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
     }
   }
 
-  async function handleTestConnection() {
-    setTestStatus({ kind: 'testing' })
+  // Clearing a key switches a provider off without editing config.yaml. It
+  // stays listed, so it can be set up again later.
+  async function handleClearProviderKey(provider: string) {
+    setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
     try {
-      const result = await testTorBoxConnection(apiKey)
-      if (result.ok) {
-        setTestStatus({ kind: 'ok', latencyMs: result.latency_ms })
-      } else {
-        setTestStatus({ kind: 'error', message: result.error })
-      }
+      await setProviderApiKey(apiKey, provider, '')
+      setStatus((s) => ({ ...s, [provider]: { kind: 'saved' } }))
+      setTestStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
+      await load()
     } catch (err) {
-      setTestStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+      setStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
+  async function handleTestConnection(provider: string) {
+    setTestStatus((s) => ({ ...s, [provider]: { kind: 'testing' } }))
+    try {
+      const result = await testProviderConnection(apiKey, provider)
+      setTestStatus((s) => ({
+        ...s,
+        [provider]: result.ok
+          ? { kind: 'ok', latencyMs: result.latency_ms }
+          : { kind: 'error', message: result.error },
+      }))
+    } catch (err) {
+      setTestStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
+  async function handleMakeDefault(provider: string) {
+    setDefaultStatus({ kind: 'saving' })
+    try {
+      await setDefaultProvider(apiKey, provider)
+      setDefaultStatus({ kind: 'idle' })
+      await load()
+    } catch (err) {
+      setDefaultStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -428,7 +460,9 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
-  const configured = settings?.torbox?.configured ?? false
+  const providers = settings ?? []
+  // Only worth offering a default when there is actually a choice to make.
+  const showDefaultControls = providers.length > 1
   const current = settingsGroups.find((g) => g.name === group) ?? settingsGroups[0]
 
   return (
@@ -618,10 +652,12 @@ export function Settings({ apiKey }: Props) {
               }
             }}
           >
-            <h2>TorBox</h2>
+            <h2>Providers</h2>
             <span className="settings-card-summary">
-              {configured ? (
-                <span className="badge badge-ready_for_import">Configured</span>
+              {providers.some((p) => p.configured) ? (
+                <span className="badge badge-ready_for_import">
+                  {providers.filter((p) => p.configured).length} configured
+                </span>
               ) : (
                 <span className="badge badge-queued">Not configured</span>
               )}
@@ -631,31 +667,80 @@ export function Settings({ apiKey }: Props) {
 
           {providerExpanded && (
             <>
-              {/* No separate "Configured"/"Not configured" badge here —
-                  the header row above already shows it, even collapsed. */}
-              <p className="settings-help">
-                {configured
-                  ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
-                  : 'Add your TorBox API key to enable the qBittorrent and SABnzbd compat shims.'}
-              </p>
-              <form onSubmit={handleSubmit}>
-            <input type="password" placeholder="TorBox API key" value={torboxKey} onChange={(e) => setTorboxKey(e.target.value)} />
-            <button type="submit" disabled={status.kind === 'saving' || !torboxKey.trim()}>
-              {status.kind === 'saving' ? 'Saving…' : 'Save'}
-            </button>
-          </form>
-          {status.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
-          {status.kind === 'error' && <p className="settings-error">Failed to save: {status.message}</p>}
+              {providers.map((p) => {
+                const saveState = status[p.name] ?? { kind: 'idle' as const }
+                const test = testStatus[p.name] ?? { kind: 'idle' as const }
+                const draft = providerKeys[p.name] ?? ''
+                return (
+                  <div key={p.name} className="provider-entry">
+                    <h3>
+                      {p.name}
+                      {p.default && showDefaultControls && <span className="badge badge-ready_for_import">Default</span>}
+                      {p.configured ? (
+                        <span className="badge badge-ready_for_import">Configured</span>
+                      ) : (
+                        <span className="badge badge-queued">Not configured</span>
+                      )}
+                    </h3>
+                    <p className="settings-help">
+                      {p.configured
+                        ? 'Enter a new key below to replace the current one — takes effect immediately, no restart needed.'
+                        : `Add your ${p.name} API key to enable the qBittorrent and SABnzbd compat shims.`}
+                    </p>
+                    <form onSubmit={(e) => handleProviderSubmit(e, p.name)}>
+                      <input
+                        type="password"
+                        placeholder={`${p.name} API key`}
+                        value={draft}
+                        onChange={(e) => setProviderKeys((k) => ({ ...k, [p.name]: e.target.value }))}
+                      />
+                      <button type="submit" disabled={saveState.kind === 'saving' || !draft.trim()}>
+                        {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
+                      </button>
+                    </form>
+                    {saveState.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
+                    {saveState.kind === 'error' && <p className="settings-error">Failed to save: {saveState.message}</p>}
 
-          {configured && (
-            <>
-              <button type="button" className="test-connection-btn" onClick={handleTestConnection} disabled={testStatus.kind === 'testing'}>
-                {testStatus.kind === 'testing' ? 'Testing…' : 'Test connection'}
-              </button>
-              {testStatus.kind === 'ok' && <p className="settings-success">Connected — {testStatus.latencyMs}ms</p>}
-              {testStatus.kind === 'error' && <p className="settings-error">Connection failed: {testStatus.message}</p>}
-            </>
-          )}
+                    {p.configured && (
+                      <>
+                        <button
+                          type="button"
+                          className="test-connection-btn"
+                          onClick={() => handleTestConnection(p.name)}
+                          disabled={test.kind === 'testing'}
+                        >
+                          {test.kind === 'testing' ? 'Testing…' : 'Test connection'}
+                        </button>
+                        {showDefaultControls && !p.default && (
+                          <button
+                            type="button"
+                            className="test-connection-btn"
+                            onClick={() => handleMakeDefault(p.name)}
+                            disabled={defaultStatus.kind === 'saving'}
+                          >
+                            Make default
+                          </button>
+                        )}
+                        <button type="button" className="test-connection-btn" onClick={() => handleClearProviderKey(p.name)}>
+                          Clear key
+                        </button>
+                        {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
+                        {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+              {defaultStatus.kind === 'error' && (
+                <p className="settings-error">Failed to set default: {defaultStatus.message}</p>
+              )}
+              {showDefaultControls && (
+                <p className="settings-help">
+                  New downloads go to the default provider unless the “+ Add” form names another. Both compat shims
+                  always use the default — neither the qBittorrent nor the SABnzbd protocol has a field to carry a
+                  provider.
+                </p>
+              )}
 
           {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
             <p className="settings-error">
@@ -687,7 +772,7 @@ export function Settings({ apiKey }: Props) {
               account itself doesn't distinguish "never fetched" from
               "fetched, unavailable", so this only shows while a fetch is
               actually in flight, not just whenever account is null. */}
-          {configured && accountLoading && <p className="settings-help">Checking account status…</p>}
+          {providers.some((p) => p.configured) && accountLoading && <p className="settings-help">Checking account status…</p>}
 
           {health && (
             <Section

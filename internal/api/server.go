@@ -233,12 +233,21 @@ type GeneralUpdate struct {
 // TorBox, the only provider that exists today; generalize when a second one
 // is added (see docs/providers.md).
 type Settings interface {
-	TorBoxConfigured() bool
-	SetTorBoxAPIKey(ctx context.Context, apiKey string) error
-	// TestTorBoxConnection makes one real, lightweight call to TorBox with
-	// the currently configured key and reports how long it took — a genuine
-	// connectivity+auth check, not just "a key is set."
-	TestTorBoxConnection(ctx context.Context) (latencyMs int64, err error)
+	// ProviderConfigured reports whether the named provider currently holds
+	// credentials. False for a provider that isn't registered at all.
+	ProviderConfigured(name string) bool
+	// SetProviderAPIKey applies a key to the named provider immediately and
+	// persists it. An empty key clears the provider's credentials, leaving
+	// it registered but unconfigured.
+	SetProviderAPIKey(ctx context.Context, name, apiKey string) error
+	// TestProviderConnection makes one real, lightweight call to the named
+	// provider with its currently configured key and reports how long it
+	// took — a genuine connectivity+auth check, not just "a key is set."
+	TestProviderConnection(ctx context.Context, name string) (latencyMs int64, err error)
+	// DefaultProvider is which provider a new download goes to when nothing
+	// says otherwise; SetDefaultProvider changes and persists it.
+	DefaultProvider() string
+	SetDefaultProvider(name string) error
 	// APIKey returns AcerviNode's own current API key — the live source of
 	// truth every authenticated route (native API and both compat shims)
 	// checks against, so a regenerated key takes effect everywhere at once.
@@ -452,8 +461,11 @@ func (s *Server) routes() {
 	// Settings and user management are admin-only — a member has no
 	// business changing system configuration or other accounts.
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAdmin(s.handleGetProviderSettings))
-	s.mux.HandleFunc("PUT /api/v1/settings/providers/torbox", s.requireAdmin(s.handleSetTorBoxAPIKey))
-	s.mux.HandleFunc("POST /api/v1/settings/providers/torbox/test", s.requireAdmin(s.handleTestTorBoxConnection))
+	// "default" is registered ahead of {name} so it can never be read as a
+	// provider by that name.
+	s.mux.HandleFunc("PUT /api/v1/settings/providers/default", s.requireAdmin(s.handleSetDefaultProvider))
+	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}", s.requireAdmin(s.handleSetProviderAPIKey))
+	s.mux.HandleFunc("POST /api/v1/settings/providers/{name}/test", s.requireAdmin(s.handleTestProviderConnection))
 	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAdmin(s.handleGetGeneralSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAdmin(s.handleUpdateGeneralSettings))
 	s.mux.HandleFunc("POST /api/v1/settings/api-key/regenerate", s.requireAdmin(s.handleRegenerateAPIKey))

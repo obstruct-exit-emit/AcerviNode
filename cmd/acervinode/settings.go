@@ -186,57 +186,127 @@ func (s *liveSettings) SeedDefaultCategoriesOnce() error {
 	return nil
 }
 
-// torBoxProviderName is the registry key for TorBox — the one place the
-// name is spelled in this file, so the TorBox-specific methods below can be
-// generalised without hunting for string literals.
-const torBoxProviderName = "torbox"
-
-func (s *liveSettings) TorBoxConfigured() bool {
-	t := s.registry.Torrent(torBoxProviderName)
-	return t != nil && t.Configured()
+// ProviderConfigured reports whether the named provider currently holds
+// credentials. A provider that isn't registered reports false rather than
+// erroring: the settings API already 404s an unknown name before reaching
+// here, and "not configured" is the honest answer for anything else.
+func (s *liveSettings) ProviderConfigured(name string) bool {
+	if t := s.registry.Torrent(name); t != nil {
+		return t.Configured()
+	}
+	if u := s.registry.Usenet(name); u != nil {
+		return u.Configured()
+	}
+	if w := s.registry.WebDL(name); w != nil {
+		return w.Configured()
+	}
+	return false
 }
 
-func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
+// SetProviderAPIKey applies a key to the named provider live and persists
+// it. An empty key clears the credentials, leaving the provider registered
+// so it can be configured again without a restart.
+//
+// Building the concrete providers is per-provider-type work, which is why
+// this goes through knownProviders rather than doing it inline: adding a
+// second debrid service means an entry there and nothing here.
+func (s *liveSettings) SetProviderAPIKey(_ context.Context, name, apiKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
-	if t := s.registry.Torrent(torBoxProviderName); t != nil {
+	construct, known := knownProviders[name]
+	if !known {
+		return fmt.Errorf("unknown provider %s", name)
+	}
+
+	var torrentProvider debrid.TorrentProvider
+	var usenetProvider debrid.UsenetProvider
+	var webDownloadProvider debrid.WebDownloadProvider
+	if apiKey != "" {
+		torrentProvider, usenetProvider, webDownloadProvider = construct(apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
+	}
+	if t := s.registry.Torrent(name); t != nil {
 		t.Set(torrentProvider)
 	}
-	if u := s.registry.Usenet(torBoxProviderName); u != nil {
+	if u := s.registry.Usenet(name); u != nil {
 		u.Set(usenetProvider)
 	}
-	if w := s.registry.WebDL(torBoxProviderName); w != nil {
+	if w := s.registry.WebDL(name); w != nil {
 		w.Set(webDownloadProvider)
 	}
 
 	if s.cfg.Providers == nil {
 		s.cfg.Providers = map[string]config.ProviderConfig{}
 	}
-	s.cfg.Providers["torbox"] = config.ProviderConfig{APIKey: apiKey}
+	if apiKey == "" {
+		delete(s.cfg.Providers, name)
+	} else {
+		s.cfg.Providers[name] = config.ProviderConfig{APIKey: apiKey}
+	}
 	if err := s.cfg.Save(s.configPath); err != nil {
 		return fmt.Errorf("persist config: %w", err)
 	}
 	return nil
 }
 
-// TestTorBoxConnection makes one real call to TorBox (List, the same call
-// both compat shims and internal/importer already make routinely) with the
-// currently configured key and times it — a genuine connectivity+auth
-// check, not just "is a key set" (see TorBoxConfigured).
-func (s *liveSettings) TestTorBoxConnection(ctx context.Context) (int64, error) {
-	t := s.registry.Torrent(torBoxProviderName)
-	if t == nil || !t.Configured() {
-		return 0, fmt.Errorf("torbox is not configured")
-	}
+// TestProviderConnection makes one real call to the named provider (List,
+// the same call both compat shims and internal/importer already make
+// routinely) with its currently configured key and times it — a genuine
+// connectivity+auth check, not just "is a key set" (see ProviderConfigured).
+//
+// Uses whichever kind that provider supports, so a provider that doesn't do
+// torrents is still testable.
+func (s *liveSettings) TestProviderConnection(ctx context.Context, name string) (int64, error) {
 	start := time.Now()
-	_, err := t.List(ctx)
+	var err error
+	switch {
+	case s.registry.Torrent(name) != nil:
+		t := s.registry.Torrent(name)
+		if !t.Configured() {
+			return 0, fmt.Errorf("%s is not configured", name)
+		}
+		_, err = t.List(ctx)
+	case s.registry.Usenet(name) != nil:
+		u := s.registry.Usenet(name)
+		if !u.Configured() {
+			return 0, fmt.Errorf("%s is not configured", name)
+		}
+		_, err = u.List(ctx)
+	case s.registry.WebDL(name) != nil:
+		w := s.registry.WebDL(name)
+		if !w.Configured() {
+			return 0, fmt.Errorf("%s is not configured", name)
+		}
+		_, err = w.List(ctx)
+	default:
+		return 0, fmt.Errorf("unknown provider %s", name)
+	}
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return latencyMs, fmt.Errorf("connection test failed: %w", err)
+		return latencyMs, err
 	}
 	return latencyMs, nil
+}
+
+// DefaultProvider is which provider a new download goes to when nothing
+// says otherwise. Reads through the registry rather than the config field,
+// so an unset (or since-removed) name reports the fallback that is actually
+// in effect instead of an empty string.
+func (s *liveSettings) DefaultProvider() string {
+	return s.registry.Default()
+}
+
+// SetDefaultProvider changes it live and persists it.
+func (s *liveSettings) SetDefaultProvider(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.registry.SetDefault(name)
+	s.cfg.DefaultProvider = name
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
 }
 
 // APIKey returns AcerviNode's own current API key. This is what every
@@ -381,7 +451,6 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	// ever stored in cfg.Providers, not part of this candidate/update at
 	// all — captured before *s.cfg is overwritten below.
 	requestTimeoutChanged := candidate.ProviderRequestTimeoutSeconds != s.cfg.ProviderRequestTimeoutSeconds
-	torboxAPIKey := s.cfg.Providers["torbox"].APIKey
 
 	*s.cfg = candidate
 	if err := s.cfg.Save(s.configPath); err != nil {
@@ -406,20 +475,29 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	}
 	// Unlike every other field above, a changed provider request timeout
 	// can't just be pushed into an existing live object — it's baked into
-	// each torbox.Client at construction (see torbox.WithRequestTimeout).
-	// Rebuilding all three providers from the current key is the same thing
-	// SetTorBoxAPIKey already does on every key change; this just does it
-	// for a timeout-only change too, so it doesn't need its own restart.
-	if requestTimeoutChanged && torboxAPIKey != "" {
-		torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(torboxAPIKey, time.Duration(candidate.ProviderRequestTimeoutSeconds)*time.Second)
-		if t := s.registry.Torrent(torBoxProviderName); t != nil {
-			t.Set(torrentProvider)
-		}
-		if u := s.registry.Usenet(torBoxProviderName); u != nil {
-			u.Set(usenetProvider)
-		}
-		if w := s.registry.WebDL(torBoxProviderName); w != nil {
-			w.Set(webDownloadProvider)
+	// each provider client at construction (see torbox.WithRequestTimeout).
+	// Rebuilding from the current key is the same thing SetProviderAPIKey
+	// already does on every key change; this just does it for a
+	// timeout-only change too, so it doesn't need its own restart. Every
+	// configured provider is rebuilt, not just one, since the timeout is
+	// global.
+	if requestTimeoutChanged {
+		timeout := time.Duration(candidate.ProviderRequestTimeoutSeconds) * time.Second
+		for name, pc := range s.cfg.Providers {
+			construct, known := knownProviders[name]
+			if !known || pc.APIKey == "" {
+				continue
+			}
+			torrentProvider, usenetProvider, webDownloadProvider := construct(pc.APIKey, timeout)
+			if t := s.registry.Torrent(name); t != nil {
+				t.Set(torrentProvider)
+			}
+			if u := s.registry.Usenet(name); u != nil {
+				u.Set(usenetProvider)
+			}
+			if w := s.registry.WebDL(name); w != nil {
+				w.Set(webDownloadProvider)
+			}
 		}
 	}
 

@@ -31,15 +31,15 @@ func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
 	torrentDyn := registry.Torrent(registry.Default())
 	usenetDyn := registry.Usenet(registry.Default())
 	webDownloadDyn := registry.WebDL(registry.Default())
-	if settings.TorBoxConfigured() {
+	if settings.ProviderConfigured("torbox") {
 		t.Fatal("TorBoxConfigured() = true before Set, want false")
 	}
 
-	if err := settings.SetTorBoxAPIKey(context.Background(), "brand-new-key"); err != nil {
+	if err := settings.SetProviderAPIKey(context.Background(), "torbox", "brand-new-key"); err != nil {
 		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
 	}
 
-	if !settings.TorBoxConfigured() {
+	if !settings.ProviderConfigured("torbox") {
 		t.Error("TorBoxConfigured() = false after SetTorBoxAPIKey, want true")
 	}
 	if !torrentDyn.Configured() || !usenetDyn.Configured() || !webDownloadDyn.Configured() {
@@ -118,7 +118,7 @@ func TestSettingsAPI_SetKeyThenUseShimImmediately(t *testing.T) {
 		t.Fatalf("GET /api/v1/providers (after set) error = %v", err)
 	}
 	defer resp.Body.Close()
-	if !settings.TorBoxConfigured() {
+	if !settings.ProviderConfigured("torbox") {
 		t.Error("TorBoxConfigured() = false immediately after PUT, want true")
 	}
 
@@ -411,7 +411,7 @@ func TestLiveSettings_UpdateGeneral_RebuildsProvidersOnTimeoutChange(t *testing.
 	webDownloadDyn := registry.WebDL(registry.Default())
 
 	ctx := context.Background()
-	if err := settings.SetTorBoxAPIKey(ctx, "a-real-looking-key"); err != nil {
+	if err := settings.SetProviderAPIKey(ctx, "torbox", "a-real-looking-key"); err != nil {
 		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
 	}
 	if !torrentDyn.Configured() {
@@ -683,7 +683,7 @@ func TestLiveSettings_TestTorBoxConnection_NotConfigured(t *testing.T) {
 	}
 	_, settings := setupProviders(cfg, configPath)
 
-	if _, err := settings.TestTorBoxConnection(context.Background()); err == nil {
+	if _, err := settings.TestProviderConnection(context.Background(), "torbox"); err == nil {
 		t.Error("TestTorBoxConnection() with nothing configured: expected an error, got nil")
 	}
 }
@@ -1121,7 +1121,7 @@ func TestLiveSettings_SetupNeeded(t *testing.T) {
 
 	// Login is mandatory — configuring TorBox alone doesn't satisfy setup,
 	// since there'd still be no way to sign into the web UI.
-	if err := settings.SetTorBoxAPIKey(context.Background(), "a-key"); err != nil {
+	if err := settings.SetProviderAPIKey(context.Background(), "torbox", "a-key"); err != nil {
 		t.Fatalf("SetTorBoxAPIKey() error = %v", err)
 	}
 	if !settings.SetupNeeded() {

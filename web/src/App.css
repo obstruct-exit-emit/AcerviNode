@@ -1476,3 +1476,35 @@ table.detail-files tbody tr:last-child td {
 .rows .row button:hover {
   border-color: var(--accent);
 }
+
+/* One block per configured provider in Settings → Providers. Separated by a
+   rule rather than nested cards: they sit inside a card already, and boxing
+   each one again would read as a hierarchy that isn't there. */
+.provider-entry + .provider-entry {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-entry h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+/* The "+ Add" form's provider picker, shown only when more than one
+   provider can handle the selected protocol. */
+.add-provider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.add-provider select {
+  flex: 1;
+}

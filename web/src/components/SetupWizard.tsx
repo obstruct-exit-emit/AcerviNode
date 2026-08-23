@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import { ApiError, getGeneralSettings, restartServer, setTorBoxApiKey, setupInstance, testTorBoxConnection, updateGeneralSettings } from '../api'
+import { ApiError, getGeneralSettings, restartServer, setProviderApiKey, setupInstance, testProviderConnection, updateGeneralSettings } from '../api'
+
+// The wizard configures TorBox specifically: it's the provider type this
+// build knows how to construct, and first-run is not the moment to make
+// someone choose. Everything else is managed from Settings → Providers.
+const wizardProvider = 'torbox'
 
 // SetupWizard is the first-run experience: a fresh instance is claimed by
 // creating a login account (no API key involved — see api.setupInstance),
@@ -66,9 +71,9 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
     setNotice('')
     // '' — the wizard just created a session via setupInstance, which is
     // always admin; no separate API key is needed or known yet.
-    setTorBoxApiKey('', torboxKey.trim())
-      .then(() => testTorBoxConnection(''))
-      .then((r) => setNotice(r.ok ? `✓ Connected (${r.latency_ms}ms)` : `✗ ${r.error ?? 'connection failed'}`))
+    setProviderApiKey('', wizardProvider, torboxKey.trim())
+      .then(() => testProviderConnection('', wizardProvider))
+      .then((r: { ok: boolean; latency_ms?: number; error?: string }) => setNotice(r.ok ? `✓ Connected (${r.latency_ms}ms)` : `✗ ${r.error ?? 'connection failed'}`))
       .catch((err: unknown) => setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setBusy(false))
   }
@@ -76,7 +81,7 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
   function saveKey() {
     setBusy(true)
     setNotice('')
-    setTorBoxApiKey('', torboxKey.trim())
+    setProviderApiKey('', wizardProvider, torboxKey.trim())
       .then(() => {
         setKeySaved(true)
         next()

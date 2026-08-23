@@ -169,13 +169,14 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
-	configured bool
-	setCalls   []string
-	setErr     error
-	apiKey     string
-	regenCalls int
-	regenErr   error
-	general    GeneralInfo
+	defaultProvider string
+	configured      bool
+	setCalls        []string
+	setErr          error
+	apiKey          string
+	regenCalls      int
+	regenErr        error
+	general         GeneralInfo
 
 	testLatencyMs int64
 	testErr       error
@@ -338,19 +339,31 @@ func (f *fakeSettings) CancelFetch(id string) {
 	f.cancelFetchCalls = append(f.cancelFetchCalls, id)
 }
 
-func (f *fakeSettings) TorBoxConfigured() bool { return f.configured }
+func (f *fakeSettings) ProviderConfigured(string) bool { return f.configured }
 
-func (f *fakeSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
+func (f *fakeSettings) SetProviderAPIKey(_ context.Context, _, apiKey string) error {
 	f.setCalls = append(f.setCalls, apiKey)
 	if f.setErr != nil {
 		return f.setErr
 	}
-	f.configured = true
+	f.configured = apiKey != ""
 	return nil
 }
 
-func (f *fakeSettings) TestTorBoxConnection(_ context.Context) (int64, error) {
+func (f *fakeSettings) TestProviderConnection(_ context.Context, _ string) (int64, error) {
 	return f.testLatencyMs, f.testErr
+}
+
+func (f *fakeSettings) DefaultProvider() string {
+	if f.defaultProvider == "" {
+		return testProviderName
+	}
+	return f.defaultProvider
+}
+
+func (f *fakeSettings) SetDefaultProvider(name string) error {
+	f.defaultProvider = name
+	return nil
 }
 
 // APIKey defaults to "secret" (matching authedRequest below) so tests that
@@ -614,19 +627,28 @@ func TestHandleProviders_UnconfiguredReturnsEmptyArray(t *testing.T) {
 	}
 }
 
+// Lists every registered provider — including ones holding no credentials
+// yet, since this is the surface you configure them from. Contrast
+// GET /api/v1/providers, which answers "what can I use right now".
 func TestHandleGetProviderSettings(t *testing.T) {
-	srv, _ := newTestServer(t, nil, nil, &fakeSettings{configured: true})
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, &fakeSettings{configured: true})
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/settings/providers"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var got map[string]providerSettingResponse
+	var got []providerSettingResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !got["torbox"].Configured {
-		t.Errorf("got = %+v, want torbox.configured = true", got)
+	if len(got) != 1 || got[0].Name != testProviderName {
+		t.Fatalf("got = %+v, want one entry named %q", got, testProviderName)
+	}
+	if !got[0].Configured {
+		t.Errorf("got = %+v, want configured = true", got)
+	}
+	if !got[0].Default {
+		t.Errorf("got = %+v, want the only provider marked default", got)
 	}
 	// The actual key must never appear in the response body.
 	if strings.Contains(rec.Body.String(), "api_key") {
@@ -634,11 +656,11 @@ func TestHandleGetProviderSettings(t *testing.T) {
 	}
 }
 
-func TestHandleSetTorBoxAPIKey(t *testing.T) {
+func TestHandleSetProviderAPIKey(t *testing.T) {
 	settings := &fakeSettings{}
-	srv, _ := newTestServer(t, nil, nil, settings)
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
 
-	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":"new-torbox-key"}`))
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/"+testProviderName, strings.NewReader(`{"api_key":"new-torbox-key"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 
 	rec := httptest.NewRecorder()
@@ -647,24 +669,49 @@ func TestHandleSetTorBoxAPIKey(t *testing.T) {
 		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
 	}
 	if len(settings.setCalls) != 1 || settings.setCalls[0] != "new-torbox-key" {
-		t.Errorf("SetTorBoxAPIKey calls = %v, want one call with new-torbox-key", settings.setCalls)
+		t.Errorf("SetProviderAPIKey calls = %v, want one call with new-torbox-key", settings.setCalls)
 	}
 }
 
-func TestHandleSetTorBoxAPIKey_RejectsEmptyKey(t *testing.T) {
+// An unrecognised provider name is a 404 rather than silently doing
+// nothing, so a typo is visible instead of looking like it worked.
+func TestHandleSetProviderAPIKey_UnknownProviderIs404(t *testing.T) {
 	settings := &fakeSettings{}
-	srv, _ := newTestServer(t, nil, nil, settings)
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
 
-	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/torbox", strings.NewReader(`{"api_key":""}`))
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/nope", strings.NewReader(`{"api_key":"k"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
 	if len(settings.setCalls) != 0 {
-		t.Errorf("SetTorBoxAPIKey should not have been called for an empty key")
+		t.Error("an unknown provider name still reached SetProviderAPIKey")
+	}
+}
+
+// An empty key clears the provider's credentials rather than being
+// rejected: that is how a provider gets switched off without hand-editing
+// config.yaml. It stays registered, so it can be configured again later.
+func TestHandleSetProviderAPIKey_EmptyKeyClearsCredentials(t *testing.T) {
+	settings := &fakeSettings{configured: true}
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPut, "/api/v1/settings/providers/"+testProviderName, strings.NewReader(`{"api_key":""}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.setCalls) != 1 || settings.setCalls[0] != "" {
+		t.Errorf("setCalls = %v, want one call with an empty key", settings.setCalls)
+	}
+	if settings.configured {
+		t.Error("provider still reports configured after its key was cleared")
 	}
 }
 
@@ -861,12 +908,12 @@ func TestHandleRegenerateCertificate_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestHandleTestTorBoxConnection_Success(t *testing.T) {
+func TestHandleTestProviderConnection_Success(t *testing.T) {
 	settings := &fakeSettings{testLatencyMs: 123}
-	srv, _ := newTestServer(t, nil, nil, settings)
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
 
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test"))
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/"+testProviderName+"/test"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
@@ -882,12 +929,12 @@ func TestHandleTestTorBoxConnection_Success(t *testing.T) {
 	}
 }
 
-func TestHandleTestTorBoxConnection_Failure(t *testing.T) {
+func TestHandleTestProviderConnection_Failure(t *testing.T) {
 	settings := &fakeSettings{testErr: errors.New("connection test failed: torbox: not configured")}
-	srv, _ := newTestServer(t, nil, nil, settings)
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
 
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test"))
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/settings/providers/"+testProviderName+"/test"))
 	// A failed *connection test* is still a successful API call (200) — the
 	// failure is reported in the body, matching handleTestTorBoxConnection's
 	// "ok": false shape rather than an HTTP error status.
@@ -906,10 +953,10 @@ func TestHandleTestTorBoxConnection_Failure(t *testing.T) {
 	}
 }
 
-func TestHandleTestTorBoxConnection_RequiresAuth(t *testing.T) {
+func TestHandleTestProviderConnection_RequiresAuth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/providers/torbox/test", nil))
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/providers/"+testProviderName+"/test", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

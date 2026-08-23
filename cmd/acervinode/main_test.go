@@ -60,7 +60,7 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	registry, settings := setupProviders(cfg, configPath)
-	if !settings.TorBoxConfigured() {
+	if !settings.ProviderConfigured("torbox") {
 		t.Fatal("TorBoxConfigured() = false, want true (key was set via env)")
 	}
 
@@ -150,7 +150,7 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	registry, settings := setupProviders(cfg, configPath)
-	if settings.TorBoxConfigured() {
+	if settings.ProviderConfigured("torbox") {
 		t.Fatal("TorBoxConfigured() = true, want false (no key set)")
 	}
 
