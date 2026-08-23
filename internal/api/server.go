@@ -358,14 +358,33 @@ type Settings interface {
 
 // Server is AcerviNode's native API.
 type Server struct {
-	version             string
-	db                  *database.DB
-	torrentProvider     torrentAdder     // nil if no torrent-capable provider is configured
-	usenetProvider      usenetAdder      // nil if no usenet-capable provider is configured
-	webDownloadProvider webDownloadAdder // nil if no web-download-capable provider is configured
-	settings            Settings
-	sessions            *sessionStore
-	mux                 *http.ServeMux
+	version string
+	db      *database.DB
+	// registry is every configured provider. Which one a request uses
+	// depends on the request: anything acting on an existing download
+	// resolves the provider that download belongs to (providerFor), while
+	// an add — which has no download yet — goes to the default
+	// (defaultTorrent and friends).
+	registry *debrid.Registry
+	settings Settings
+	sessions *sessionStore
+	mux      *http.ServeMux
+}
+
+// defaultTorrent is the torrent provider a new download goes to, or nil if
+// nothing registered supports torrents.
+func (s *Server) defaultTorrent() *debrid.DynamicTorrentProvider {
+	return s.registry.Torrent(s.registry.Default())
+}
+
+// defaultUsenet is defaultTorrent's usenet counterpart.
+func (s *Server) defaultUsenet() *debrid.DynamicUsenetProvider {
+	return s.registry.Usenet(s.registry.Default())
+}
+
+// defaultWebDL is defaultTorrent's web-download counterpart.
+func (s *Server) defaultWebDL() *debrid.DynamicWebDownloadProvider {
+	return s.registry.WebDL(s.registry.Default())
 }
 
 // NewServer builds the native API server. version is a free-form build
@@ -374,10 +393,11 @@ type Server struct {
 // regenerated key takes effect immediately — see requireAuth. Login
 // sessions live only in this Server's own memory (see sessionStore) — a
 // process restart logs everyone out.
-func NewServer(version string, db *database.DB, torrentProvider torrentAdder, usenetProvider usenetAdder, webDownloadProvider webDownloadAdder, settings Settings) *Server {
+func NewServer(version string, db *database.DB, registry *debrid.Registry, settings Settings) *Server {
 	s := &Server{
-		version: version, db: db,
-		torrentProvider: torrentProvider, usenetProvider: usenetProvider, webDownloadProvider: webDownloadProvider,
+		version:  version,
+		db:       db,
+		registry: registry,
 		settings: settings,
 		sessions: newSessionStore(),
 	}
@@ -483,8 +503,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // changed through the settings endpoints without needing a restart.
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := []ProviderStatus{}
-	if s.settings.TorBoxConfigured() {
-		providers = append(providers, ProviderStatus{Name: "torbox", TorrentCapable: true, UsenetCapable: true, WebDLCapable: true})
+	for _, name := range s.registry.Names() {
+		t, u, w := s.registry.Torrent(name), s.registry.Usenet(name), s.registry.WebDL(name)
+		// Registered but with no credentials yet is not "a provider" from a
+		// caller's point of view — the wrapper exists so a key can be set
+		// into it later, which is an implementation detail.
+		if (t == nil || !t.Configured()) && (u == nil || !u.Configured()) && (w == nil || !w.Configured()) {
+			continue
+		}
+		providers = append(providers, ProviderStatus{
+			Name:           name,
+			TorrentCapable: t != nil && t.Configured(),
+			UsenetCapable:  u != nil && u.Configured(),
+			WebDLCapable:   w != nil && w.Configured(),
+		})
 	}
 	writeJSON(w, providers)
 }

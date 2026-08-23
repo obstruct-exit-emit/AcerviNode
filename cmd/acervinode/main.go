@@ -72,9 +72,9 @@ func run(ctx context.Context) error {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	// Consumers still take one provider per kind; wiring the registry
-	// through them is the next increment. With a single provider these are
-	// the same objects either way.
+	// internal/importer still takes one provider per kind; wiring the
+	// registry through it is the next increment. With a single provider
+	// these are the same objects the rest of the app reaches through it.
 	defaultProvider := registry.Default()
 	torrentDyn := registry.Torrent(defaultProvider)
 	usenetDyn := registry.Usenet(defaultProvider)
@@ -99,7 +99,7 @@ func run(ctx context.Context) error {
 	// explicitly once you've picked it, so it survives restarts.
 	slog.Info("api key for the native API and both compat shims", "api_key", cfg.APIKey)
 
-	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	handler := buildHandler(db, registry, settings)
 
 	// Completed Download Handling: fetches provider_completed downloads to
 	// local disk so *arr apps' import step has real files to find. Shares
@@ -194,14 +194,17 @@ func run(ctx context.Context) error {
 // debrid.TorrentProvider interface itself. Passing the concrete type here
 // costs nothing at the other call sites below (qbittorrent.NewServer/
 // sabnzbd.NewServer's own interface parameters are still satisfied fine).
-func buildHandler(db *database.DB, torrentProvider *debrid.DynamicTorrentProvider, usenetProvider *debrid.DynamicUsenetProvider, webDownloadProvider *debrid.DynamicWebDownloadProvider, settings *liveSettings) http.Handler {
+func buildHandler(db *database.DB, registry *debrid.Registry, settings *liveSettings) http.Handler {
 	mux := http.NewServeMux()
 
-	qbtServer := qbittorrent.NewServer(torrentProvider, db, settings)
-	sabServer := sabnzbd.NewServer(usenetProvider, db, settings)
+	// The shims still take one provider each; they resolve through the
+	// registry in a later increment. With a single provider these are the
+	// same objects the native API reaches through it.
+	qbtServer := qbittorrent.NewServer(registry.Torrent(registry.Default()), db, settings)
+	sabServer := sabnzbd.NewServer(registry.Usenet(registry.Default()), db, settings)
 	settings.SetShimServers(qbtServer, sabServer)
 
-	mux.Handle("/api/v1/", api.NewServer(version, db, torrentProvider, usenetProvider, webDownloadProvider, settings))
+	mux.Handle("/api/v1/", api.NewServer(version, db, registry, settings))
 	mux.Handle("/api/v2/", qbtServer)
 	// SABnzbd's real API is a single fixed endpoint, not a subtree.
 	mux.Handle("/api", sabServer)

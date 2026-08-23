@@ -60,14 +60,11 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
 	if !settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = false, want true (key was set via env)")
 	}
 
-	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	handler := buildHandler(db, registry, settings)
 
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -153,14 +150,11 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
 	if settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = true, want false (no key set)")
 	}
 
-	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	handler := buildHandler(db, registry, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

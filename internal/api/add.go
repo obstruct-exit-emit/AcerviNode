@@ -47,7 +47,7 @@ func (s *Server) resolveAddedVia(r *http.Request) (database.AddedVia, error) {
 // needing to go through an *arr app or fake being one against the
 // qBittorrent shim. See docs/api.md.
 func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
-	if s.torrentProvider == nil {
+	if s.defaultTorrent() == nil {
 		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -82,18 +82,18 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fallbackName = header.Filename
-		id, err = s.torrentProvider.AddTorrentFile(ctx, header.Filename, data, debrid.AddOptions{Name: header.Filename})
+		id, err = s.defaultTorrent().AddTorrentFile(ctx, header.Filename, data, debrid.AddOptions{Name: header.Filename})
 	} else {
 		fallbackName = magnetDisplayName(magnet)
 		fallbackHash = magnetHash(magnet)
-		id, err = s.torrentProvider.AddMagnet(ctx, magnet, debrid.AddOptions{Name: fallbackName})
+		id, err = s.defaultTorrent().AddMagnet(ctx, magnet, debrid.AddOptions{Name: fallbackName})
 	}
 	if err != nil {
 		writeProviderError(w, "torrent", err)
 		return
 	}
 
-	status, statusErr := s.torrentProvider.Status(ctx, id)
+	status, statusErr := s.defaultTorrent().Status(ctx, id)
 	if statusErr != nil {
 		slog.Warn("api: provider status not yet available after torrent add, using fallback", "id", id, "error", statusErr)
 		status = debrid.DownloadStatus{ID: id, Name: fallbackName, Hash: fallbackHash, State: debrid.StateQueued}
@@ -101,7 +101,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 
 	d := &database.Download{
 		ID:                 uuid.NewString(),
-		Provider:           s.torrentProvider.Name(),
+		Provider:           s.defaultTorrent().Name(),
 		ProviderDownloadID: string(id),
 		Kind:               database.KindTorrent,
 		Hash:               strings.ToLower(status.Hash),
@@ -122,7 +122,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	if d.Name == "" {
 		d.Name = d.Hash
 	}
-	d, existed, err := s.existingOrInsert(ctx, s.torrentProvider.Name(), string(id), d)
+	d, existed, err := s.existingOrInsert(ctx, s.defaultTorrent().Name(), string(id), d)
 	if err != nil {
 		slog.Error("api: store new torrent failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -134,7 +134,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 // handleAddUsenet implements POST /api/v1/downloads/usenet — adds an NZB
 // directly (a URL or an uploaded .nzb file).
 func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
-	if s.usenetProvider == nil {
+	if s.defaultUsenet() == nil {
 		http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -172,17 +172,17 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		fallbackName = header.Filename
 		uploadedFile = data
 		uploadedFileNm = header.Filename
-		id, err = s.usenetProvider.AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: header.Filename})
+		id, err = s.defaultUsenet().AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: header.Filename})
 	} else {
 		fallbackName = nzbURL
-		id, err = s.usenetProvider.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: fallbackName})
+		id, err = s.defaultUsenet().AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: fallbackName})
 	}
 	if err != nil {
 		writeProviderError(w, "usenet", err)
 		return
 	}
 
-	status, statusErr := s.usenetProvider.Status(ctx, id)
+	status, statusErr := s.defaultUsenet().Status(ctx, id)
 	if statusErr != nil {
 		slog.Warn("api: provider status not yet available after usenet add, using fallback", "id", id, "error", statusErr)
 		status = debrid.DownloadStatus{ID: id, Name: fallbackName, State: debrid.StateQueued}
@@ -193,7 +193,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 
 	d := &database.Download{
 		ID:                 uuid.NewString(),
-		Provider:           s.usenetProvider.Name(),
+		Provider:           s.defaultUsenet().Name(),
 		ProviderDownloadID: string(id),
 		Kind:               database.KindUsenet,
 		Name:               status.Name,
@@ -213,7 +213,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		// — see resolveAddedVia.
 		AddedVia: addedVia,
 	}
-	d, existed, err := s.existingOrInsert(ctx, s.usenetProvider.Name(), string(id), d)
+	d, existed, err := s.existingOrInsert(ctx, s.defaultUsenet().Name(), string(id), d)
 	if err != nil {
 		slog.Error("api: store new usenet download failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -228,7 +228,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 // file-upload variant: TorBox's own createwebdownload endpoint has none
 // either, unlike the torrent/usenet add endpoints.
 func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
-	if s.webDownloadProvider == nil {
+	if s.defaultWebDL() == nil {
 		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -249,13 +249,13 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.webDownloadProvider.AddLink(ctx, link, debrid.AddOptions{})
+	id, err := s.defaultWebDL().AddLink(ctx, link, debrid.AddOptions{})
 	if err != nil {
 		writeProviderError(w, "web download", err)
 		return
 	}
 
-	status, statusErr := s.webDownloadProvider.Status(ctx, id)
+	status, statusErr := s.defaultWebDL().Status(ctx, id)
 	if statusErr != nil {
 		slog.Warn("api: provider status not yet available after web download add, using fallback", "id", id, "error", statusErr)
 		status = debrid.DownloadStatus{ID: id, Name: link, State: debrid.StateQueued}
@@ -266,7 +266,7 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 
 	d := &database.Download{
 		ID:                 uuid.NewString(),
-		Provider:           s.webDownloadProvider.Name(),
+		Provider:           s.defaultWebDL().Name(),
 		ProviderDownloadID: string(id),
 		Kind:               database.KindWebDL,
 		Hash:               strings.ToLower(status.Hash),
@@ -286,7 +286,7 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		// admin explicitly requested it — see resolveAddedVia.
 		AddedVia: addedVia,
 	}
-	d, existed, err := s.existingOrInsert(ctx, s.webDownloadProvider.Name(), string(id), d)
+	d, existed, err := s.existingOrInsert(ctx, s.defaultWebDL().Name(), string(id), d)
 	if err != nil {
 		slog.Error("api: store new web download failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -332,35 +332,35 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	)
 	switch d.Kind {
 	case database.KindTorrent:
-		if s.torrentProvider == nil {
+		if s.defaultTorrent() == nil {
 			http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
 			return
 		}
-		provName = s.torrentProvider.Name()
-		newID, err = s.torrentProvider.AddMagnet(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+		provName = s.defaultTorrent().Name()
+		newID, err = s.defaultTorrent().AddMagnet(ctx, d.Source, debrid.AddOptions{Name: d.Name})
 	case database.KindUsenet:
-		if s.usenetProvider == nil {
+		if s.defaultUsenet() == nil {
 			http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
 			return
 		}
-		provName = s.usenetProvider.Name()
+		provName = s.defaultUsenet().Name()
 		if d.Source != "" {
-			newID, err = s.usenetProvider.AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+			newID, err = s.defaultUsenet().AddNZBURL(ctx, d.Source, debrid.AddOptions{Name: d.Name})
 		} else {
 			var filename string
 			var data []byte
 			filename, data, err = s.db.GetSourceFile(ctx, d.ID)
 			if err == nil {
-				newID, err = s.usenetProvider.AddNZBFile(ctx, filename, data, debrid.AddOptions{Name: d.Name})
+				newID, err = s.defaultUsenet().AddNZBFile(ctx, filename, data, debrid.AddOptions{Name: d.Name})
 			}
 		}
 	case database.KindWebDL:
-		if s.webDownloadProvider == nil {
+		if s.defaultWebDL() == nil {
 			http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
 			return
 		}
-		provName = s.webDownloadProvider.Name()
-		newID, err = s.webDownloadProvider.AddLink(ctx, d.Source, debrid.AddOptions{Name: d.Name})
+		provName = s.defaultWebDL().Name()
+		newID, err = s.defaultWebDL().AddLink(ctx, d.Source, debrid.AddOptions{Name: d.Name})
 	default:
 		http.Error(w, "unknown download kind", http.StatusInternalServerError)
 		return
@@ -417,7 +417,7 @@ type checkCachedResponse struct {
 // already cached on the provider's side, without adding it, so the "+ Add"
 // form can show it before commit. See debrid.TorrentProvider.CheckCached.
 func (s *Server) handleCheckCachedTorrent(w http.ResponseWriter, r *http.Request) {
-	if s.torrentProvider == nil {
+	if s.defaultTorrent() == nil {
 		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -426,7 +426,7 @@ func (s *Server) handleCheckCachedTorrent(w http.ResponseWriter, r *http.Request
 		http.Error(w, "magnet is required and must include a valid btih hash", http.StatusBadRequest)
 		return
 	}
-	result, err := s.torrentProvider.CheckCached(r.Context(), []string{hash})
+	result, err := s.defaultTorrent().CheckCached(r.Context(), []string{hash})
 	if err != nil {
 		writeProviderError(w, "torrent", err)
 		return
@@ -439,7 +439,7 @@ func (s *Server) handleCheckCachedTorrent(w http.ResponseWriter, r *http.Request
 // here isn't a torrent-style infohash — per its own docs, it's an MD5 of the
 // NZB link itself (see md5Hex).
 func (s *Server) handleCheckCachedUsenet(w http.ResponseWriter, r *http.Request) {
-	if s.usenetProvider == nil {
+	if s.defaultUsenet() == nil {
 		http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -449,7 +449,7 @@ func (s *Server) handleCheckCachedUsenet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	hash := md5Hex(nzbURL)
-	result, err := s.usenetProvider.CheckCached(r.Context(), []string{hash})
+	result, err := s.defaultUsenet().CheckCached(r.Context(), []string{hash})
 	if err != nil {
 		writeProviderError(w, "usenet", err)
 		return
@@ -461,7 +461,7 @@ func (s *Server) handleCheckCachedUsenet(w http.ResponseWriter, r *http.Request)
 // counterpart — GET /api/v1/downloads/webdl/check-cached. Per TorBox's docs,
 // the hash is an MD5 of the link itself.
 func (s *Server) handleCheckCachedWebDownload(w http.ResponseWriter, r *http.Request) {
-	if s.webDownloadProvider == nil {
+	if s.defaultWebDL() == nil {
 		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -471,7 +471,7 @@ func (s *Server) handleCheckCachedWebDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 	hash := md5Hex(link)
-	result, err := s.webDownloadProvider.CheckCached(r.Context(), []string{hash})
+	result, err := s.defaultWebDL().CheckCached(r.Context(), []string{hash})
 	if err != nil {
 		writeProviderError(w, "web download", err)
 		return
@@ -505,7 +505,7 @@ type torrentInfoFileResponse struct {
 // straight from the BitTorrent network, by hash alone, before ever adding
 // it.
 func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
-	if s.torrentProvider == nil {
+	if s.defaultTorrent() == nil {
 		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -517,7 +517,7 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hash, or magnet with a valid btih hash, is required", http.StatusBadRequest)
 		return
 	}
-	info, err := s.torrentProvider.TorrentInfo(r.Context(), hash)
+	info, err := s.defaultTorrent().TorrentInfo(r.Context(), hash)
 	if err != nil {
 		writeJSON(w, torrentInfoResponse{Available: false, Error: err.Error()})
 		return
@@ -537,43 +537,52 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errWrongProvider is returned by providerFor when a download belongs to a
-// provider other than the one currently configured for its kind.
-var errWrongProvider = errors.New("download belongs to a different provider")
-
 // providerFor returns the provider d actually belongs to.
 //
-// Resolving by kind alone would be wrong the moment more than one provider
-// is configured: every download row already records which provider it came
-// from (database.Download.Provider), and a provider_download_id means
-// nothing to a different account — the call would at best fail and at worst
-// act on an unrelated download that happens to share the id. Today the
-// check also catches a real single-provider case: a download added under
-// one API key, still tracked, after the key has been swapped for a
-// different account.
+// Resolving by kind alone would be wrong with more than one provider
+// configured: every download row records which provider it came from
+// (database.Download.Provider), and a provider_download_id means nothing to
+// a different account — the call would at best fail and at worst act on an
+// unrelated download that happens to share the id. Looking the name up in
+// the registry makes that structural: there is no way to reach the wrong
+// provider, rather than a comparison that has to be remembered.
 //
-// Callers that treat the provider call as best-effort (the delete paths)
-// simply skip it on any error; callers that need to answer the request
-// (files, links) surface it.
+// A row with no provider recorded falls back to the default. Nothing writes
+// an empty provider today, but older rows predate the column being
+// populated, and the default is both the only sensible guess and what the
+// pre-registry code did.
+//
+// The error wraps debrid.ErrNoProvider so callers map it exactly as they
+// map an unconfigured provider — from the caller's side "this download's
+// provider isn't available" and "no provider is configured" want the same
+// answer.
 func (s *Server) providerFor(d *database.Download) (downloadProvider, error) {
+	name := d.Provider
+	if name == "" {
+		name = s.registry.Default()
+	}
+
 	var p downloadProvider
 	switch d.Kind {
 	case database.KindTorrent:
-		p = s.torrentProvider
+		if t := s.registry.Torrent(name); t != nil {
+			p = t
+		}
 	case database.KindUsenet:
-		p = s.usenetProvider
+		if u := s.registry.Usenet(name); u != nil {
+			p = u
+		}
 	case database.KindWebDL:
-		p = s.webDownloadProvider
+		if w := s.registry.WebDL(name); w != nil {
+			p = w
+		}
 	default:
 		return nil, fmt.Errorf("unknown download kind %q", d.Kind)
 	}
 	if p == nil {
-		return nil, debrid.ErrNoProvider
-	}
-	if d.Provider != "" && p.Name() != d.Provider {
-		slog.Warn("api: skipping provider call, download belongs to a different provider",
-			"id", d.ID, "download_provider", d.Provider, "configured_provider", p.Name())
-		return nil, fmt.Errorf("%w: %s", errWrongProvider, d.Provider)
+		slog.Warn("api: no provider available for download",
+			"id", d.ID, "download_provider", d.Provider, "resolved_name", name, "kind", d.Kind)
+		return nil, fmt.Errorf("%w: %s", debrid.ErrNoProvider, name)
 	}
 	return p, nil
 }

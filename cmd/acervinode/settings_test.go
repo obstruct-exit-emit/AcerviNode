@@ -83,9 +83,7 @@ func TestSettingsAPI_SetKeyThenUseShimImmediately(t *testing.T) {
 
 	registry, settings := setupProviders(cfg, configPath)
 	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	handler := buildHandler(db, registry, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -201,10 +199,7 @@ func TestSettingsAPI_RegenerateAPIKey_OldKeyStopsWorkingNewKeyWorks(t *testing.T
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	handler := buildHandler(db, registry, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -711,10 +706,7 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect, seeding defaultArrCategories
+	buildHandler(db, registry, settings) // wires SetShimServers as a side effect, seeding defaultArrCategories
 
 	// Custom names, deliberately not among defaultArrCategories, so this
 	// test proves AddCategory itself works independent of startup seeding.
@@ -773,13 +765,10 @@ func TestLiveSettings_SetShimServers_SeedsDefaultArrCategories(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
 	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
 	}
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	buildHandler(db, registry, settings)
 
 	torrentCats, usenetCats := settings.Categories()
 	for _, want := range defaultArrCategories {
@@ -880,10 +869,7 @@ func TestLiveSettings_SetCategoryPath_RegistersCategoryWithBothShims(t *testing.
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect
+	buildHandler(db, registry, settings) // wires SetShimServers as a side effect
 
 	ctx := context.Background()
 	if err := settings.SetCategoryPath(ctx, "movies-radarr", ""); err != nil {
@@ -933,10 +919,7 @@ func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	buildHandler(db, registry, settings)
 
 	ctx := context.Background()
 	if err := settings.SetCategoryPath(ctx, "movies-radarr", ""); err != nil {
@@ -954,10 +937,7 @@ func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
 		t.Fatalf("config.Load() reload error = %v", err)
 	}
 	registry, settings2 := setupProviders(reloadedCfg, configPath)
-	torrentDyn2 := registry.Torrent(registry.Default())
-	usenetDyn2 := registry.Usenet(registry.Default())
-	webDownloadDyn2 := registry.WebDL(registry.Default())
-	buildHandler(db, torrentDyn2, usenetDyn2, webDownloadDyn2, settings2)
+	buildHandler(db, registry, settings2)
 
 	torrentCats, usenetCats := settings2.Categories()
 	for _, want := range []string{"movies-radarr", "tv-with-override"} {
@@ -1002,13 +982,10 @@ func TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects(t *te
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
 	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
 	}
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	buildHandler(db, registry, settings)
 
 	// Persisted exactly as if a user had called SetCategoryPath themselves —
 	// present in CategoryPaths, not just the shims' in-memory lists.
@@ -1040,13 +1017,10 @@ func TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects(t *te
 		t.Fatalf("config.Load() reload error = %v", err)
 	}
 	registry, settings2 := setupProviders(reloadedCfg, configPath)
-	torrentDyn2 := registry.Torrent(registry.Default())
-	usenetDyn2 := registry.Usenet(registry.Default())
-	webDownloadDyn2 := registry.WebDL(registry.Default())
 	if err := settings2.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() (post-restart) error = %v", err)
 	}
-	buildHandler(db, torrentDyn2, usenetDyn2, webDownloadDyn2, settings2)
+	buildHandler(db, registry, settings2)
 
 	pathsAfterRestart := settings2.CategoryPaths()
 	if _, ok := pathsAfterRestart["movies"]; ok {
@@ -1091,10 +1065,7 @@ func TestLiveSettings_RemoveCategory(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
-	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
+	buildHandler(db, registry, settings)
 
 	ctx := context.Background()
 	if err := settings.SetCategoryPath(ctx, "movies", "/mnt/movies"); err != nil {

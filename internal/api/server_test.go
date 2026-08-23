@@ -60,6 +60,12 @@ type fakeProvider struct {
 	torrentInfoHash   string // hash TorrentInfo was last called with
 }
 
+// List is unused by the native API's own handlers, but the registry's
+// wrappers hold a full debrid provider, so the fake has to satisfy one.
+func (f *fakeProvider) List(context.Context) ([]debrid.DownloadStatus, error) {
+	return nil, nil
+}
+
 func (f *fakeProvider) Name() string {
 	if f.providerName == "" {
 		return "fake"
@@ -433,7 +439,20 @@ func (f *fakeSettings) Status(_ context.Context) (StatusInfo, error) {
 	return f.statusResult, nil
 }
 
-func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider usenetAdder, settings Settings) (*Server, *database.DB) {
+func newTestServer(t *testing.T, torrentProvider, usenetProvider *fakeProvider, settings Settings) (*Server, *database.DB) {
+	t.Helper()
+	return newTestServerWithProviders(t, torrentProvider, usenetProvider, nil, settings)
+}
+
+// testProviderName is the name every fake registers under. Fixtures that
+// need a download to resolve to its provider record this in
+// database.Download.Provider — see seedDownload.
+const testProviderName = "fake"
+
+// newTestServerWithProviders wraps whichever fakes a test supplies in the
+// registry the server now resolves through. A nil fake registers no wrapper
+// for that kind, which is how "no provider configured" is expressed.
+func newTestServerWithProviders(t *testing.T, torrentProvider, usenetProvider, webDownloadProvider *fakeProvider, settings Settings) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -443,24 +462,58 @@ func newTestServer(t *testing.T, torrentProvider torrentAdder, usenetProvider us
 	if settings == nil {
 		settings = &fakeSettings{}
 	}
-	return NewServer("dev", db, torrentProvider, usenetProvider, nil, settings), db
+
+	registry := debrid.NewRegistry()
+	var (
+		td *debrid.DynamicTorrentProvider
+		ud *debrid.DynamicUsenetProvider
+		wd *debrid.DynamicWebDownloadProvider
+	)
+	if torrentProvider != nil {
+		td = debrid.NewDynamicTorrentProvider(providerNameOr(torrentProvider))
+		td.Set(torrentProvider)
+	}
+	if usenetProvider != nil {
+		ud = debrid.NewDynamicUsenetProvider(providerNameOr(usenetProvider))
+		ud.Set(usenetProvider)
+	}
+	if webDownloadProvider != nil {
+		wd = debrid.NewDynamicWebDownloadProvider(providerNameOr(webDownloadProvider))
+		wd.Set(webDownloadProvider)
+	}
+	registry.Register(registryNameFor(torrentProvider, usenetProvider, webDownloadProvider), td, ud, wd)
+
+	return NewServer("dev", db, registry, settings), db
+}
+
+// providerNameOr is the fake's own configured name, defaulting to
+// testProviderName — a few tests set providerName deliberately to assert on
+// what gets recorded.
+func providerNameOr(f *fakeProvider) string {
+	if f.providerName != "" {
+		return f.providerName
+	}
+	return testProviderName
+}
+
+// registryNameFor picks the name the fakes register under: whichever of
+// them names itself, so a test that sets providerName still resolves.
+func registryNameFor(fakes ...*fakeProvider) string {
+	for _, f := range fakes {
+		if f != nil && f.providerName != "" {
+			return f.providerName
+		}
+	}
+	return testProviderName
 }
 
 // newTestServerWithWebDownload is newTestServer's counterpart for exercising
 // the Web Downloads endpoints specifically — kept separate rather than
 // adding a fourth parameter to newTestServer, which every one of its ~75
 // existing call sites would otherwise need to pass nil for.
-func newTestServerWithWebDownload(t *testing.T, webDownloadProvider webDownloadAdder, settings Settings) (*Server, *database.DB) {
+func newTestServerWithWebDownload(t *testing.T, webDownloadProvider *fakeProvider, settings Settings) (*Server, *database.DB) {
 	t.Helper()
-	db, err := database.Open(":memory:")
-	if err != nil {
-		t.Fatalf("database.Open() error = %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if settings == nil {
-		settings = &fakeSettings{}
-	}
-	return NewServer("dev", db, nil, nil, webDownloadProvider, settings), db
+	return newTestServerWithProviders(t, nil, nil, webDownloadProvider, settings)
 }
 
 func authedRequest(method, target string) *http.Request {
@@ -507,8 +560,14 @@ func TestHandleVersion_RequiresAuth(t *testing.T) {
 	}
 }
 
+// TestHandleProviders_ReturnsConfigured now reports what is actually
+// registered and holding credentials, rather than a hardcoded "torbox"
+// gated on a provider-specific settings flag. In production the two agree —
+// a key in config or set through the settings API configures the wrapper
+// either way — but only the registry can answer the question once more than
+// one provider exists.
 func TestHandleProviders_ReturnsConfigured(t *testing.T) {
-	srv, _ := newTestServer(t, nil, nil, &fakeSettings{configured: true})
+	srv, _ := newTestServer(t, &fakeProvider{providerName: "torbox"}, nil, &fakeSettings{configured: true})
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/providers"))
 	if rec.Code != http.StatusOK {
@@ -516,6 +575,27 @@ func TestHandleProviders_ReturnsConfigured(t *testing.T) {
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "torbox") {
 		t.Errorf("body = %q, want it to mention torbox", got)
+	}
+}
+
+// A provider registered but holding no credentials yet is not reportable —
+// the wrapper exists so a key can be set into it later, which is an
+// implementation detail rather than a configured provider.
+func TestHandleProviders_RegisteredButUnconfiguredIsOmitted(t *testing.T) {
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	registry := debrid.NewRegistry()
+	registry.Register("torbox", debrid.NewDynamicTorrentProvider("torbox"), nil, nil)
+	srv := NewServer("dev", db, registry, &fakeSettings{})
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/providers"))
+	if got := strings.TrimSpace(rec.Body.String()); got != "[]" {
+		t.Errorf("body = %q, want [] for a provider with no credentials", got)
 	}
 }
 
@@ -2995,5 +3075,61 @@ func TestHandleDeleteDownload_SkipsProviderCallForAnotherProvidersDownload(t *te
 	}
 	if got, _ := db.GetDownloadByID(context.Background(), d.ID); got != nil {
 		t.Error("local row should still be removed — the provider call is best-effort")
+	}
+}
+
+// TestProviderFor_RoutesEachDownloadToItsOwnProvider is the payoff for the
+// registry: with two providers configured, a download reaches the one it
+// belongs to. Before, "which provider" was derived from the download's kind
+// alone, so both of these would have hit whichever single provider was
+// wired for torrents — sending an id to an account that never issued it.
+func TestProviderFor_RoutesEachDownloadToItsOwnProvider(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	alpha := &fakeProvider{providerName: "alpha"}
+	beta := &fakeProvider{providerName: "beta"}
+
+	registry := debrid.NewRegistry()
+	alphaDyn := debrid.NewDynamicTorrentProvider("alpha")
+	alphaDyn.Set(alpha)
+	betaDyn := debrid.NewDynamicTorrentProvider("beta")
+	betaDyn.Set(beta)
+	registry.Register("alpha", alphaDyn, nil, nil)
+	registry.Register("beta", betaDyn, nil, nil)
+
+	srv := NewServer("dev", db, registry, &fakeSettings{})
+
+	seed := func(id, provider, providerDownloadID string) *database.Download {
+		d := &database.Download{
+			ID: id, Provider: provider, ProviderDownloadID: providerDownloadID,
+			Kind: database.KindTorrent, Hash: "h-" + id, Name: "Test " + id,
+			State: database.StateDownloading,
+		}
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload(%s) error = %v", id, err)
+		}
+		return d
+	}
+	da := seed("dl-a", "alpha", "a-1")
+	dbb := seed("dl-b", "beta", "b-1")
+
+	for _, d := range []*database.Download{da, dbb} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/downloads/"+d.ID))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("delete %s: status = %d, want 204, body=%s", d.ID, rec.Code, rec.Body.String())
+		}
+	}
+
+	if !alpha.deleteCalled || string(alpha.deleteID) != "a-1" {
+		t.Errorf("alpha saw deleteID %q (called=%v), want a-1", alpha.deleteID, alpha.deleteCalled)
+	}
+	if !beta.deleteCalled || string(beta.deleteID) != "b-1" {
+		t.Errorf("beta saw deleteID %q (called=%v), want b-1", beta.deleteID, beta.deleteCalled)
 	}
 }
