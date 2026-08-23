@@ -160,6 +160,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Frozen downloads now say why, instead of just looking broken.** While a
+  kind is in provider rate-limit cooldown, `internal/importer`'s
+  `refreshKind` skips that kind's listing entirely, so every download of
+  that kind stops advancing — progress, state and speed all freeze at
+  whatever was last polled. Nothing in the downloads view said so, which
+  makes it indistinguishable from AcerviNode being broken, and is exactly
+  how it gets reported ("state seems to get stuck and is laggy"). The
+  cooldown was already exposed on `GET /api/v1/status` and already surfaced
+  on the Settings page for the *provider account's* own `cooldown_until` —
+  but a user watching stalled downloads has no reason to go to Settings.
+  Both download tabs now poll `/api/v1/status` alongside the downloads
+  themselves (a purely local read, no provider call) and show a banner
+  naming the time polling resumes. Found during a live burn-in: a sustained
+  concurrent poll load tripped TorBox's real rate limiter, all three kinds
+  backed off together — the limit is per API key across its servers — and
+  the UI gave no indication whatsoever.
+
 - **Every *arr poll triggered its own full provider listing, and all that
   redundant work serialized against everything else.** Three reactive
   refreshes — the qBittorrent shim's `/torrents/info`, and SABnzbd's

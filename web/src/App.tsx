@@ -7,6 +7,7 @@ import {
   getFileLink,
   getProviders,
   getSetupStatus,
+  getStatus,
   getVersion,
   getZipLink,
   listDownloads,
@@ -15,6 +16,7 @@ import {
   type AuthStatus,
   type Download,
   type ProviderStatus,
+  type StatusInfo,
 } from './api'
 import { AddDownload } from './components/AddDownload'
 import { BulkActionBar } from './components/BulkActionBar'
@@ -50,6 +52,29 @@ const POLL_INTERVAL_MS = 4000
 
 type View = 'managed' | 'manual' | 'settings'
 
+
+// rateLimitPausedUntil returns the furthest-out still-active provider
+// rate-limit cooldown across every kind, or undefined when none is active.
+//
+// While a kind is in cooldown the importer skips its provider listing
+// entirely (see internal/importer's refreshKind), so every download of that
+// kind stops advancing — progress, state and speed all freeze at whatever
+// was last seen. Without something saying so, that is indistinguishable
+// from AcerviNode being broken, which is exactly how it gets reported. The
+// limit is enforced per API key across the provider's servers, so in
+// practice all three kinds trip together and one banner covers it.
+function rateLimitPausedUntil(status: StatusInfo | undefined): Date | undefined {
+  if (!status) return undefined
+  let latest: Date | undefined
+  for (const kind of Object.values(status.kinds ?? {})) {
+    if (!kind.rate_limited_until) continue
+    const until = new Date(kind.rate_limited_until)
+    if (until.getTime() <= Date.now()) continue
+    if (!latest || until > latest) latest = until
+  }
+  return latest
+}
+
 export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null)
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null)
@@ -73,6 +98,10 @@ export default function App() {
   const [managedDownloads, setManagedDownloads] = useState<Download[]>([])
   const [manualDownloads, setManualDownloads] = useState<Download[]>([])
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  // Polled alongside the downloads themselves so the tables can explain a
+  // stall rather than just showing frozen rows — see the rate-limit banner
+  // below. Cheap: /api/v1/status is a purely local read, no provider call.
+  const [status, setStatus] = useState<StatusInfo | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   // Set while DownloadOptionsDialog is open for a given row — every
@@ -170,11 +199,12 @@ export default function App() {
   const refresh = useCallback(
     async (key: string) => {
       try {
-        const [v, p, managed, manual] = await Promise.all([
+        const [v, p, managed, manual, st] = await Promise.all([
           getVersion(key),
           getProviders(key),
           listDownloads(key, 'arr'),
           listDownloads(key, 'manual'),
+          getStatus(key),
         ])
         if (initialVersionRef.current === null) {
           initialVersionRef.current = v.version
@@ -185,6 +215,7 @@ export default function App() {
         setProviders(p)
         setManagedDownloads(managed)
         setManualDownloads(manual)
+        setStatus(st)
         setLoadError(undefined)
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -586,6 +617,17 @@ export default function App() {
 
       <main>
         {loadError && <p className="load-error">Couldn't reach AcerviNode: {loadError}</p>}
+        {view !== 'settings' &&
+          (() => {
+            const until = rateLimitPausedUntil(status)
+            return until ? (
+              <p className="poll-paused">
+                ⏸ Provider polling is paused until {until.toLocaleTimeString()} — the provider rate-limited this
+                account, so progress and state below will look frozen until it clears. Nothing is broken and no
+                download is lost; polling resumes on its own.
+              </p>
+            ) : null
+          })()}
         {isAdmin && view === 'managed' && (
           <>
             <BulkActionBar

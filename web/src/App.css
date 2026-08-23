@@ -505,6 +505,18 @@
   opacity: 0.7;
 }
 
+/* Same shape as .load-error but in the "in progress / transient" colour:
+   a rate-limit pause is a temporary condition that clears on its own, not
+   a failure the user has to act on. */
+.poll-paused {
+  background: color-mix(in srgb, var(--state-fetching) 12%, transparent);
+  color: var(--state-fetching);
+  border: 1px solid var(--state-fetching);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
 .load-error {
   background: color-mix(in srgb, var(--state-error) 12%, transparent);
   color: var(--state-error);
