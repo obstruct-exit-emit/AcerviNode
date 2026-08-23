@@ -1,7 +1,8 @@
 # 📦 AcerviNode Roadmap
 
-Where the project has been and where it's going. Phases 0–3 and 5–10 are
-complete; Phase 4 (more debrid providers) is blocked for now. The
+Where the project has been and where it's going. Every phase 0–10 is
+complete; Phase 4 is where additional debrid providers get added as they
+become worth the maintenance cost. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
 **Legend:** ✅ complete · 🔄 in progress · 💡 under consideration · ⏳ blocked
@@ -14,7 +15,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 | [1 — TorBox vertical slice](#phase-1--torbox-vertical-slice-) | TorBox provider, qBittorrent shim, SABnzbd shim | ✅ |
 | [2 — Completed Download Handling](#phase-2--completed-download-handling-) | Fetch resolved files to local disk once a download is done | ✅ |
 | [3 — Native API & UI](#phase-3--native-api--ui-) | Richer `/api/v1`, embedded web UI | ✅ |
-| [4 — Multi-provider](#phase-4--multi-provider-) | Real-Debrid, Debrid-Link, AllDebrid, Premiumize | ⏳ |
+| [4 — Multi-provider](#phase-4--multi-provider-) | Provider-routing refactor, AllDebrid, two accounts per service | ✅ |
 | [5 — Hardening & release](#phase-5--hardening--release-) | systemd unit, packaged Linux binaries, release automation | ✅ |
 | [6 — Full QA pass](#phase-6--full-qa-pass-) | Systematic review + live testing of every existing ability; 3 real bugs found and fixed | ✅ |
 | [7 — Managed vs. Manual downloads](#phase-7--managed-vs-manual-downloads-) | Split the web UI into two tabs by how a download was added, plus discovering items added directly through TorBox | ✅ |
@@ -153,9 +154,14 @@ this unattended. Recommendations first.
   mount"). Fine at a few hundred GB; at a multi-TB library, disk space
   becomes the hard limit instead of debrid quota. The single biggest
   architectural difference from decypharr specifically.
-- ⏳ **Provider breadth.** TorBox-only. Real-Debrid is written into Phase 4
-  but genuinely blocked — no account available to verify against, and this
-  project's whole discipline has been "verify live, don't guess."
+- ✅ **Provider breadth.** TorBox and AllDebrid, with any number of accounts
+  on either (`providers.<name>.type`). Everything routes by the provider a
+  download actually belongs to, so adding another is implementing the
+  `debrid` interfaces and nothing structural. Real-Debrid, Debrid-Link and
+  Premiumize remain unwritten purely because no account is available to
+  verify against, and this project's discipline has been "verify live, don't
+  guess" — that is now the only thing standing in the way rather than the
+  architecture.
 
 ---
 
@@ -445,14 +451,60 @@ CDN link instead of BitTorrent/NNTP.
   hash correctly reported not-cached and no-preview-available. See
   [Providers](docs/providers.md#cached--metadata-previews).
 
-## Phase 4 — Multi-provider ⏳
+## Phase 4 — Multi-provider ✅
 
-- Real-Debrid provider (`TorrentProvider` only — no native usenet service).
-  Blocked: no Real-Debrid account available to verify against, so this stays
-  behind phases that can actually be tested — see Phase 1's TorBox verification
-  for why that matters here.
-- Debrid-Link, AllDebrid, Premiumize as they become worth the maintenance cost
-- Per-provider cached-availability checks where the provider supports them
+Delivered in two halves: the routing work that made a second provider
+*possible*, then AllDebrid itself.
+
+**The refactor (stages 1–5).** Every provider call used to resolve by *kind*
+alone — `d.Provider` was recorded on every row and reported by the API, but
+never used to route anything. Identical behaviour with one provider, and
+wrong the moment there are two: a `provider_download_id` means nothing to a
+different account. Fixed in order, each stage landing green on its own:
+
+1. Route by `(provider, kind)` rather than kind — 11 call sites, five of
+   which were found only by sweeping for *provider calls taking a download*
+   rather than for the named lookups, since several inlined the same switch.
+2. `debrid.Registry`: one `Dynamic*Provider` per provider per kind, built
+   from config instead of a hardcoded `"torbox"`, and resolved through by
+   the native API, the importer and both compat shims.
+3. Rate-limit and list-success state keyed per `(provider, kind)` — limits
+   are enforced per account, so one provider's 429 must not stall another.
+4. A `default_provider` setting plus an optional per-add `provider`
+   override. Re-add deliberately ignores both and returns to the account the
+   download already belongs to.
+5. A per-provider settings surface: `/settings/providers/{name}`, generic
+   `liveSettings` methods, and a UI listing every configured provider.
+
+**AllDebrid.** Torrent-only, deliberately — no usenet service exists, and
+its hoster debriding is a synchronous unlock with nothing to poll, so
+supporting web downloads would mean inventing a lifecycle rather than
+integrating one. `providers.<name>.type` also separates an entry's name from
+its implementation, so **two accounts on the same service** work.
+
+Verified live with three providers configured at once (TorBox, AllDebrid,
+and a second TorBox entry): per-provider capabilities reported correctly, a
+usenet add naming AllDebrid refused, the same magnet added to two providers
+staying two independent downloads, and an AllDebrid download fetched to disk
+through the unlock path.
+
+Four real bugs surfaced only by running it against real accounts, each fixed
+with a regression test confirmed red first: an explicit `added_via=arr`
+silently staying Manual when the provider deduped; the default resolving to
+a provider with no credentials; a torrent-only default breaking usenet
+outright; and a degraded provider marking live downloads as vanished.
+
+Still open:
+
+- Real-Debrid, Debrid-Link, Premiumize as they become worth the maintenance
+  cost. The plumbing is done and proven, so each is now implementing the
+  `debrid` interfaces and having an account to verify against — nothing
+  structural.
+- AllDebrid web downloads, if its saved-links model ever justifies the
+  invented lifecycle.
+- 💡 Per-provider detail on `GET /api/v1/status`, which still aggregates
+  across providers per kind. Non-breaking to add; deliberately deferred so
+  the endpoint's shape stayed stable for the UI's rate-limit banner.
 
 ## Phase 5 — Hardening & release ✅
 

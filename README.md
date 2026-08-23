@@ -13,11 +13,12 @@ AcerviNode speaks the qBittorrent Web API and the SABnzbd API, so your *arr apps
 
 </div>
 
-> 🚧 **Pre-1.0.** TorBox is the only wired provider so far, but the full pipeline
-> works end to end against it: point Sonarr's qBittorrent client or its SABnzbd
-> client at AcerviNode and it adds, tracks, resolves, and downloads real files to
-> disk where Sonarr's own import step expects them — and there's a web UI to watch
-> it happen. Real-Debrid and other providers aren't built yet. See the
+> 🚧 **Pre-1.0.** TorBox and AllDebrid are wired, and you can configure more
+> than one account on either. The full pipeline works end to end: point
+> Sonarr's qBittorrent client or its SABnzbd client at AcerviNode and it adds,
+> tracks, resolves, and downloads real files to disk where Sonarr's own import
+> step expects them — and there's a web UI to watch it happen. Real-Debrid and
+> the rest aren't built yet. See the
 > [roadmap](ROADMAP.md).
 
 ---
@@ -50,12 +51,36 @@ can be configured either way and land on the same download pipeline underneath.
 | Provider | Torrents | Usenet | Web Downloads | Status |
 |---|---|---|---|---|
 | TorBox | ✅ | ✅ | ✅ | working |
-| Real-Debrid | — | — | — | planned |
-| Others (Debrid-Link, AllDebrid, Premiumize) | — | — | — | planned |
+| AllDebrid | ✅ | — | — | working |
+| Others (Real-Debrid, Debrid-Link, Premiumize) | — | — | — | planned |
 
 "Web Downloads" debrids a direct link from a hoster (Mega, 1Fichier, Mediafire,
 and ~160 others TorBox currently supports) — no torrent or NZB involved, just a
 plain URL.
+
+AllDebrid is torrents only: it has no usenet service, and its hoster debriding
+is a synchronous unlock with nothing to track, so it doesn't fit the "add, then
+watch it" model the other kinds use. A provider simply never appears for a kind
+it can't do.
+
+**More than one account** is supported, on the same service or different ones —
+give each entry its own name in `providers`, set `type` when the name isn't the
+service's, and pick which one new downloads go to:
+
+```yaml
+providers:
+  torbox:
+    api_key: ...
+  alldebrid:
+    api_key: ...
+  torbox-shared:
+    type: torbox
+    api_key: ...
+default_provider: torbox
+```
+
+Every download records which account it came from, so deletes, retries and file
+fetches always go back to the right one.
 
 The provider interface is deliberately thin: a new torrent-only provider (like
 Real-Debrid) is a pure addition — no changes to either compat shim, no changes to
