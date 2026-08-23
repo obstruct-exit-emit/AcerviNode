@@ -231,6 +231,24 @@ API key across its servers, so anything else sharing the key draws from the
 same bucket), `502` for any other provider-side failure (e.g. an invalid
 magnet, an unsupported hoster, or a real upstream error).
 
+**`provider` (optional): choose which configured provider gets the
+download.** Names an entry from `GET /api/v1/providers`; omitted, the
+download goes to the configured default (`default_provider` in
+[Configuration](configuration.md), which falls back to the only registered
+provider when unset). A name that isn't configured is rejected with `400`
+rather than quietly falling back — the caller asked for a specific account,
+and silently using another would put the download somewhere they didn't
+choose. Not admin-gated, unlike `added_via`: choosing between providers
+already configured on this instance grants nothing a member couldn't
+otherwise reach. Neither compat shim has an equivalent, since neither the
+qBittorrent nor the SABnzbd protocol has a field to carry it — they always
+use the default.
+
+`POST /api/v1/downloads/{id}/readd` deliberately ignores this and always
+resubmits to the provider the download already belongs to: sending a retry
+elsewhere would silently migrate it, keeping the row's identity while its
+files moved accounts.
+
 **`added_via` (optional, admin-only): add straight into the Managed
 pipeline.** Set to `"arr"` (any other value, or omitting it, keeps the
 default `"manual"`) to have the new download behave exactly as if an *arr app

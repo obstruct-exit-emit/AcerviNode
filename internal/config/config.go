@@ -27,6 +27,15 @@ type Config struct {
 	APIKey    string                    `yaml:"api_key"`
 	LogLevel  string                    `yaml:"log_level"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
+	// DefaultProvider names which entry in Providers a new download goes to
+	// when nothing says otherwise — the native add endpoints without an
+	// explicit provider, and both compat shims, which have no field in the
+	// qBittorrent/SABnzbd protocols to carry one. Empty selects the first
+	// registered provider, so a single-provider install needs no
+	// configuration at all. A name that isn't configured is ignored rather
+	// than rejected: this is persisted, and the provider it names may
+	// simply have been removed since.
+	DefaultProvider string `yaml:"default_provider"`
 
 	// DownloadDir is where completed files land when the *arr app that added
 	// a download didn't supply its own save_path (see internal/importer).

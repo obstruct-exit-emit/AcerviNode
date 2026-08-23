@@ -297,6 +297,9 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *l
 		registry.Register(name, t, u, w)
 	}
 
+	// Empty is fine: Registry falls back to the first registered provider.
+	registry.SetDefault(cfg.DefaultProvider)
+
 	// A configured name nothing knows how to build is worth saying out
 	// loud — silently ignoring it would look exactly like a provider that
 	// simply never works.

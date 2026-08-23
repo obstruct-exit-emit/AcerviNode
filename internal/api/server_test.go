@@ -1879,7 +1879,10 @@ func TestHandleReAddDownload_RejectsEmptySource(t *testing.T) {
 }
 
 func TestHandleReAddDownload_ProviderError(t *testing.T) {
-	provider := &fakeProvider{addErr: errors.New("torbox: rate limited")}
+	// providerName matches what seedErroredDownload records: re-add resolves
+	// the download's own provider, so a fake registered under a different
+	// name would (correctly) be refused before ever reaching addErr.
+	provider := &fakeProvider{providerName: "torbox", addErr: errors.New("torbox: rate limited")}
 	srv, db := newTestServer(t, provider, nil, nil)
 	d := seedErroredDownload(t, db, database.KindTorrent, "p1", testMagnet)
 
@@ -3131,5 +3134,129 @@ func TestProviderFor_RoutesEachDownloadToItsOwnProvider(t *testing.T) {
 	}
 	if !beta.deleteCalled || string(beta.deleteID) != "b-1" {
 		t.Errorf("beta saw deleteID %q (called=%v), want b-1", beta.deleteID, beta.deleteCalled)
+	}
+}
+
+// twoProviderServer builds a server with two torrent providers registered,
+// "alpha" being the default.
+func twoProviderServer(t *testing.T) (*Server, *database.DB, *fakeProvider, *fakeProvider) {
+	t.Helper()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	alpha := &fakeProvider{providerName: "alpha", addID: "alpha-1", statusErr: errors.New("not indexed yet")}
+	beta := &fakeProvider{providerName: "beta", addID: "beta-1", statusErr: errors.New("not indexed yet")}
+
+	registry := debrid.NewRegistry()
+	for name, f := range map[string]*fakeProvider{"alpha": alpha, "beta": beta} {
+		d := debrid.NewDynamicTorrentProvider(name)
+		d.Set(f)
+		registry.Register(name, d, nil, nil)
+	}
+	registry.SetDefault("alpha")
+	return NewServer("dev", db, registry, &fakeSettings{}), db, alpha, beta
+}
+
+// TestHandleAddTorrent_UsesDefaultProviderWhenUnspecified covers the policy
+// half of the add decision: no provider named means the configured default.
+func TestHandleAddTorrent_UsesDefaultProviderWhenUnspecified(t *testing.T) {
+	srv, _, alpha, beta := twoProviderServer(t)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet}, "", "", nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if alpha.addedMagnet != testMagnet {
+		t.Error("the default provider did not receive the add")
+	}
+	if beta.addedMagnet != "" {
+		t.Error("the non-default provider received the add")
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Provider != "alpha" {
+		t.Errorf("recorded provider = %q, want alpha", got.Provider)
+	}
+}
+
+// TestHandleAddTorrent_HonoursExplicitProvider covers the override: naming a
+// provider sends the add there instead, and records it against that account
+// so everything afterwards resolves back to it.
+func TestHandleAddTorrent_HonoursExplicitProvider(t *testing.T) {
+	srv, _, alpha, beta := twoProviderServer(t)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet, "provider": "beta"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if beta.addedMagnet != testMagnet {
+		t.Error("the named provider did not receive the add")
+	}
+	if alpha.addedMagnet != "" {
+		t.Error("the default provider received an add that named a different one")
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Provider != "beta" {
+		t.Errorf("recorded provider = %q, want beta", got.Provider)
+	}
+}
+
+// Naming a provider that isn't configured is refused rather than quietly
+// falling back: the caller asked for a specific account, and silently using
+// another would put the download somewhere they didn't choose.
+func TestHandleAddTorrent_UnknownProviderIsRejected(t *testing.T) {
+	srv, _, alpha, beta := twoProviderServer(t)
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent", map[string]string{"magnet": testMagnet, "provider": "gamma"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if alpha.addedMagnet != "" || beta.addedMagnet != "" {
+		t.Error("an add naming an unconfigured provider still reached a provider")
+	}
+}
+
+// TestHandleReAddDownload_GoesBackToItsOwnProvider proves a retry resubmits
+// to the account the download already belongs to. Sending it to the default
+// would silently migrate it: the row keeps its identity while its files move
+// accounts, which is not what "retry this download" means.
+func TestHandleReAddDownload_GoesBackToItsOwnProvider(t *testing.T) {
+	ctx := context.Background()
+	srv, db, alpha, beta := twoProviderServer(t)
+
+	d := &database.Download{
+		ID: "dl-beta", Provider: "beta", ProviderDownloadID: "old-beta-id",
+		Kind: database.KindTorrent, Hash: "h", Name: "Belongs To Beta",
+		State: database.StateError, Source: testMagnet,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/downloads/"+d.ID+"/readd"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if beta.addedMagnet != testMagnet {
+		t.Error("re-add did not go back to the download's own provider")
+	}
+	if alpha.addedMagnet != "" {
+		t.Error("re-add went to the default provider, migrating the download to another account")
 	}
 }
