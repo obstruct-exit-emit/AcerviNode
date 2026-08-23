@@ -160,6 +160,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Every *arr poll triggered its own full provider listing, and all that
+  redundant work serialized against everything else.** Three reactive
+  refreshes — the qBittorrent shim's `/torrents/info`, and SABnzbd's
+  `mode=queue` and `mode=history` — each made an unconditional
+  `provider.List()` call inside the HTTP handler, on every single request,
+  with no reuse or coalescing of any kind. In a real setup that multiplies
+  fast: Sonarr, Radarr, Readarr and Lidarr each poll on their own schedule
+  and a single *arr app hits more than one of those endpoints per cycle, so
+  the same full account listing was fetched from the provider many times a
+  minute — each response then written back through
+  `database.RefreshFromProvider`. Because the database deliberately runs on
+  a single connection (`SetMaxOpenConns(1)`), that write traffic serializes
+  against every other query, including the web UI's own polling. The result
+  is app-wide sluggishness and state that looks stuck, for usenet and
+  torrents alike, rather than merely slow compat shims — which is exactly
+  how it was reported. Those three paths now share `debrid.ListCache`,
+  which reuses a listing for a couple of seconds and makes concurrent
+  callers share one in-flight call instead of each starting another. A
+  reused response deliberately keeps its *original* fetch timestamp, so
+  `RefreshFromProvider`'s ordering guard still treats it as the older data
+  it genuinely is and it can't overwrite fresher state. Failed fetches are
+  never cached. `internal/importer`'s own polling is deliberately left
+  alone: it's already interval-driven and deduplicated by construction, and
+  the fast per-download poll depends on fetching fresh data on demand — this
+  only removes redundancy that had no design intent behind it.
+
 - **The vanished-download circuit breaker could jam on permanently,
   disabling missing-download detection and logging a warning every tick.**
   `isSuspectedMassVanish` counted *every* Manual row toward its

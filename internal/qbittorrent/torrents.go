@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -205,8 +204,7 @@ type liveTorrentInfo struct {
 // gets the freshest possible view even between importer ticks. Also returns
 // each row's current liveTorrentInfo keyed by provider download ID.
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]liveTorrentInfo {
-	fetchedAt := time.Now()
-	statuses, err := s.provider.List(ctx)
+	statuses, fetchedAt, err := s.listCache.List(ctx, s.provider.List)
 	if err != nil {
 		slog.Error("qbittorrent: provider list failed", "error", err)
 		return nil

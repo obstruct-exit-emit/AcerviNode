@@ -25,8 +25,7 @@ import (
 // them are persisted to the database, just read fresh and attached to the
 // response here (see toQueueSlot/handleQueue).
 func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string, totalSpeedBytes int64) {
-	fetchedAt := time.Now()
-	statuses, err := s.provider.List(ctx)
+	statuses, fetchedAt, err := s.listCache.List(ctx, s.provider.List)
 	if err != nil {
 		slog.Error("sabnzbd: provider list failed", "error", err)
 		return nil, nil, 0
