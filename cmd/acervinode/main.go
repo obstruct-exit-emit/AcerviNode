@@ -18,6 +18,7 @@ import (
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
+	"github.com/acervinode/acervinode/internal/debrid/alldebrid"
 	"github.com/acervinode/acervinode/internal/debrid/torbox"
 	"github.com/acervinode/acervinode/internal/importer"
 	"github.com/acervinode/acervinode/internal/qbittorrent"
@@ -234,15 +235,27 @@ func parseLogLevel(level string) slog.Level {
 // a case here (and in liveSettings), nothing else (see docs/providers.md).
 // requestTimeout is applied to every one of the three providers' underlying
 // *torbox.Client — see torbox.WithRequestTimeout.
-func newTorBoxProviders(apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
+// newTorBoxProviders ignores name: torbox.Provider reports a fixed "torbox"
+// of its own, and everything that routes by provider goes through the
+// registry's wrapper, which carries the entry name. Taken anyway so every
+// constructor has one shape.
+func newTorBoxProviders(_, apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
 	opt := torbox.WithRequestTimeout(requestTimeout)
 	return torbox.NewProvider(apiKey, opt), torbox.NewUsenetProvider(apiKey, opt), torbox.NewWebDownloadProvider(apiKey, opt)
+}
+
+// newAllDebridProviders builds AllDebrid's torrent provider. Usenet and web
+// downloads are nil: AllDebrid has no usenet service at all, and its hoster
+// debriding is a synchronous unlock with nothing to track — see
+// internal/debrid/alldebrid's package comment.
+func newAllDebridProviders(name, apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
+	return alldebrid.NewProvider(name, apiKey, alldebrid.WithRequestTimeout(requestTimeout)), nil, nil
 }
 
 // providerConstructor builds one provider's three per-kind implementations
 // from an API key. A provider that doesn't support a kind returns nil for
 // it — nothing here assumes every provider does all three.
-type providerConstructor func(apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider)
+type providerConstructor func(name, apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider)
 
 // knownProviders is every provider type AcerviNode can actually construct,
 // keyed by the name used in config.Providers. Adding a second debrid
@@ -251,16 +264,77 @@ type providerConstructor func(apiKey string, requestTimeout time.Duration) (debr
 // in wiring, rather than repeated at each Dynamic*Provider construction as
 // it used to be.
 var knownProviders = map[string]providerConstructor{
-	"torbox": newTorBoxProviders,
+	"torbox":    newTorBoxProviders,
+	"alldebrid": newAllDebridProviders,
 }
 
-// knownProviderNames lists knownProviders in a stable order, so registry
-// ordering (and therefore GET /api/v1/providers) doesn't reshuffle between
-// runs on Go's randomised map iteration.
-func knownProviderNames() []string {
-	names := make([]string, 0, len(knownProviders))
+// providerCapabilities is which kinds a provider implementation actually
+// supports. Not every service does all three — AllDebrid has no usenet at
+// all — and a provider that doesn't support a kind registers no wrapper for
+// it rather than one that always errors, so it simply never appears for
+// that kind.
+type providerCapabilities struct {
+	torrent bool
+	usenet  bool
+	webdl   bool
+}
+
+// knownProviderCapabilities records what each implementation can do. Kept
+// beside knownProviders so adding a service means touching one place.
+var knownProviderCapabilities = map[string]providerCapabilities{
+	"torbox": {torrent: true, usenet: true, webdl: true},
+	// AllDebrid is torrent-only here. It does debrid hoster links, but
+	// through a synchronous unlock with no pollable object behind it —
+	// there is no "web download" to track the way AcerviNode's model
+	// expects, and inventing that lifecycle locally would be guesswork.
+	// See internal/debrid/alldebrid.
+	"alldebrid": {torrent: true},
+}
+
+// defaultProviderName picks which provider new downloads go to: the
+// explicitly configured one when it is actually registered, otherwise the
+// first registered provider that holds credentials, otherwise nothing (and
+// Registry keeps its own first-registered fallback).
+func defaultProviderName(cfg *config.Config, registry *debrid.Registry) string {
+	names := registry.Names()
+	registered := func(name string) bool {
+		for _, n := range names {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+	if cfg.DefaultProvider != "" && registered(cfg.DefaultProvider) {
+		return cfg.DefaultProvider
+	}
+	for _, name := range names {
+		if pc, ok := cfg.Providers[name]; ok && pc.APIKey != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// providerEntryNames lists every provider entry to register, in a stable
+// order: each configured entry, plus every known type that has no entry yet
+// so a fresh install still has a slot to put a key into. Stable because
+// registry order is user-visible (GET /api/v1/providers) and Go's map
+// iteration is randomised.
+func providerEntryNames(cfg *config.Config) []string {
+	seen := map[string]bool{}
+	var names []string
+	for name := range cfg.Providers {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
 	for name := range knownProviders {
-		names = append(names, name)
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	return names
@@ -284,30 +358,63 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *l
 	registry := debrid.NewRegistry()
 	timeout := time.Duration(cfg.ProviderRequestTimeoutSeconds) * time.Second
 
-	for _, name := range knownProviderNames() {
-		t := debrid.NewDynamicTorrentProvider(name)
-		u := debrid.NewDynamicUsenetProvider(name)
-		w := debrid.NewDynamicWebDownloadProvider(name)
+	// Registered by *entry*, not by implementation type, so two accounts on
+	// the same service can coexist: entries named "torbox" and
+	// "torbox-work" both resolving to type "torbox" are two independent
+	// providers, each with its own credentials, listing cache and
+	// rate-limit backoff.
+	//
+	// Every known type is also registered under its own name even with
+	// nothing in config, so a fresh install has somewhere to put a key —
+	// the wrapper *is* the slot a key gets set into.
+	for _, name := range providerEntryNames(cfg) {
+		typeName := name
+		if pc, ok := cfg.Providers[name]; ok {
+			typeName = pc.ResolvedType(name)
+		}
+		construct, known := knownProviders[typeName]
+		if !known {
+			slog.Warn("unknown provider type in config, ignoring entry",
+				"provider", name, "type", typeName)
+			continue
+		}
+
+		var tp debrid.TorrentProvider
+		var up debrid.UsenetProvider
+		var wp debrid.WebDownloadProvider
 		if pc, ok := cfg.Providers[name]; ok && pc.APIKey != "" {
-			tp, up, wp := knownProviders[name](pc.APIKey, timeout)
+			tp, up, wp = construct(name, pc.APIKey, timeout)
+		}
+		// A provider that doesn't support a kind contributes no wrapper for
+		// it, so it simply never appears for that kind — see
+		// debrid.Registry.
+		var t *debrid.DynamicTorrentProvider
+		var u *debrid.DynamicUsenetProvider
+		var w *debrid.DynamicWebDownloadProvider
+		caps := knownProviderCapabilities[typeName]
+		if caps.torrent {
+			t = debrid.NewDynamicTorrentProvider(name)
 			t.Set(tp)
+		}
+		if caps.usenet {
+			u = debrid.NewDynamicUsenetProvider(name)
 			u.Set(up)
+		}
+		if caps.webdl {
+			w = debrid.NewDynamicWebDownloadProvider(name)
 			w.Set(wp)
 		}
 		registry.Register(name, t, u, w)
 	}
 
-	// Empty is fine: Registry falls back to the first registered provider.
-	registry.SetDefault(cfg.DefaultProvider)
-
-	// A configured name nothing knows how to build is worth saying out
-	// loud — silently ignoring it would look exactly like a provider that
-	// simply never works.
-	for name := range cfg.Providers {
-		if _, known := knownProviders[name]; !known {
-			slog.Warn("unknown provider in config, ignoring", "provider", name)
-		}
-	}
+	// Registry's own fallback is "first registered", which is the wrong
+	// answer once more than one provider type is known: every known type is
+	// registered whether or not it has a key, so that fallback can land on
+	// a provider with no credentials while a configured one sits right next
+	// to it, and every add would fail against it. Prefer a configured
+	// provider, and only fall back to registration order when nothing is
+	// configured at all.
+	registry.SetDefault(defaultProviderName(cfg, registry))
 
 	settings := &liveSettings{cfg: cfg, configPath: configPath, registry: registry}
 	return registry, settings

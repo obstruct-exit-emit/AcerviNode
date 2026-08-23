@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **AllDebrid, the second debrid provider.** Torrent-only, and deliberately
+  so: AllDebrid has no usenet service at all, and its hoster debriding is a
+  synchronous `/v4/link/unlock` with no pollable object behind it — there is
+  no "web download" to track the way AcerviNode's model expects, and
+  inventing that lifecycle locally would be guesswork rather than
+  integration. The registry already supported partial capability, so it
+  simply never appears for the kinds it can't do. Verified live end to end
+  against a real account: add, poll, fetch to disk through the unlock path,
+  and delete.
+
+  Shapes that differ from TorBox and are captured in the code rather than
+  assumed: every response is wrapped in a `status` envelope and a **failure
+  arrives as HTTP 200**, so nothing can be concluded from the status code;
+  `/v4/magnet/status` is **discontinued** and only `/v4.1` answers;
+  `/v4/magnet/instant` **no longer exists**, so `CheckCached` answers from
+  what is actually on the account; a magnet's files are a separate call from
+  its status, arrive as a **tree** that has to be flattened, and each file's
+  "link" is itself locked until unlocked. A cached magnet arrives `Ready`
+  having transferred nothing, so progress is forced to 100% for it rather
+  than derived from bytes — otherwise a finished download reads as
+  untouched.
+
+- **Two accounts on the same provider.** `providers.<name>.type` separates
+  an entry's name from its implementation, so `torbox` and `torbox-work` can
+  both be `type: torbox` and be configured, defaulted and routed to
+  independently. Previously a provider's name *was* its implementation, so
+  there could only ever be one account per service.
+
 - **`airlocked`, surfacing TorBox AirLock on every download.** TorBox v9
   (2026-07-01) added an `airlocked` boolean to all three `mylist`
   responses; AirLock is its permanent storage, which exempts an item from
@@ -179,6 +207,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **An explicit Managed add could silently stay Manual.** The native API's
+  add endpoints returned an already-tracked download unchanged when the
+  provider deduped to it, ignoring `added_via=arr` — answering "added, and
+  it's Manual" to a request that said Managed, so it was never auto-fetched.
+  The compat shims already claimed the row in that situation
+  (`InsertOrClaimForArr`); the native path now delegates to the same logic,
+  so both agree. Found live: re-adding an already-tracked magnet with
+  `added_via=arr` returned `200` and left the row Manual.
+
+- **The default provider could resolve to one with no credentials.** With
+  more than one provider *type* known, every type is registered whether or
+  not it has a key — the wrapper is the slot a key gets set into — so the
+  registry's "first registered" fallback could land on an unconfigured
+  provider while a configured one sat beside it, and every add would fail
+  against it. The fallback now prefers a configured provider, and only falls
+  back to registration order when nothing is configured at all.
 
 - **A degraded provider could mark downloads as vanished while they were
   still on the account.** Two separate holes, both found during a real

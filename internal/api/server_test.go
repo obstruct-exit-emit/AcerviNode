@@ -3307,3 +3307,43 @@ func TestHandleReAddDownload_GoesBackToItsOwnProvider(t *testing.T) {
 		t.Error("re-add went to the default provider, migrating the download to another account")
 	}
 }
+
+// TestHandleAddTorrent_ManagedAddClaimsAnExistingManualRow is the native-API
+// half of the claim behaviour the compat shims already had. Adding a magnet
+// the provider dedupes to an already-tracked download, with added_via=arr,
+// used to return 200 and leave the row Manual — answering "added, and it's
+// Manual" to a request that explicitly said Managed, so it was never
+// auto-fetched. Found live against a real account.
+func TestHandleAddTorrent_ManagedAddClaimsAnExistingManualRow(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{addID: "dupe-1", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServer(t, provider, nil, nil)
+
+	existing := &database.Download{
+		ID: "dl-existing", Provider: testProviderName, ProviderDownloadID: "dupe-1",
+		Kind: database.KindTorrent, Hash: "h", Name: "Already Here",
+		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+	}
+	if err := db.InsertDownload(ctx, existing); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	req := multipartRequest(t, "/api/v1/downloads/torrent",
+		map[string]string{"magnet": testMagnet, "added_via": "arr", "category": "tv-sonarr"}, "", "", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the row already existed), body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := db.GetDownloadByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.AddedVia != database.AddedViaArr {
+		t.Errorf("added_via = %q, want arr — a Managed add must claim the existing Manual row", got.AddedVia)
+	}
+	if got.Category != "tv-sonarr" {
+		t.Errorf("category = %q, want the one the Managed add asked for", got.Category)
+	}
+}

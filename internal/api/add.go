@@ -662,6 +662,21 @@ func (s *Server) existingOrInsert(ctx context.Context, providerName, providerDow
 		return nil, false, err
 	}
 	if existing != nil {
+		// An explicit Managed add claims a Manual row rather than handing
+		// back the existing one unchanged. Returning it as-is would answer
+		// "added, and it's Manual" to a request that said Managed — the
+		// same silent contradiction the compat shims used to produce before
+		// InsertOrClaimForArr, which this delegates to so both paths agree.
+		// Found live: adding an already-tracked magnet with added_via=arr
+		// returned 200 and left the download Manual, so it was never
+		// auto-fetched.
+		if d.AddedVia == database.AddedViaArr && existing.AddedVia != database.AddedViaArr {
+			claimed, err := s.db.InsertOrClaimForArr(ctx, d)
+			if err != nil {
+				return nil, false, err
+			}
+			return claimed, true, nil
+		}
 		return existing, true, nil
 	}
 	if err := s.db.InsertDownload(ctx, d); err != nil {

@@ -18,6 +18,26 @@ import (
 // provider name (e.g. "torbox") in Config.Providers.
 type ProviderConfig struct {
 	APIKey string `yaml:"api_key"`
+	// Type is which provider implementation this entry uses, when that
+	// differs from the entry's own name. Empty means "same as the name",
+	// which is the normal case and keeps every existing config working
+	// untouched.
+	//
+	// This is what allows two accounts on the same service: entries named
+	// "torbox" and "torbox-work" can both set type "torbox" and be
+	// configured, defaulted and routed to independently. Without it a
+	// provider's name and its implementation were the same string, so there
+	// could only ever be one account per service.
+	Type string `yaml:"type,omitempty"`
+}
+
+// ResolvedType is the provider implementation this entry uses — Type when
+// set, otherwise the entry's own name.
+func (p ProviderConfig) ResolvedType(name string) string {
+	if p.Type != "" {
+		return p.Type
+	}
+	return name
 }
 
 // Config is AcerviNode's full runtime configuration.

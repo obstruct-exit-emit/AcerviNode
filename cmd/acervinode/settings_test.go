@@ -28,9 +28,9 @@ func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
 	}
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
+	torrentDyn := registry.Torrent("torbox")
+	usenetDyn := registry.Usenet("torbox")
+	webDownloadDyn := registry.WebDL("torbox")
 	if settings.ProviderConfigured("torbox") {
 		t.Fatal("TorBoxConfigured() = true before Set, want false")
 	}
@@ -82,7 +82,7 @@ func TestSettingsAPI_SetKeyThenUseShimImmediately(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
+	torrentDyn := registry.Torrent("torbox")
 	handler := buildHandler(db, registry, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -406,9 +406,9 @@ func TestLiveSettings_UpdateGeneral_RebuildsProvidersOnTimeoutChange(t *testing.
 		t.Fatalf("config.Load() error = %v", err)
 	}
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	webDownloadDyn := registry.WebDL(registry.Default())
+	torrentDyn := registry.Torrent("torbox")
+	usenetDyn := registry.Usenet("torbox")
+	webDownloadDyn := registry.WebDL("torbox")
 
 	ctx := context.Background()
 	if err := settings.SetProviderAPIKey(ctx, "torbox", "a-real-looking-key"); err != nil {

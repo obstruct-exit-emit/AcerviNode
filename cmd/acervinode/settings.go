@@ -214,7 +214,9 @@ func (s *liveSettings) SetProviderAPIKey(_ context.Context, name, apiKey string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	construct, known := knownProviders[name]
+	// The entry's *type* decides how to build it, which is not always its
+	// name — two accounts on one service are two entries sharing a type.
+	construct, known := knownProviders[s.cfg.Providers[name].ResolvedType(name)]
 	if !known {
 		return fmt.Errorf("unknown provider %s", name)
 	}
@@ -223,7 +225,7 @@ func (s *liveSettings) SetProviderAPIKey(_ context.Context, name, apiKey string)
 	var usenetProvider debrid.UsenetProvider
 	var webDownloadProvider debrid.WebDownloadProvider
 	if apiKey != "" {
-		torrentProvider, usenetProvider, webDownloadProvider = construct(apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
+		torrentProvider, usenetProvider, webDownloadProvider = construct(name, apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
 	}
 	if t := s.registry.Torrent(name); t != nil {
 		t.Set(torrentProvider)
@@ -484,11 +486,11 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	if requestTimeoutChanged {
 		timeout := time.Duration(candidate.ProviderRequestTimeoutSeconds) * time.Second
 		for name, pc := range s.cfg.Providers {
-			construct, known := knownProviders[name]
+			construct, known := knownProviders[pc.ResolvedType(name)]
 			if !known || pc.APIKey == "" {
 				continue
 			}
-			torrentProvider, usenetProvider, webDownloadProvider := construct(pc.APIKey, timeout)
+			torrentProvider, usenetProvider, webDownloadProvider := construct(name, pc.APIKey, timeout)
 			if t := s.registry.Torrent(name); t != nil {
 				t.Set(torrentProvider)
 			}

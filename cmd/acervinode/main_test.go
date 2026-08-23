@@ -325,11 +325,22 @@ func TestSetupProviders_BuildsRegistryFromConfig(t *testing.T) {
 	}
 	registry, _ := setupProviders(cfg, filepath.Join(t.TempDir(), "config.yaml"))
 
-	if got := registry.Names(); len(got) != 1 || got[0] != "torbox" {
-		t.Errorf("Names() = %v, want [torbox] — an unrecognised name must not register", got)
+	// Every provider type this build knows is registered, configured or
+	// not — the wrapper is the slot a key gets set into. The unrecognised
+	// entry is the one that must not appear.
+	names := registry.Names()
+	if len(names) != len(knownProviders) {
+		t.Errorf("Names() = %v, want one entry per known provider type (%d)", names, len(knownProviders))
 	}
+	for _, n := range names {
+		if n == "nonsense" {
+			t.Errorf("Names() = %v, want no entry for an unrecognised config name", names)
+		}
+	}
+	// torbox is the only one with a key, so it must be the default even
+	// though another provider sorts ahead of it.
 	if registry.Default() != "torbox" {
-		t.Errorf("Default() = %q, want torbox — the only registered provider", registry.Default())
+		t.Errorf("Default() = %q, want torbox — the only *configured* provider", registry.Default())
 	}
 	if p := registry.Torrent("torbox"); p == nil || !p.Configured() {
 		t.Error("torbox's torrent wrapper should be configured from the key in config")
