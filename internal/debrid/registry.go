@@ -121,6 +121,100 @@ func (r *Registry) Default() string {
 	return r.fallback
 }
 
+// DefaultTorrent is the torrent provider a new download goes to: the
+// configured default when it supports torrents, otherwise the first
+// registered provider that does.
+//
+// The fallback matters because "default provider" is one setting across
+// every kind, while providers differ in what they support. Making
+// alldebrid the default would otherwise break usenet outright — its adds
+// would resolve to a provider with no usenet service and fail, even with a
+// usenet-capable provider configured right beside it. Found live doing
+// exactly that.
+func (r *Registry) DefaultTorrent() *DynamicTorrentProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if p, ok := r.torrent[r.fallback]; ok {
+		return p
+	}
+	for _, n := range r.order {
+		if p, ok := r.torrent[n]; ok {
+			return p
+		}
+	}
+	return nil
+}
+
+// DefaultUsenet is DefaultTorrent's usenet counterpart.
+func (r *Registry) DefaultUsenet() *DynamicUsenetProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if p, ok := r.usenet[r.fallback]; ok {
+		return p
+	}
+	for _, n := range r.order {
+		if p, ok := r.usenet[n]; ok {
+			return p
+		}
+	}
+	return nil
+}
+
+// DefaultWebDL is DefaultTorrent's web-download counterpart.
+func (r *Registry) DefaultWebDL() *DynamicWebDownloadProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if p, ok := r.webdl[r.fallback]; ok {
+		return p
+	}
+	for _, n := range r.order {
+		if p, ok := r.webdl[n]; ok {
+			return p
+		}
+	}
+	return nil
+}
+
+// DefaultNameFor is which provider name DefaultTorrent and friends resolve
+// to for a kind — what an add records against the download, so everything
+// afterwards routes back to the same account.
+func (r *Registry) DefaultNameFor(kind Kind) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var has func(string) bool
+	switch kind {
+	case KindTorrent:
+		has = func(n string) bool { _, ok := r.torrent[n]; return ok }
+	case KindUsenet:
+		has = func(n string) bool { _, ok := r.usenet[n]; return ok }
+	case KindWebDL:
+		has = func(n string) bool { _, ok := r.webdl[n]; return ok }
+	default:
+		return ""
+	}
+	if has(r.fallback) {
+		return r.fallback
+	}
+	for _, n := range r.order {
+		if has(n) {
+			return n
+		}
+	}
+	return ""
+}
+
+// Kind is which sort of download a lookup is about. Deliberately declared
+// here rather than taken from internal/database: that package sits above
+// this one, and importing it would invert the layering.
+type Kind string
+
+const (
+	KindTorrent Kind = "torrent"
+	KindUsenet  Kind = "usenet"
+	KindWebDL   Kind = "webdl"
+)
+
 // Names lists every registered provider in registration order.
 func (r *Registry) Names() []string {
 	r.mu.RLock()

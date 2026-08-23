@@ -191,7 +191,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-		items = append(items, toTorrentInfo(d, live[liveKeyFor(d, s.registry.Default())], fetchProgress, hasFetchProgress))
+		items = append(items, toTorrentInfo(d, live[liveKeyFor(d, s.registry.DefaultNameFor(debrid.KindTorrent))], fetchProgress, hasFetchProgress))
 	}
 
 	writeJSON(w, items)
@@ -236,7 +236,7 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 	for _, d := range rows {
 		name := d.Provider
 		if name == "" {
-			name = s.registry.Default()
+			name = s.registry.DefaultNameFor(debrid.KindTorrent)
 		}
 		byProvider[name] = append(byProvider[name], d)
 	}
@@ -305,7 +305,7 @@ func (s *Server) handleProperties(w http.ResponseWriter, r *http.Request) {
 // defaultTorrent is the provider a new torrent goes to, or nil if nothing
 // registered supports torrents.
 func (s *Server) defaultTorrent() *debrid.DynamicTorrentProvider {
-	return s.registry.Torrent(s.registry.Default())
+	return s.registry.DefaultTorrent()
 }
 
 // torrentFor resolves the provider d belongs to, or nil if that provider
@@ -317,7 +317,7 @@ func (s *Server) defaultTorrent() *debrid.DynamicTorrentProvider {
 func (s *Server) torrentFor(d *database.Download) *debrid.DynamicTorrentProvider {
 	name := d.Provider
 	if name == "" {
-		name = s.registry.Default()
+		name = s.registry.DefaultNameFor(debrid.KindTorrent)
 	}
 	p := s.registry.Torrent(name)
 	if p == nil {

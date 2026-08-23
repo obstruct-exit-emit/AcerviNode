@@ -383,17 +383,17 @@ type Server struct {
 // defaultTorrent is the torrent provider a new download goes to, or nil if
 // nothing registered supports torrents.
 func (s *Server) defaultTorrent() *debrid.DynamicTorrentProvider {
-	return s.registry.Torrent(s.registry.Default())
+	return s.registry.DefaultTorrent()
 }
 
 // defaultUsenet is defaultTorrent's usenet counterpart.
 func (s *Server) defaultUsenet() *debrid.DynamicUsenetProvider {
-	return s.registry.Usenet(s.registry.Default())
+	return s.registry.DefaultUsenet()
 }
 
 // defaultWebDL is defaultTorrent's web-download counterpart.
 func (s *Server) defaultWebDL() *debrid.DynamicWebDownloadProvider {
-	return s.registry.WebDL(s.registry.Default())
+	return s.registry.DefaultWebDL()
 }
 
 // NewServer builds the native API server. version is a free-form build

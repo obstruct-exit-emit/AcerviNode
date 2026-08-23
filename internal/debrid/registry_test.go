@@ -71,3 +71,57 @@ func TestRegistry_ReregisteringKeepsPosition(t *testing.T) {
 		t.Error("Torrent(\"a\") did not return the replacement wrapper")
 	}
 }
+
+// TestRegistry_DefaultFallsBackPerKind is the fix for a real failure: the
+// default provider is one setting across every kind, but providers differ
+// in what they support. With a torrent-only provider as the default, usenet
+// resolved to it and every usenet add failed — even with a usenet-capable
+// provider configured right beside it. Found live by making AllDebrid the
+// default and watching SABnzbd break.
+func TestRegistry_DefaultFallsBackPerKind(t *testing.T) {
+	r := NewRegistry()
+	r.Register("full",
+		NewDynamicTorrentProvider("full"),
+		NewDynamicUsenetProvider("full"),
+		NewDynamicWebDownloadProvider("full"))
+	r.Register("torrents-only", NewDynamicTorrentProvider("torrents-only"), nil, nil)
+
+	r.SetDefault("torrents-only")
+
+	// Torrents honour the default.
+	if got := r.DefaultNameFor(KindTorrent); got != "torrents-only" {
+		t.Errorf("DefaultNameFor(torrent) = %q, want torrents-only", got)
+	}
+	if r.DefaultTorrent() == nil {
+		t.Error("DefaultTorrent() = nil")
+	}
+
+	// Usenet and webdl fall back to a provider that can actually do them,
+	// rather than resolving to the default and failing.
+	if got := r.DefaultNameFor(KindUsenet); got != "full" {
+		t.Errorf("DefaultNameFor(usenet) = %q, want full — the default can't do usenet", got)
+	}
+	if r.DefaultUsenet() == nil {
+		t.Error("DefaultUsenet() = nil despite a usenet-capable provider being registered")
+	}
+	if got := r.DefaultNameFor(KindWebDL); got != "full" {
+		t.Errorf("DefaultNameFor(webdl) = %q, want full", got)
+	}
+	if r.DefaultWebDL() == nil {
+		t.Error("DefaultWebDL() = nil despite a webdl-capable provider being registered")
+	}
+}
+
+// With nothing registered for a kind at all, there is genuinely nothing to
+// fall back to and callers need a nil to report "not configured".
+func TestRegistry_DefaultForUnsupportedKindIsNil(t *testing.T) {
+	r := NewRegistry()
+	r.Register("torrents-only", NewDynamicTorrentProvider("torrents-only"), nil, nil)
+
+	if r.DefaultUsenet() != nil {
+		t.Error("DefaultUsenet() non-nil with no usenet provider registered")
+	}
+	if got := r.DefaultNameFor(KindUsenet); got != "" {
+		t.Errorf("DefaultNameFor(usenet) = %q, want empty", got)
+	}
+}

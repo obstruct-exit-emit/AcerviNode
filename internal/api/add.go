@@ -57,7 +57,9 @@ func (s *Server) resolveAddedVia(r *http.Request) (database.AddedVia, error) {
 func (s *Server) resolveAddProvider(r *http.Request, kind database.Kind) (string, error) {
 	name := r.FormValue("provider")
 	if name == "" {
-		name = s.registry.Default()
+		// Per kind, not the bare default: the default provider is one
+		// setting across every kind, and it may not support this one.
+		name = s.registry.DefaultNameFor(debrid.Kind(kind))
 	}
 	if s.providerNamed(name, kind) == nil {
 		return "", fmt.Errorf("no %s-capable provider named %q is configured", kind, name)
@@ -396,7 +398,7 @@ func (s *Server) handleReAddDownload(w http.ResponseWriter, r *http.Request) {
 	// moved accounts, which is not what "retry this download" means.
 	provName := d.Provider
 	if provName == "" {
-		provName = s.registry.Default()
+		provName = s.registry.DefaultNameFor(debrid.Kind(d.Kind))
 	}
 
 	var (
@@ -632,7 +634,7 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) providerFor(d *database.Download) (downloadProvider, error) {
 	name := d.Provider
 	if name == "" {
-		name = s.registry.Default()
+		name = s.registry.DefaultNameFor(debrid.Kind(d.Kind))
 	}
 
 	switch d.Kind {

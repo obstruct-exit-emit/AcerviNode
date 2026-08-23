@@ -31,7 +31,7 @@ type settingsSource interface {
 // defaultUsenet is the provider a new download goes to, or nil if nothing
 // registered supports usenet.
 func (s *Server) defaultUsenet() *debrid.DynamicUsenetProvider {
-	return s.registry.Usenet(s.registry.Default())
+	return s.registry.DefaultUsenet()
 }
 
 // usenetFor resolves the provider d belongs to, or nil if that provider
@@ -43,7 +43,7 @@ func (s *Server) defaultUsenet() *debrid.DynamicUsenetProvider {
 func (s *Server) usenetFor(d *database.Download) *debrid.DynamicUsenetProvider {
 	name := d.Provider
 	if name == "" {
-		name = s.registry.Default()
+		name = s.registry.DefaultNameFor(debrid.KindUsenet)
 	}
 	p := s.registry.Usenet(name)
 	if p == nil {

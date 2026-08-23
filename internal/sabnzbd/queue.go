@@ -45,7 +45,7 @@ func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Downl
 	for _, d := range rows {
 		name := d.Provider
 		if name == "" {
-			name = s.registry.Default()
+			name = s.registry.DefaultNameFor(debrid.KindUsenet)
 		}
 		byProvider[name] = append(byProvider[name], d)
 	}
@@ -134,7 +134,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		switch d.State {
 		case database.StateQueued, database.StateDownloading, database.StateProviderCompleted:
 			fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-			k := liveKeyFor(d, s.registry.Default())
+			k := liveKeyFor(d, s.registry.DefaultNameFor(debrid.KindUsenet))
 			slots = append(slots, toQueueSlot(d, eta[k], phase[k], fetchProgress, hasFetchProgress))
 		}
 	}

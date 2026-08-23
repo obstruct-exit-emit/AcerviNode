@@ -208,6 +208,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A torrent-only default provider broke usenet and web downloads
+  entirely.** "Default provider" is one setting across every kind, but
+  providers differ in what they support — so making AllDebrid the default
+  resolved *usenet* adds to it too, and they failed with "no usenet-capable
+  provider configured" while TorBox sat configured right beside it. Both
+  compat shims and the native add endpoints were affected; from Sonarr's
+  side it looked like usenet had simply stopped working. The default is now
+  resolved per kind (`Registry.DefaultNameFor`): the configured default when
+  it supports that kind, otherwise the first registered provider that does.
+  Found live by setting AllDebrid as the default and watching SABnzbd break.
+
 - **An explicit Managed add could silently stay Manual.** The native API's
   add endpoints returned an already-tracked download unchanged when the
   provider deduped to it, ignoring `added_via=arr` — answering "added, and
