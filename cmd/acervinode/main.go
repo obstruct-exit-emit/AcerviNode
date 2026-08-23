@@ -72,13 +72,6 @@ func run(ctx context.Context) error {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	// internal/importer still takes one provider per kind; wiring the
-	// registry through it is the next increment. With a single provider
-	// these are the same objects the rest of the app reaches through it.
-	defaultProvider := registry.Default()
-	torrentDyn := registry.Torrent(defaultProvider)
-	usenetDyn := registry.Usenet(defaultProvider)
-	webDownloadDyn := registry.WebDL(defaultProvider)
 	settings.SetLevelVar(levelVar)
 	// One-time only (see SeedDefaultCategoriesOnce's own doc comment) —
 	// must run before buildHandler/SetShimServers below, so whatever this
@@ -92,7 +85,10 @@ func run(ctx context.Context) error {
 	// means the settings API's restart endpoint needs no shutdown plumbing
 	// of its own; it just reuses the select below.
 	settings.SetRestartTrigger(stop)
-	slog.Info("torbox provider", "configured", torrentDyn.Configured())
+	for _, name := range registry.Names() {
+		t := registry.Torrent(name)
+		slog.Info("provider", "name", name, "configured", t != nil && t.Configured())
+	}
 	// Logged so a config.yaml without an explicit api_key is still usable —
 	// otherwise a randomly generated key (see internal/config) would be
 	// invisible to whoever needs to type it into Sonarr. Set api_key
@@ -105,8 +101,7 @@ func run(ctx context.Context) error {
 	// local disk so *arr apps' import step has real files to find. Shares
 	// the same dynamic provider instances as everything else above.
 	importInterval := time.Duration(cfg.ImportIntervalSeconds) * time.Second
-	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
-	imp.SetWebDownloadProvider(webDownloadDyn)
+	imp := importer.New(db, registry, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
 	settings.SetImporter(imp)
 	go imp.Run(ctx)
 

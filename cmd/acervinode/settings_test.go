@@ -290,15 +290,13 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
 
 	levelVar := new(slog.LevelVar)
 	levelVar.Set(slog.LevelInfo)
 	settings.SetLevelVar(levelVar)
 
 	newDownloadDir := t.TempDir()
-	imp := importer.New(db, torrentDyn, usenetDyn, "old-download-dir", time.Minute, 5)
+	imp := importer.New(db, registry, "old-download-dir", time.Minute, 5)
 	settings.SetImporter(imp)
 
 	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
@@ -808,9 +806,7 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 	defer db.Close()
 
 	registry, settings := setupProviders(cfg, configPath)
-	torrentDyn := registry.Torrent(registry.Default())
-	usenetDyn := registry.Usenet(registry.Default())
-	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, time.Minute, 5)
+	imp := importer.New(db, registry, cfg.DownloadDir, time.Minute, 5)
 	settings.SetImporter(imp)
 
 	ctx := context.Background()

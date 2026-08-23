@@ -155,7 +155,7 @@ func TestTick_DownloadsFilesAndMarksReadyForImport(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -220,7 +220,7 @@ func TestTick_MinFileSizeFiltersSmallFiles(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFileFilters(int64(len(fileContents["1"]))+1, 0, nil, nil) // between the two file sizes
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -280,7 +280,7 @@ func TestTick_MaxFileSizeFiltersLargeFiles(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFileFilters(0, int64(len(fileContents["1"]))+1, nil, nil) // between the two file sizes
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -336,7 +336,7 @@ func TestTick_IncludeExcludeRegexFilterFiles(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFileFilters(0, 0, regexp.MustCompile(`\.mkv$`), regexp.MustCompile(`sample`))
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -377,7 +377,7 @@ func TestTick_AllFilesFilteredOutStillReachesReadyForImport(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFileFilters(0, 0, regexp.MustCompile(`\.mkv$`), nil) // matches nothing here
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -417,7 +417,7 @@ func TestTick_UsesDownloadDirWhenNoSavePath(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, nil, provider, downloadDir, time.Minute, 5)
+	im := New(db, testRegistry(nil, provider), downloadDir, time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -488,7 +488,7 @@ func TestRemoveLocalFiles_RemovesResolvedDestDir(t *testing.T) {
 		t.Fatalf("precondition: file should exist before removal: %v", err)
 	}
 
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 	if err := im.RemoveLocalFiles(d); err != nil {
 		t.Fatalf("RemoveLocalFiles() error = %v", err)
 	}
@@ -514,7 +514,7 @@ func TestRemoveLocalFiles_RefusesWhenNameEmpty(t *testing.T) {
 		ID: "dl-noname", Provider: "faketorbox", ProviderDownloadID: "dl-noname", Kind: database.KindTorrent,
 		Name: "", Category: "", State: database.StateReadyForImport, AddedVia: database.AddedViaArr,
 	}
-	im := New(db, &fakeProvider{}, nil, categoryDir, time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), categoryDir, time.Minute, 5)
 
 	if err := im.RemoveLocalFiles(d); err == nil {
 		t.Error("RemoveLocalFiles() error = nil, want a refusal for an empty Name")
@@ -535,7 +535,7 @@ func TestCleanupOldDownloads_DisabledByDefault(t *testing.T) {
 	old := seedReadyForImportDownload(t, db, "old-1", "Old.Movie", time.Now().UTC().AddDate(0, 0, -30), destDir)
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -581,7 +581,7 @@ func TestCleanupOldDownloads_RemovesOldReadyForImportDownload(t *testing.T) {
 	}
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetCleanupAfterDays(7)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -651,7 +651,7 @@ func TestCleanupOldDownloads_EmptyNameSkipsFileRemovalOnly(t *testing.T) {
 	}
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetCleanupAfterDays(7)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -682,7 +682,7 @@ func TestCleanupOldDownloads_ProviderDeleteFailureStillCleansUpLocally(t *testin
 	old := seedReadyForImportDownload(t, db, "old-1", "Old.Movie", time.Now().UTC().AddDate(0, 0, -30), destDir)
 
 	provider := &fakeProvider{deleteErr: errors.New("torbox: DATABASE_ERROR (status 500)")}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetCleanupAfterDays(7)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -727,7 +727,7 @@ func TestCheckStuckDownloads_DisabledByDefault(t *testing.T) {
 	}
 	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().Add(-24*time.Hour))
 
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 	im.checkStuckDownloads(ctx)
 
 	got, err := db.GetDownloadByID(ctx, d.ID)
@@ -756,7 +756,7 @@ func TestCheckStuckDownloads_MarksStuckDownloadAsError(t *testing.T) {
 	}
 	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().Add(-2*time.Hour))
 
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 	im.SetStuckDownloadTimeout(time.Hour)
 	im.checkStuckDownloads(ctx)
 
@@ -789,7 +789,7 @@ func TestCheckStuckDownloads_LeavesRecentlyUpdatedDownloadAlone(t *testing.T) {
 	}
 	// updated_at defaults to "now" at insert time — well within the timeout.
 
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 	im.SetStuckDownloadTimeout(time.Hour)
 	im.checkStuckDownloads(ctx)
 
@@ -831,7 +831,7 @@ func TestCheckStuckDownloads_IgnoresStatesOutsideQueuedOrDownloading(t *testing.
 		backdateUpdatedAt(t, db, d.ID, old)
 	}
 
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 	im.SetStuckDownloadTimeout(time.Hour)
 	im.checkStuckDownloads(ctx)
 
@@ -870,7 +870,7 @@ func TestCleanupErroredDownloads_DisabledByDefault(t *testing.T) {
 	backdateUpdatedAt(t, db, d.ID, time.Now().UTC().AddDate(0, 0, -30))
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.cleanupErroredDownloads(ctx)
 
 	got, err := db.GetDownloadByID(ctx, d.ID)
@@ -923,7 +923,7 @@ func TestCleanupErroredDownloads_RemovesOldErroredDownload(t *testing.T) {
 	backdateUpdatedAt(t, db, manual.ID, time.Now().UTC().AddDate(0, 0, -10))
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetCleanupErrorAfterDays(3)
 	im.cleanupErroredDownloads(ctx)
 
@@ -978,7 +978,7 @@ func TestTick_SkipsAlreadyDownloadedFiles(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1016,7 +1016,7 @@ func TestTick_LeavesRowForRetryOnFailure(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	before := time.Now().UTC()
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -1055,7 +1055,7 @@ func TestHandleFailure_BackoffGrowsWithEachAttempt(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, nil, nil, t.TempDir(), 10*time.Second, 10)
+	im := New(db, testRegistry(nil, nil), t.TempDir(), 10*time.Second, 10)
 
 	var previousWait time.Duration
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -1097,7 +1097,7 @@ func TestHandleFailure_GivesUpAfterMaxRetries(t *testing.T) {
 	}
 
 	const maxRetries = 3
-	im := New(db, nil, nil, t.TempDir(), time.Millisecond, maxRetries)
+	im := New(db, testRegistry(nil, nil), t.TempDir(), time.Millisecond, maxRetries)
 
 	for i := 1; i <= maxRetries; i++ {
 		im.handleFailure(ctx, d, errors.New("simulated failure"))
@@ -1141,7 +1141,7 @@ func TestTick_DoesNotRetryBeforeNextRetryAt(t *testing.T) {
 		t.Fatalf("UpdateDownloadRetry() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1176,7 +1176,7 @@ func TestTick_RejectsPathTraversal(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1229,7 +1229,7 @@ func TestTick_ProactivelyRefreshesAndFetchesWithinOneTick(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1270,7 +1270,7 @@ func TestTick_RefreshDoesNotRegressReadyForImport(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1295,7 +1295,7 @@ func TestTick_CallsListEvenWhenNothingTracked(t *testing.T) {
 	db := openTestDB(t)
 
 	provider := &fakeProvider{}
-	im := New(db, provider, provider, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, provider), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1315,9 +1315,9 @@ func TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls(t *testing.T) {
 	db := openTestDB(t)
 
 	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, provider, false)
 	if provider.listCalls.Load() != 1 {
 		t.Fatalf("List() called %d times, want 1", provider.listCalls.Load())
 	}
@@ -1331,7 +1331,7 @@ func TestRefreshKind_RateLimit_SetsCooldownAndSkipsFurtherCalls(t *testing.T) {
 
 	// A second refreshKind call while still cooling must not call List()
 	// again at all.
-	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, provider, false)
 	if provider.listCalls.Load() != 1 {
 		t.Errorf("List() called %d times after a second refreshKind during cooldown, want still 1", provider.listCalls.Load())
 	}
@@ -1347,10 +1347,10 @@ func TestRefreshKind_RateLimit_ScopedPerKind(t *testing.T) {
 
 	torrentProvider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
 	usenetProvider := &fakeProvider{}
-	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(torrentProvider, usenetProvider), t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, torrentProvider, false)
-	im.refreshKind(ctx, database.KindUsenet, usenetProvider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, torrentProvider, false)
+	im.refreshKind(ctx, database.KindUsenet, fakeProviderName, usenetProvider, false)
 
 	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
 		t.Error("expected torrent kind to be cooling")
@@ -1369,9 +1369,9 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	db := openTestDB(t)
 
 	provider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list: %w", debrid.ErrRateLimited)}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
-	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, provider, false)
 	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
 		t.Fatal("expected torrent kind to be cooling after the rate-limited call")
 	}
@@ -1381,8 +1381,8 @@ func TestRefreshKind_RateLimit_ClearsOnSuccess(t *testing.T) {
 	// refreshKind would (rather than waiting out rateLimitBackoffBase in a
 	// unit test) — refreshKind's own cooldown check would otherwise skip
 	// the List() call entirely and never reach clearRateLimitHit.
-	im.clearRateLimitHit(database.KindTorrent)
-	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	im.clearRateLimitHit(providerKind{provider: fakeProviderName, kind: database.KindTorrent})
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, provider, false)
 
 	if provider.listCalls.Load() != 2 {
 		t.Errorf("List() called %d times, want 2 (cooldown cleared, so the second refreshKind actually called List)", provider.listCalls.Load())
@@ -1399,7 +1399,7 @@ func TestLastTickAt_UnsetBeforeFirstTick_SetOnTick(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
 	if _, ok := im.LastTickAt(); ok {
 		t.Fatal("expected no LastTickAt before Tick has ever run")
@@ -1429,14 +1429,14 @@ func TestLastSuccessfulListAt_SetOnSuccessOnly(t *testing.T) {
 
 	torrentProvider := &fakeProvider{}
 	usenetProvider := &fakeProvider{listErr: fmt.Errorf("faketorbox: list failed")}
-	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(torrentProvider, usenetProvider), t.TempDir(), time.Minute, 5)
 
 	if _, ok := im.LastSuccessfulListAt(database.KindTorrent); ok {
 		t.Fatal("expected no LastSuccessfulListAt before any List() call")
 	}
 
-	im.refreshKind(ctx, database.KindTorrent, torrentProvider, false)
-	im.refreshKind(ctx, database.KindUsenet, usenetProvider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, torrentProvider, false)
+	im.refreshKind(ctx, database.KindUsenet, fakeProviderName, usenetProvider, false)
 
 	if _, ok := im.LastSuccessfulListAt(database.KindTorrent); !ok {
 		t.Error("expected LastSuccessfulListAt to be set for torrent after a successful List()")
@@ -1452,7 +1452,7 @@ func TestLastSuccessfulListAt_SetOnSuccessOnly(t *testing.T) {
 func TestErrorCounts_ReflectsPersistedErrorRows(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 
 	errored := &database.Download{
 		ID: "errored", Provider: "faketorbox", ProviderDownloadID: "errored-id",
@@ -1511,9 +1511,9 @@ func TestRefreshActiveKind_OnlyChecksActiveManagedDownloads(t *testing.T) {
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "managed-id", Name: "Managed.Release", State: debrid.StateCompleted},
 	}}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
-	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+	im.refreshActiveKind(ctx, database.KindTorrent, fakeProviderName, provider)
 
 	if provider.statusCalls.Load() != 1 {
 		t.Errorf("Status() called %d times, want exactly 1 (only the active Managed row)", provider.statusCalls.Load())
@@ -1549,9 +1549,9 @@ func TestRefreshActiveKind_RateLimit_SetsCooldownSharedWithBulkPath(t *testing.T
 	}
 
 	provider := &fakeProvider{statusErr: fmt.Errorf("faketorbox: status: %w", debrid.ErrRateLimited)}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
-	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+	im.refreshActiveKind(ctx, database.KindTorrent, fakeProviderName, provider)
 	if _, cooling := im.RateLimitCooldownUntil(database.KindTorrent); !cooling {
 		t.Fatal("expected torrent kind to be cooling after a rate-limited Status() call")
 	}
@@ -1559,7 +1559,7 @@ func TestRefreshActiveKind_RateLimit_SetsCooldownSharedWithBulkPath(t *testing.T
 	// The bulk path must see (and respect) the same cooldown state — it
 	// should skip calling List() entirely rather than tripping the rate
 	// limit a second time.
-	im.refreshKind(ctx, database.KindTorrent, provider, false)
+	im.refreshKind(ctx, database.KindTorrent, fakeProviderName, provider, false)
 	if provider.listCalls.Load() != 0 {
 		t.Errorf("List() called %d times, want 0 — bulk path should have skipped due to the fast path's cooldown", provider.listCalls.Load())
 	}
@@ -1582,10 +1582,10 @@ func TestRefreshActiveKind_SkipsWhenCooling(t *testing.T) {
 	}
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
-	im.recordRateLimitHit(database.KindTorrent)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
+	im.recordRateLimitHit(providerKind{provider: fakeProviderName, kind: database.KindTorrent})
 
-	im.refreshActiveKind(ctx, database.KindTorrent, provider)
+	im.refreshActiveKind(ctx, database.KindTorrent, fakeProviderName, provider)
 	if provider.statusCalls.Load() != 0 {
 		t.Errorf("Status() called %d times, want 0 — already cooling down", provider.statusCalls.Load())
 	}
@@ -1630,7 +1630,7 @@ func TestDiscoverManual_SeedsEvenWithNothingUntrackedYet(t *testing.T) {
 	db := openTestDB(t)
 
 	provider := &fakeProvider{} // nothing tracked, nothing at the provider either
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() 1 error = %v", err)
 	}
@@ -1677,7 +1677,7 @@ func TestDiscoverManual_FreshInstall_AdoptsPreExistingItemsImmediately(t *testin
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
 	}}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1729,7 +1729,7 @@ func TestDiscoverManual_FreshInstall_AppliesConsistentlyAcrossKindsInSameTick(t 
 	usenetProvider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "pre-existing-usenet", Name: "Pre-existing Usenet", State: debrid.StateCompleted},
 	}}
-	im := New(db, torrentProvider, usenetProvider, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(torrentProvider, usenetProvider), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1787,7 +1787,7 @@ func TestDiscoverManual_EstablishedInstance_FirstRunSeedsBaselineWithoutAdopting
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
 	}}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -1833,7 +1833,7 @@ func TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded(t *testing.T) {
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "already-in-torbox-1", Name: "Pre-existing Torrent", State: debrid.StateCompleted, SizeBytes: 123},
 	}}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
 		t.Fatalf("Tick() 1 error = %v", err)
 	}
@@ -1897,7 +1897,7 @@ func TestDiscoverManual_SetsSourceFromOriginalURL(t *testing.T) {
 	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
 		{ID: "already-tracked-1", Name: "Pre-existing", State: debrid.StateCompleted},
 	}}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	// Primes discovery for this provider+kind (fresh install, so this also
 	// adopts already-tracked-1 — irrelevant here, only tick 2's own
 	// additions are checked below).
@@ -1942,7 +1942,7 @@ func TestDiscoverManual_SkipsRecentlyDeletedDownload(t *testing.T) {
 	db := openTestDB(t)
 
 	provider := &fakeProvider{}
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil { // seeds the (empty) baseline
 		t.Fatalf("Tick() 1 error = %v", err)
 	}
@@ -1993,7 +1993,7 @@ func TestTick_NeverAutoFetchesManualDownloads(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -2028,7 +2028,7 @@ func TestTick_ToleratesNoProviderConfiguredDuringRefresh(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v, want nil even when the provider isn't configured yet", err)
 	}
@@ -2036,7 +2036,7 @@ func TestTick_ToleratesNoProviderConfiguredDuringRefresh(t *testing.T) {
 
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	db := openTestDB(t)
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Hour, 5) // long interval — we only care that cancel stops it
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Hour, 5) // long interval — we only care that cancel stops it
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -2075,7 +2075,7 @@ func TestRun_FastPollRunsIndependentlyOfBulkInterval(t *testing.T) {
 	// A bulk interval much longer than fastPollIntervalDefault — if runFastPoll
 	// weren't wired in at all, statusCalls would still be 0 well after
 	// fastPollIntervalDefault has elapsed.
-	im := New(db, provider, nil, t.TempDir(), time.Hour, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Hour, 5)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -2120,7 +2120,7 @@ func TestSetConfig_DownloadDirAppliesLive(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
 	newDownloadDir := t.TempDir()
 	im.SetConfig(newDownloadDir, time.Minute, 5)
@@ -2163,7 +2163,7 @@ func TestSetCategoryPaths_OverridesDownloadDir(t *testing.T) {
 
 	downloadDir := t.TempDir()
 	moviesOverride := t.TempDir()
-	im := New(db, provider, nil, downloadDir, time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), downloadDir, time.Minute, 5)
 	im.SetCategoryPaths(map[string]string{"movies": moviesOverride})
 
 	if err := im.Tick(ctx); err != nil {
@@ -2222,7 +2222,7 @@ func TestTick_RespectsMaxConcurrent(t *testing.T) {
 		}
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetMaxConcurrent(2)
 	if got := im.MaxConcurrent(); got != 2 {
 		t.Fatalf("MaxConcurrent() = %d, want 2", got)
@@ -2289,7 +2289,7 @@ func TestFetchFile_TimesOutOnSlowTransfer(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFetchTimeout(50 * time.Millisecond)
 	if got := im.FetchTimeout(); got != 50*time.Millisecond {
 		t.Fatalf("FetchTimeout() = %v, want 50ms", got)
@@ -2351,7 +2351,7 @@ func TestCancelFetch_StopsInFlightFetch(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFetchTimeout(time.Minute)
 
 	tickDone := make(chan error, 1)
@@ -2392,7 +2392,7 @@ func TestCancelFetch_StopsInFlightFetch(t *testing.T) {
 // blocking or panicking.
 func TestCancelFetch_NoOpWhenNothingActive(t *testing.T) {
 	db := openTestDB(t)
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 
 	done := make(chan struct{})
 	go func() {
@@ -2445,7 +2445,7 @@ func TestProcessDownload_SkipsIfAlreadyActivelyFetching(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	im.SetFetchTimeout(time.Minute)
 
 	go im.processDownload(ctx, d)
@@ -2506,7 +2506,7 @@ func TestFetchFile_SucceedsWithSlowButActiveTransfer(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	// Comfortably longer than any single gap between chunks (chunkDelay),
 	// but shorter than the whole transfer (numChunks*chunkDelay) — the
 	// point of this test.
@@ -2573,7 +2573,7 @@ func TestProcessDownload_MakesDestinationDirectoryWorldWritable(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.processDownload(ctx, d); err != nil {
 		t.Fatalf("processDownload() error = %v", err)
 	}
@@ -2631,7 +2631,7 @@ func TestProcessDownload_ReportsLiveFetchProgress(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 
 	done := make(chan error, 1)
 	go func() { done <- im.processDownload(ctx, d) }()
@@ -2681,7 +2681,7 @@ func TestSetConfig_MaxRetriesAppliesLive(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, nil, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(nil, nil), t.TempDir(), time.Minute, 5)
 	im.SetConfig(t.TempDir(), time.Minute, 1) // lower maxRetries to 1: the very next failure should give up
 
 	im.handleFailure(ctx, d, errors.New("simulated failure"))
@@ -2722,7 +2722,7 @@ func TestSetConfig_ResetsTickerInterval(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Hour, 5) // old interval: would never fire in this test's timeout
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Hour, 5) // old interval: would never fire in this test's timeout
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2765,7 +2765,7 @@ func TestSetFastPollInterval_ResetsTicker(t *testing.T) {
 	// enough that neither would fire within this test's timeout on their
 	// own — only the SetFastPollInterval reset below should make
 	// statusCalls move.
-	im := New(db, provider, nil, t.TempDir(), time.Hour, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Hour, 5)
 	im.SetFastPollInterval(time.Hour)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -2815,7 +2815,7 @@ func TestSetDirMode_AppliesLive(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if got := im.DirMode(); got != 0o777 {
 		t.Fatalf("DirMode() before SetDirMode = %o, want default 0777", got)
 	}
@@ -2837,15 +2837,13 @@ func TestSetDirMode_AppliesLive(t *testing.T) {
 	}
 }
 
-// TestSetWebDownloadProvider_NilSkipsWebDLKindEntirely proves refreshKind's
-// nil check applies to the web-download provider exactly like it already
-// does for torrentProvider/usenetProvider — no provider set yet means Tick
-// doesn't touch KindWebDL at all (nothing to List against, nothing to
-// discover), rather than erroring.
-func TestSetWebDownloadProvider_NilSkipsWebDLKindEntirely(t *testing.T) {
+// TestUnregisteredWebDLProviderIsSkippedEntirely proves a kind with no
+// provider registered for it is simply not polled — nothing to List
+// against, nothing to discover — rather than erroring.
+func TestUnregisteredWebDLProviderIsSkippedEntirely(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(&fakeProvider{}, nil), t.TempDir(), time.Minute, 5)
 
 	if err := im.Tick(ctx); err != nil {
 		t.Fatalf("Tick() error = %v", err)
@@ -2860,19 +2858,18 @@ func TestSetWebDownloadProvider_NilSkipsWebDLKindEntirely(t *testing.T) {
 	}
 }
 
-// TestSetWebDownloadProvider_DiscoversManualWebDownloads proves
-// SetWebDownloadProvider wires a web-download-capable provider into
-// refreshStatuses' third refreshKind call — a hoster link that shows up in
-// the provider's List() after the baseline is seeded gets adopted as a
-// KindWebDL/AddedViaManual download, the same discovery flow already proven
-// for torrent/usenet in TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded.
-func TestSetWebDownloadProvider_DiscoversManualWebDownloads(t *testing.T) {
+// TestRegisteredWebDLProviderDiscoversManualWebDownloads proves a
+// web-download-capable provider registered for that kind is polled like any
+// other — a hoster link that shows up in its List() after the baseline is
+// seeded gets adopted as a KindWebDL/AddedViaManual download, the same
+// discovery flow already proven for torrent/usenet in
+// TestDiscoverManual_AdoptsItemsThatAppearAfterBaselineSeeded.
+func TestRegisteredWebDLProviderDiscoversManualWebDownloads(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
 	provider := &fakeProvider{}
-	im := New(db, &fakeProvider{}, nil, t.TempDir(), time.Minute, 5)
-	im.SetWebDownloadProvider(provider)
+	im := New(db, testRegistryNamed(fakeProviderName, &fakeProvider{}, nil, provider), t.TempDir(), time.Minute, 5)
 
 	if err := im.Tick(ctx); err != nil { // seeds the baseline, adopts nothing
 		t.Fatalf("Tick() 1 error = %v", err)
@@ -2920,7 +2917,7 @@ func TestProcessDownload_RefusesAnotherProvidersDownload(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	im := New(db, provider, nil, t.TempDir(), time.Minute, 5)
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
 	if err := im.processDownload(ctx, d); err == nil {
 		t.Fatal("processDownload() error = nil, want a refusal for a download belonging to another provider")
 	}
@@ -2934,5 +2931,126 @@ func TestProcessDownload_RefusesAnotherProvidersDownload(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("save path has %d entries, want 0 — nothing should have been fetched", len(entries))
+	}
+}
+
+// --- provider-interface stubs -------------------------------------------
+//
+// The importer only ever needs List/Status/Files/RequestDownloadLink/Delete
+// from a provider, which is all this fake used to implement. Now that
+// providers are reached through debrid.Registry, whose wrappers hold a full
+// debrid.TorrentProvider/UsenetProvider/WebDownloadProvider, the fake has
+// to satisfy those interfaces too. None of these are exercised by the
+// importer — they exist so the fake can be registered at all.
+
+func (f *fakeProvider) AddMagnet(context.Context, string, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	return "", errors.New("fakeProvider: AddMagnet not implemented")
+}
+
+func (f *fakeProvider) AddTorrentFile(context.Context, string, []byte, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	return "", errors.New("fakeProvider: AddTorrentFile not implemented")
+}
+
+func (f *fakeProvider) AddNZBFile(context.Context, string, []byte, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	return "", errors.New("fakeProvider: AddNZBFile not implemented")
+}
+
+func (f *fakeProvider) AddNZBURL(context.Context, string, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	return "", errors.New("fakeProvider: AddNZBURL not implemented")
+}
+
+func (f *fakeProvider) AddLink(context.Context, string, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	return "", errors.New("fakeProvider: AddLink not implemented")
+}
+
+func (f *fakeProvider) RequestZipDownloadLink(context.Context, debrid.ProviderDownloadID) (string, error) {
+	return "", errors.New("fakeProvider: RequestZipDownloadLink not implemented")
+}
+
+func (f *fakeProvider) CheckCached(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+// testRegistry wraps whichever fakes a test supplies in the registry the
+// importer now resolves through. A nil fake registers no wrapper for that
+// kind, which is how "no provider configured" is expressed.
+func testRegistry(torrent, usenet *fakeProvider) *debrid.Registry {
+	return testRegistryNamed(fakeProviderName, torrent, usenet, nil)
+}
+
+// fakeProviderName is the name the fakes register under, matching what
+// fakeProvider.Name reports so a download attributed to it resolves.
+const fakeProviderName = "faketorbox"
+
+func testRegistryNamed(name string, torrent, usenet, webdl *fakeProvider) *debrid.Registry {
+	r := debrid.NewRegistry()
+	var (
+		td *debrid.DynamicTorrentProvider
+		ud *debrid.DynamicUsenetProvider
+		wd *debrid.DynamicWebDownloadProvider
+	)
+	if torrent != nil {
+		td = debrid.NewDynamicTorrentProvider(name)
+		td.Set(torrent)
+	}
+	if usenet != nil {
+		ud = debrid.NewDynamicUsenetProvider(name)
+		ud.Set(usenet)
+	}
+	if webdl != nil {
+		wd = debrid.NewDynamicWebDownloadProvider(name)
+		wd.Set(webdl)
+	}
+	r.Register(name, td, ud, wd)
+	return r
+}
+
+// TestRefreshStatuses_RateLimitIsPerProvider is the point of keying backoff
+// state by provider *and* kind. Rate limits are enforced per account, so one
+// provider being limited must not stop another from being polled — sharing a
+// single per-kind key would reintroduce exactly the app-wide freeze the
+// backoff exists to survive, just spread across providers instead of kinds.
+func TestRefreshStatuses_RateLimitIsPerProvider(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	limited := &fakeProvider{listErr: fmt.Errorf("slow down: %w", debrid.ErrRateLimited)}
+	healthy := &fakeProvider{}
+
+	registry := debrid.NewRegistry()
+	limitedDyn := debrid.NewDynamicTorrentProvider("limited")
+	limitedDyn.Set(limited)
+	healthyDyn := debrid.NewDynamicTorrentProvider("healthy")
+	healthyDyn.Set(healthy)
+	registry.Register("limited", limitedDyn, nil, nil)
+	registry.Register("healthy", healthyDyn, nil, nil)
+
+	im := New(db, registry, t.TempDir(), time.Minute, 5)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+
+	// The limited provider is now in cooldown; the healthy one must not be.
+	if _, cooling := im.rateLimitCooldown(providerKind{provider: "limited", kind: database.KindTorrent}); !cooling {
+		t.Error("the rate-limited provider is not in cooldown")
+	}
+	if until, cooling := im.rateLimitCooldown(providerKind{provider: "healthy", kind: database.KindTorrent}); cooling {
+		t.Errorf("the healthy provider was put in cooldown until %v by another provider's rate limit", until)
+	}
+
+	// And it kept polling: a second tick still reaches it, so a new item
+	// shows up rather than the whole kind being frozen.
+	healthy.statuses = append(healthy.statuses, debrid.DownloadStatus{
+		ID: "healthy-1", Name: "Still Polling", Hash: "HH", State: debrid.StateCompleted, SizeBytes: 1024,
+	})
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].Provider != "healthy" {
+		t.Errorf("rows = %+v, want the healthy provider's item adopted despite the other being limited", rows)
 	}
 }

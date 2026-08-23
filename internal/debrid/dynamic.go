@@ -116,6 +116,12 @@ func (d *DynamicTorrentProvider) ListCached(ctx context.Context) ([]DownloadStat
 	return d.listCache.List(ctx, d.List)
 }
 
+// ListFresh is ListCached without reading the cache — it always fetches,
+// and stores the result for everyone else. See ListCache.Refresh.
+func (d *DynamicTorrentProvider) ListFresh(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.Refresh(ctx, d.List)
+}
+
 // SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.
 func (d *DynamicTorrentProvider) SetListCacheTTL(ttl time.Duration) {
 	d.listCache.SetTTL(ttl)
@@ -277,6 +283,12 @@ func (d *DynamicUsenetProvider) ListCached(ctx context.Context) ([]DownloadStatu
 	return d.listCache.List(ctx, d.List)
 }
 
+// ListFresh is ListCached without reading the cache — it always fetches,
+// and stores the result for everyone else. See ListCache.Refresh.
+func (d *DynamicUsenetProvider) ListFresh(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.Refresh(ctx, d.List)
+}
+
 // SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.
 func (d *DynamicUsenetProvider) SetListCacheTTL(ttl time.Duration) {
 	d.listCache.SetTTL(ttl)
@@ -397,6 +409,12 @@ func (d *DynamicWebDownloadProvider) List(ctx context.Context) ([]DownloadStatus
 // the fetch timestamp this returns.
 func (d *DynamicWebDownloadProvider) ListCached(ctx context.Context) ([]DownloadStatus, time.Time, error) {
 	return d.listCache.List(ctx, d.List)
+}
+
+// ListFresh is ListCached without reading the cache — it always fetches,
+// and stores the result for everyone else. See ListCache.Refresh.
+func (d *DynamicWebDownloadProvider) ListFresh(ctx context.Context) ([]DownloadStatus, time.Time, error) {
+	return d.listCache.Refresh(ctx, d.List)
 }
 
 // SetListCacheTTL retunes the shared cache — see ListCache.SetTTL.

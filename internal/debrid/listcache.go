@@ -90,6 +90,29 @@ func (c *ListCache) SetTTL(d time.Duration) {
 // starting another one. A failed fetch is never cached: fetchedAt is left
 // untouched so the next caller retries immediately rather than being served
 // an error for the rest of the TTL.
+// Refresh always calls fetch and stores the result, then returns it — for
+// the one caller that must not read its own cache: internal/importer's bulk
+// poll, which is what actually drives state transitions. Since the TTL is
+// the poll interval, letting that poll reuse a cached listing would mean a
+// tick could act on data fetched a whole interval ago, effectively halving
+// the poll rate it was configured for.
+//
+// The result still populates the cache, so this is what the shims' cheap
+// reads are served from: one authoritative fetch per interval, shared by
+// everyone else, rather than the importer competing with them for it.
+func (c *ListCache) Refresh(ctx context.Context, fetch func(context.Context) ([]DownloadStatus, error)) ([]DownloadStatus, time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	startedAt := time.Now()
+	statuses, err := fetch(ctx)
+	if err != nil {
+		return nil, startedAt, err
+	}
+	c.fetchedAt, c.statuses = startedAt, statuses
+	return statuses, startedAt, nil
+}
+
 func (c *ListCache) List(ctx context.Context, fetch func(context.Context) ([]DownloadStatus, error)) ([]DownloadStatus, time.Time, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

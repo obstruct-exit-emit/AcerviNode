@@ -55,16 +55,19 @@ type provider interface {
 // reason to know about caching) still satisfies the interface — such a
 // caller just fetches directly, exactly as before.
 type listCachedProvider interface {
-	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
+	ListFresh(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
 	SetListCacheTTL(ttl time.Duration)
 }
 
-// listWithCache prefers p's shared cache when it has one, falling back to a
-// direct fetch. The returned time is when the underlying call started — see
-// ListCached, and database.RefreshFromProvider's ordering guard.
+// listWithCache fetches through p's shared listing cache when it has one,
+// so the result is shared with everything else holding that provider —
+// deliberately via ListFresh, which always fetches: this poll is what drives
+// state transitions and must not read data it cached an interval ago. The
+// returned time is when the underlying call started — see
+// database.RefreshFromProvider's ordering guard.
 func listWithCache(ctx context.Context, p provider) ([]debrid.DownloadStatus, time.Time, error) {
 	if lc, ok := p.(listCachedProvider); ok {
-		return lc.ListCached(ctx)
+		return lc.ListFresh(ctx)
 	}
 	fetchedAt := time.Now()
 	statuses, err := p.List(ctx)
@@ -80,10 +83,13 @@ const maxBackoff = time.Hour
 // Importer periodically refreshes every tracked download's status from its
 // provider and fetches provider_completed downloads' files to local disk.
 type Importer struct {
-	db              *database.DB
-	torrentProvider provider // nil if no torrent-capable provider is configured
-	usenetProvider  provider // nil if no usenet-capable provider is configured
-	httpClient      *http.Client
+	db *database.DB
+	// registry is every configured provider. Polling walks it per kind, so
+	// a second provider is picked up without any further wiring; anything
+	// acting on a specific download resolves that download's own provider
+	// through it (see providerFor).
+	registry   *debrid.Registry
+	httpClient *http.Client
 
 	// mu guards downloadDir/interval/maxRetries/categoryPaths/maxConcurrent/
 	// fetchTimeout/webDownloadProvider/cleanupAfterDays/dirMode/
@@ -95,17 +101,16 @@ type Importer struct {
 	// SetCleanupErrorAfterDays can change live (see cmd/acervinode's
 	// liveSettings) — everything else on Importer is set once at
 	// construction and never mutated afterward.
-	mu                  sync.Mutex
-	downloadDir         string
-	interval            time.Duration // also the backoff base: attempt N waits ~interval*2^N
-	maxRetries          int
-	categoryPaths       map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
-	maxConcurrent       int               // how many downloads Tick fetches to disk at once
-	fetchTimeout        time.Duration     // per-file fetch deadline — see fetchFile
-	cleanupAfterDays    int               // 0 disables the retention/cleanup policy — see cleanupOldDownloads
-	webDownloadProvider provider          // nil if no web-download-capable provider is configured — see SetWebDownloadProvider
-	dirMode             os.FileMode       // permission mode every download directory is created with — see ensureWritableDir
-	fastPollInterval    time.Duration     // see fastPollIntervalDefault's own doc comment
+	mu               sync.Mutex
+	downloadDir      string
+	interval         time.Duration // also the backoff base: attempt N waits ~interval*2^N
+	maxRetries       int
+	categoryPaths    map[string]string // category name -> override dir, replacing downloadDir/<category> for that category
+	maxConcurrent    int               // how many downloads Tick fetches to disk at once
+	fetchTimeout     time.Duration     // per-file fetch deadline — see fetchFile
+	cleanupAfterDays int               // 0 disables the retention/cleanup policy — see cleanupOldDownloads
+	dirMode          os.FileMode       // permission mode every download directory is created with — see ensureWritableDir
+	fastPollInterval time.Duration     // see fastPollIntervalDefault's own doc comment
 
 	// minFetchFileSizeBytes/maxFetchFileSizeBytes/includeFileRegex/
 	// excludeFileRegex back the per-file filtering policy — see
@@ -139,8 +144,12 @@ type Importer struct {
 	// (a restart just means starting the cooldown clock over, which is
 	// fine — the provider's rate limit itself is what actually governs
 	// this, not AcerviNode's memory of it).
-	rateLimitMu    sync.Mutex
-	rateLimitState map[database.Kind]*kindBackoff
+	rateLimitMu sync.Mutex
+	// Keyed per provider *and* kind: rate limits are enforced per account,
+	// so one provider being limited must not stall polling for another.
+	// Sharing a single per-kind key would reintroduce exactly the freeze
+	// this backoff exists to survive, just spread across providers.
+	rateLimitState map[providerKind]*kindBackoff
 
 	// statsMu guards tickAt/successfulListAt — passive health-signal
 	// bookkeeping for GET /api/v1/status (see LastTickAt/
@@ -150,7 +159,7 @@ type Importer struct {
 	// tick/list, which is fine for a liveness signal.
 	statsMu          sync.Mutex
 	tickAt           time.Time
-	successfulListAt map[database.Kind]time.Time
+	successfulListAt map[providerKind]time.Time
 
 	// activeFetchesMu guards activeFetches — one entry per download
 	// currently inside processDownload, keyed by download id. Two jobs:
@@ -185,6 +194,14 @@ type activeFetch struct {
 
 // kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
 // see refreshKind.
+// providerKind identifies one provider's handling of one kind — the unit
+// both rate-limit backoff and list-success bookkeeping are tracked against,
+// since a provider is limited (or healthy) per account, not globally.
+type providerKind struct {
+	provider string
+	kind     database.Kind
+}
+
 type kindBackoff struct {
 	nextAttempt     time.Time
 	consecutiveHits int
@@ -253,12 +270,10 @@ const ensureWritableDirModeDefault = os.FileMode(0o777)
 // SetMaxConcurrent/SetFetchTimeout, which cmd/acervinode's liveSettings
 // applies right after construction to match the configured values (mirroring
 // how it already does for category paths — see SetCategoryPaths).
-func New(db *database.DB, torrentProvider provider, usenetProvider provider, downloadDir string, interval time.Duration, maxRetries int) *Importer {
-	setListCacheTTL(interval, torrentProvider, usenetProvider)
-	return &Importer{
+func New(db *database.DB, registry *debrid.Registry, downloadDir string, interval time.Duration, maxRetries int) *Importer {
+	im := &Importer{
 		db:                      db,
-		torrentProvider:         torrentProvider,
-		usenetProvider:          usenetProvider,
+		registry:                registry,
 		downloadDir:             downloadDir,
 		interval:                interval,
 		maxRetries:              maxRetries,
@@ -270,19 +285,29 @@ func New(db *database.DB, torrentProvider provider, usenetProvider provider, dow
 		httpClient:              &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
 		intervalChanged:         make(chan time.Duration, 1),
 		fastPollIntervalChanged: make(chan time.Duration, 1),
-		rateLimitState:          map[database.Kind]*kindBackoff{},
-		successfulListAt:        map[database.Kind]time.Time{},
+		rateLimitState:          map[providerKind]*kindBackoff{},
+		successfulListAt:        map[providerKind]time.Time{},
 		activeFetches:           map[string]*activeFetch{},
 	}
+	im.applyListCacheTTL(interval)
+	return im
 }
 
-// setListCacheTTL points every provider that has a shared listing cache at
-// ttl, skipping any that doesn't (see listCachedProvider) and any that
-// isn't configured yet.
-func setListCacheTTL(ttl time.Duration, providers ...provider) {
-	for _, p := range providers {
-		if lc, ok := p.(listCachedProvider); ok {
-			lc.SetListCacheTTL(ttl)
+// applyListCacheTTL points every registered provider's shared listing cache
+// at ttl — see debrid.ListCache and SetConfig.
+func (im *Importer) applyListCacheTTL(ttl time.Duration) {
+	if im.registry == nil {
+		return
+	}
+	for _, name := range im.registry.Names() {
+		if p := im.registry.Torrent(name); p != nil {
+			p.SetListCacheTTL(ttl)
+		}
+		if p := im.registry.Usenet(name); p != nil {
+			p.SetListCacheTTL(ttl)
+		}
+		if p := im.registry.WebDL(name); p != nil {
+			p.SetListCacheTTL(ttl)
 		}
 	}
 }
@@ -305,10 +330,7 @@ func (im *Importer) SetConfig(downloadDir string, interval time.Duration, maxRet
 	// The shared listing cache's lifetime tracks this interval: it's already
 	// the user's answer to how often the provider should be asked, and a
 	// shim request has no reason to answer it differently.
-	im.mu.Lock()
-	providers := []provider{im.torrentProvider, im.usenetProvider, im.webDownloadProvider}
-	im.mu.Unlock()
-	setListCacheTTL(interval, providers...)
+	im.applyListCacheTTL(interval)
 
 	select {
 	case im.intervalChanged <- interval:
@@ -361,30 +383,6 @@ func (im *Importer) CategoryPaths() map[string]string {
 		out[k] = v
 	}
 	return out
-}
-
-// SetWebDownloadProvider sets (or, with nil, clears) the web-download-
-// capable provider — a post-construction setter rather than a New() param
-// like torrentProvider/usenetProvider, deliberately: this capability was
-// added later, and every existing caller of New() (every test in this
-// package included) would otherwise need a third provider argument they
-// don't care about. cmd/acervinode calls this once during startup wiring,
-// the same timing as SetCategoryPaths/SetImporter. A nil provider here just
-// means refreshKind skips it, same as torrentProvider/usenetProvider being
-// nil already does.
-func (im *Importer) SetWebDownloadProvider(p provider) {
-	im.mu.Lock()
-	im.webDownloadProvider = p
-	interval := im.interval
-	im.mu.Unlock()
-	// Attached after New, so it misses the TTL set there.
-	setListCacheTTL(interval, p)
-}
-
-func (im *Importer) getWebDownloadProvider() provider {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	return im.webDownloadProvider
 }
 
 // SetMaxConcurrent updates how many provider_completed downloads Tick fetches
@@ -725,23 +723,49 @@ func (im *Importer) refreshStatuses(ctx context.Context) {
 		freshInstall = !hasAny
 	}
 
-	im.refreshKind(ctx, database.KindTorrent, im.torrentProvider, freshInstall)
-	im.refreshKind(ctx, database.KindUsenet, im.usenetProvider, freshInstall)
+	im.eachProvider(func(kind database.Kind, name string, p provider) {
+		im.refreshKind(ctx, kind, name, p, freshInstall)
+	})
+}
+
+// eachProvider calls fn for every registered provider that supports each
+// kind, in the registry's stable order. Kinds are walked in a fixed order
+// so a tick's behaviour doesn't depend on map iteration — see discoverManual
+// on why ordering between kinds is observable at all.
+func (im *Importer) eachProvider(fn func(kind database.Kind, name string, p provider)) {
+	if im.registry == nil {
+		return
+	}
+	for _, name := range im.registry.TorrentNames() {
+		if p := im.registry.Torrent(name); p != nil {
+			fn(database.KindTorrent, name, p)
+		}
+	}
+	for _, name := range im.registry.UsenetNames() {
+		if p := im.registry.Usenet(name); p != nil {
+			fn(database.KindUsenet, name, p)
+		}
+	}
 	// Every webdl row is always AddedViaManual (no *arr-facing shim exists
 	// for it — see database.KindWebDL), but discovery/status-refresh still
 	// applies the same way it does for a discovered Manual torrent/usenet
 	// download: this is what makes a hoster link added directly through
 	// TorBox's own site show up here too, not just links added through
 	// AcerviNode's own "+ Add" form.
-	im.refreshKind(ctx, database.KindWebDL, im.getWebDownloadProvider(), freshInstall)
+	for _, name := range im.registry.WebDLNames() {
+		if p := im.registry.WebDL(name); p != nil {
+			fn(database.KindWebDL, name, p)
+		}
+	}
 }
 
-func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provider, freshInstall bool) {
+func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name string, p provider, freshInstall bool) {
 	if p == nil {
 		return
 	}
-	if until, cooling := im.rateLimitCooldown(kind); cooling {
-		slog.Warn("importer: skipping provider list, still in rate-limit cooldown", "kind", kind, "until", until)
+	pk := providerKind{provider: name, kind: kind}
+	if until, cooling := im.rateLimitCooldown(pk); cooling {
+		slog.Warn("importer: skipping provider list, still in rate-limit cooldown", "provider", name, "kind", kind, "until", until)
 		return
 	}
 	// The provider listing is fetched first and the local snapshot read
@@ -760,8 +784,8 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 	statuses, fetchedAt, err := listWithCache(ctx, p)
 	if err != nil {
 		if errors.Is(err, debrid.ErrRateLimited) {
-			until := im.recordRateLimitHit(kind)
-			slog.Error("importer: provider rate limited, backing off", "kind", kind, "until", until, "error", err)
+			until := im.recordRateLimitHit(pk)
+			slog.Error("importer: provider rate limited, backing off", "provider", name, "kind", kind, "until", until, "error", err)
 			return
 		}
 		// Not yet configured is routine (e.g. no TorBox key set yet) and
@@ -772,9 +796,9 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 		}
 		return
 	}
-	im.clearRateLimitHit(kind)
+	im.clearRateLimitHit(pk)
 	im.statsMu.Lock()
-	im.successfulListAt[kind] = fetchedAt
+	im.successfulListAt[pk] = fetchedAt
 	im.statsMu.Unlock()
 
 	rows, err := im.db.ListDownloads(ctx, kind)
@@ -791,9 +815,9 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, p provi
 // download's status directly via a targeted per-ID lookup instead of relying
 // solely on the next bulk refreshStatuses tick — see fastPollInterval.
 func (im *Importer) refreshActiveDownloads(ctx context.Context) {
-	im.refreshActiveKind(ctx, database.KindTorrent, im.torrentProvider)
-	im.refreshActiveKind(ctx, database.KindUsenet, im.usenetProvider)
-	im.refreshActiveKind(ctx, database.KindWebDL, im.getWebDownloadProvider())
+	im.eachProvider(func(kind database.Kind, name string, p provider) {
+		im.refreshActiveKind(ctx, kind, name, p)
+	})
 }
 
 // refreshActiveKind is refreshActiveDownloads' per-kind worker. It shares
@@ -805,11 +829,12 @@ func (im *Importer) refreshActiveDownloads(ctx context.Context) {
 // state-transition/backfill logic the bulk path already uses, just fed one
 // row and one status instead of a whole account's worth, so there's no second
 // implementation of that logic to keep in sync.
-func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p provider) {
+func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, name string, p provider) {
 	if p == nil {
 		return
 	}
-	if _, cooling := im.rateLimitCooldown(kind); cooling {
+	pk := providerKind{provider: name, kind: kind}
+	if _, cooling := im.rateLimitCooldown(pk); cooling {
 		return
 	}
 	rows, err := im.db.ListActiveManagedDownloads(ctx, kind)
@@ -818,12 +843,17 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p
 		return
 	}
 	for _, d := range rows {
+		// Only this provider's own rows: another provider's download of the
+		// same kind is polled on its own pass, against its own account.
+		if d.Provider != "" && d.Provider != name {
+			continue
+		}
 		fetchedAt := time.Now()
 		st, err := p.Status(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID))
 		if err != nil {
 			if errors.Is(err, debrid.ErrRateLimited) {
-				until := im.recordRateLimitHit(kind)
-				slog.Error("importer: provider rate limited, backing off", "kind", kind, "until", until, "error", err)
+				until := im.recordRateLimitHit(pk)
+				slog.Error("importer: provider rate limited, backing off", "provider", name, "kind", kind, "until", until, "error", err)
 				return
 			}
 			// A single lookup miss/transient error here isn't worth logging
@@ -834,17 +864,17 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, p
 			// covers.
 			continue
 		}
-		im.clearRateLimitHit(kind)
+		im.clearRateLimitHit(pk)
 		im.db.RefreshFromProvider(ctx, []*database.Download{d}, []debrid.DownloadStatus{st}, fetchedAt)
 	}
 }
 
 // rateLimitCooldown reports whether kind is still within a backoff window
 // set by a previous recordRateLimitHit — see refreshKind, the only caller.
-func (im *Importer) rateLimitCooldown(kind database.Kind) (time.Time, bool) {
+func (im *Importer) rateLimitCooldown(pk providerKind) (time.Time, bool) {
 	im.rateLimitMu.Lock()
 	defer im.rateLimitMu.Unlock()
-	state, ok := im.rateLimitState[kind]
+	state, ok := im.rateLimitState[pk]
 	if !ok || !time.Now().Before(state.nextAttempt) {
 		return time.Time{}, false
 	}
@@ -854,13 +884,13 @@ func (im *Importer) rateLimitCooldown(kind database.Kind) (time.Time, bool) {
 // recordRateLimitHit advances kind's consecutive-hit count and schedules its
 // next allowed attempt with exponential backoff (rateLimitBackoffBase *
 // 2^hits, capped at rateLimitBackoffMax) — see refreshKind, the only caller.
-func (im *Importer) recordRateLimitHit(kind database.Kind) time.Time {
+func (im *Importer) recordRateLimitHit(pk providerKind) time.Time {
 	im.rateLimitMu.Lock()
 	defer im.rateLimitMu.Unlock()
-	state, ok := im.rateLimitState[kind]
+	state, ok := im.rateLimitState[pk]
 	if !ok {
 		state = &kindBackoff{}
-		im.rateLimitState[kind] = state
+		im.rateLimitState[pk] = state
 	}
 	state.consecutiveHits++
 	state.nextAttempt = time.Now().Add(rateLimitBackoffDuration(state.consecutiveHits))
@@ -870,18 +900,35 @@ func (im *Importer) recordRateLimitHit(kind database.Kind) time.Time {
 // clearRateLimitHit drops kind's backoff state entirely once a List() call
 // succeeds — the next rate limit (if any) starts counting from scratch
 // rather than continuing to grow from wherever it last left off.
-func (im *Importer) clearRateLimitHit(kind database.Kind) {
+func (im *Importer) clearRateLimitHit(pk providerKind) {
 	im.rateLimitMu.Lock()
 	defer im.rateLimitMu.Unlock()
-	delete(im.rateLimitState, kind)
+	delete(im.rateLimitState, pk)
 }
 
 // RateLimitCooldownUntil is the exported counterpart of rateLimitCooldown —
 // originally added for tests confirming a rate-limit hit actually set a
 // cooldown, now also read for real by GET /api/v1/status (see
 // cmd/acervinode's liveSettings.Status).
+// Aggregated across providers: reports the furthest-out cooldown for kind,
+// so "is anything of this kind currently paused" keeps its existing meaning
+// for callers (the status endpoint and the UI's rate-limit banner) now that
+// the state underneath is per provider.
 func (im *Importer) RateLimitCooldownUntil(kind database.Kind) (time.Time, bool) {
-	return im.rateLimitCooldown(kind)
+	im.rateLimitMu.Lock()
+	defer im.rateLimitMu.Unlock()
+
+	var latest time.Time
+	now := time.Now()
+	for pk, state := range im.rateLimitState {
+		if pk.kind != kind || !now.Before(state.nextAttempt) {
+			continue
+		}
+		if state.nextAttempt.After(latest) {
+			latest = state.nextAttempt
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 // LastTickAt reports when Tick last ran, regardless of what it found once
@@ -901,11 +948,20 @@ func (im *Importer) LastTickAt() (time.Time, bool) {
 // LastSuccessfulListAt reports when kind's provider last answered a bulk
 // List() call without erroring — see refreshKind. false if it never has
 // (including if no provider is configured for kind at all).
+// Aggregated across providers: the most recent success for kind, so this
+// keeps answering "is polling for this kind working at all" as it did
+// before the state underneath became per provider.
 func (im *Importer) LastSuccessfulListAt(kind database.Kind) (time.Time, bool) {
 	im.statsMu.Lock()
 	defer im.statsMu.Unlock()
-	t, ok := im.successfulListAt[kind]
-	return t, ok
+
+	var latest time.Time
+	for pk, t := range im.successfulListAt {
+		if pk.kind == kind && t.After(latest) {
+			latest = t
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 // ErrorCounts reports how many downloads currently sit in StateError, keyed
@@ -1134,16 +1190,35 @@ func (im *Importer) backoff(attempt int) time.Duration {
 // are inherently per-kind (refreshStatuses, refreshActiveDownloads).
 // Anything acting on a *specific* download must use providerFor instead.
 func (im *Importer) providerForKind(kind database.Kind) provider {
-	switch kind {
-	case database.KindTorrent:
-		return im.torrentProvider
-	case database.KindUsenet:
-		return im.usenetProvider
-	case database.KindWebDL:
-		return im.getWebDownloadProvider()
-	default:
+	if im.registry == nil {
 		return nil
 	}
+	return im.providerNamed(im.registry.Default(), kind)
+}
+
+// providerNamed resolves one provider's handling of one kind, or nil if
+// that provider isn't registered or doesn't support the kind. Returns the
+// concrete wrapper as the local provider interface, and is careful to
+// return a genuinely nil interface rather than one holding a nil pointer.
+func (im *Importer) providerNamed(name string, kind database.Kind) provider {
+	if im.registry == nil {
+		return nil
+	}
+	switch kind {
+	case database.KindTorrent:
+		if p := im.registry.Torrent(name); p != nil {
+			return p
+		}
+	case database.KindUsenet:
+		if p := im.registry.Usenet(name); p != nil {
+			return p
+		}
+	case database.KindWebDL:
+		if p := im.registry.WebDL(name); p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
 // providerFor returns the provider d actually belongs to, or nil if that
@@ -1158,14 +1233,16 @@ func (im *Importer) providerForKind(kind database.Kind) provider {
 // after the key has been swapped for a different account. Fetching it would
 // otherwise ask the new account for an id it has never heard of.
 func (im *Importer) providerFor(d *database.Download) provider {
-	p := im.providerForKind(d.Kind)
-	if p == nil {
-		return nil
+	name := d.Provider
+	if name == "" {
+		// Older rows predate the column being populated; the default is the
+		// only sensible guess and matches the pre-registry behaviour.
+		name = im.registry.Default()
 	}
-	if d.Provider != "" && p.Name() != d.Provider {
-		slog.Warn("importer: skipping provider call, download belongs to a different provider",
-			"id", d.ID, "download_provider", d.Provider, "configured_provider", p.Name())
-		return nil
+	p := im.providerNamed(name, d.Kind)
+	if p == nil {
+		slog.Warn("importer: no provider available for download",
+			"id", d.ID, "download_provider", d.Provider, "resolved_name", name, "kind", d.Kind)
 	}
 	return p
 }
