@@ -24,10 +24,12 @@
 package alldebrid
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -117,6 +119,41 @@ type envelope struct {
 	} `json:"error"`
 }
 
+// doUpload performs one multipart file upload and decodes data into out —
+// the only request shape `do` can't express, since AllDebrid's .torrent
+// endpoint takes a real file part rather than a form field.
+func (c *Client) doUpload(ctx context.Context, path, fieldName, filename string, data []byte, out any) error {
+	if c.apiKey == "" {
+		return debrid.ErrNoProvider
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile(fieldName, filename)
+	if err != nil {
+		return fmt.Errorf("alldebrid upload: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("alldebrid upload: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("alldebrid upload: %w", err)
+	}
+
+	// agent goes in the query string here: it is a normal request
+	// parameter, and putting it in the multipart body alongside the file
+	// would be a second place to get it wrong.
+	endpoint := c.baseURL + path + "?agent=" + url.QueryEscape(agent)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return fmt.Errorf("alldebrid upload request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	return c.send(req, out)
+}
+
 // do performs one request and decodes data into out.
 //
 // form is sent as an application/x-www-form-urlencoded body for POST, or as
@@ -148,6 +185,12 @@ func (c *Client) do(ctx context.Context, method, path string, form url.Values, o
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
+	return c.send(req, out)
+}
+
+// send performs req and decodes the envelope into out — shared by do and
+// doUpload so both get identical error handling.
+func (c *Client) send(req *http.Request, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("alldebrid request: %w", err)

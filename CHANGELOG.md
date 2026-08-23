@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **AllDebrid is now feature-complete for what the service actually
+  supports**, rather than torrent-only:
+  - **`.torrent` file uploads** (`/v4/magnet/upload/file`). Previously
+    refused with "use a magnet link", on the reasoning that the endpoint
+    couldn't be exercised without real torrent files. It can, and now is.
+    One trap worth recording: this endpoint returns its results under
+    `files`, not the `magnets` every other magnet endpoint uses, so
+    decoding the usual key yields nothing and an add silently looks empty.
+    Confirmed against the live API.
+  - **Hoster links** (web downloads), via `/v4/link/unlock` plus the saved
+    links list. AllDebrid's model is unlike a service that tracks a
+    downloadable object: unlocking is synchronous, so an added link is born
+    complete. Saving it to `/v4/user/links` is what gives it a durable
+    presence the poller can enumerate, look up and delete.
+
+  **AllDebrid rewrites links when it saves them** — a Mega link submitted as
+  `mega.nz/file/ID#KEY` comes back from the listing as
+  `mega.co.nz/#!ID!KEY`. Nothing in AllDebrid's documentation mentions this,
+  and it is load-bearing: using the submitted link as the download's
+  provider id would mean no later listing ever matched it, so every web
+  download would look like it had vanished from the account moments after
+  being added, and vanished-download detection would eventually flag them
+  all as gone. `AddLink` matches back to the stored form by filename and
+  size instead. Found live, and covered by a regression test.
+
+  Usenet remains unsupported because AllDebrid has no usenet service at all,
+  and zipped downloads because it has no endpoint that bundles links — both
+  register nothing rather than erroring at call time, so AllDebrid simply
+  never appears for a kind it can't do.
+
 - **A warning when two providers are configured with the same credentials.**
   Multiple entries exist so several *different* accounts can be used at
   once; pointing two at one account instead makes both discover everything

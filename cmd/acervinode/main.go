@@ -244,12 +244,14 @@ func newTorBoxProviders(_, apiKey string, requestTimeout time.Duration) (debrid.
 	return torbox.NewProvider(apiKey, opt), torbox.NewUsenetProvider(apiKey, opt), torbox.NewWebDownloadProvider(apiKey, opt)
 }
 
-// newAllDebridProviders builds AllDebrid's torrent provider. Usenet and web
-// downloads are nil: AllDebrid has no usenet service at all, and its hoster
-// debriding is a synchronous unlock with nothing to track — see
-// internal/debrid/alldebrid's package comment.
+// newAllDebridProviders builds AllDebrid's torrent and web-download
+// providers. Usenet is nil: AllDebrid has no usenet service at all, so it
+// registers no wrapper for that kind rather than one that always errors —
+// see debrid.Registry.
 func newAllDebridProviders(name, apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider) {
-	return alldebrid.NewProvider(name, apiKey, alldebrid.WithRequestTimeout(requestTimeout)), nil, nil
+	return alldebrid.NewProvider(name, apiKey, alldebrid.WithRequestTimeout(requestTimeout)),
+		nil,
+		alldebrid.NewWebDownloadProvider(name, apiKey, alldebrid.WithRequestTimeout(requestTimeout))
 }
 
 // providerConstructor builds one provider's three per-kind implementations
@@ -283,12 +285,12 @@ type providerCapabilities struct {
 // beside knownProviders so adding a service means touching one place.
 var knownProviderCapabilities = map[string]providerCapabilities{
 	"torbox": {torrent: true, usenet: true, webdl: true},
-	// AllDebrid is torrent-only here. It does debrid hoster links, but
-	// through a synchronous unlock with no pollable object behind it —
-	// there is no "web download" to track the way AcerviNode's model
-	// expects, and inventing that lifecycle locally would be guesswork.
-	// See internal/debrid/alldebrid.
-	"alldebrid": {torrent: true},
+	// AllDebrid has no usenet service at all, so it registers no usenet
+	// wrapper and simply never appears for that kind — see debrid.Registry.
+	// Its hoster-link support is real but works differently from a service
+	// that tracks a web download object; see
+	// internal/debrid/alldebrid.WebDownloadProvider for how that maps.
+	"alldebrid": {torrent: true, webdl: true},
 }
 
 // providerIdentity is what makes two config entries the same account: the

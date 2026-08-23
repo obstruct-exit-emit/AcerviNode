@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -350,5 +352,73 @@ func TestStatus_MissingMagnetIsAnError(t *testing.T) {
 	})
 	if _, err := p.Status(context.Background(), "nope"); err == nil {
 		t.Error("Status() error = nil for a magnet that isn't on the account")
+	}
+}
+
+// TestAddTorrentFile covers the endpoint's one real trap: it returns its
+// results under "files", not the "magnets" every other magnet endpoint
+// uses. Decoding the wrong key yields no entries and an add that silently
+// looks empty rather than failing.
+func TestAddTorrentFile(t *testing.T) {
+	var gotPath, gotContentType, gotFilename string
+	var gotFileBody []byte
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		if err := r.ParseMultipartForm(1 << 20); err == nil {
+			if fh := r.MultipartForm.File["files[]"]; len(fh) > 0 {
+				gotFilename = fh[0].Filename
+				f, _ := fh[0].Open()
+				gotFileBody, _ = io.ReadAll(f)
+				f.Close()
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"files": []map[string]any{
+					{"id": 703365472, "hash": "dd8255ec", "name": "Big Buck Bunny", "size": 276445467, "ready": true},
+				},
+			},
+		})
+	})
+
+	id, err := p.AddTorrentFile(context.Background(), "bbb.torrent", []byte("d8:announce..."), debrid.AddOptions{})
+	if err != nil {
+		t.Fatalf("AddTorrentFile() error = %v", err)
+	}
+	if id != "703365472" {
+		t.Errorf("id = %q, want 703365472", id)
+	}
+	if gotPath != "/v4/magnet/upload/file" {
+		t.Errorf("path = %q, want /v4/magnet/upload/file", gotPath)
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data") {
+		t.Errorf("Content-Type = %q, want multipart/form-data", gotContentType)
+	}
+	if gotFilename != "bbb.torrent" {
+		t.Errorf("uploaded filename = %q, want bbb.torrent", gotFilename)
+	}
+	if string(gotFileBody) != "d8:announce..." {
+		t.Errorf("uploaded body = %q, want the .torrent bytes", gotFileBody)
+	}
+}
+
+// A per-file error rides inside a successful envelope, since the endpoint
+// takes a batch — an unsuccessful add is not an unsuccessful request.
+func TestAddTorrentFile_PerFileErrorIsReported(t *testing.T) {
+	p := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"files": []map[string]any{
+					{"error": map[string]any{"code": "MAGNET_INVALID_FILE", "message": "not a torrent"}},
+				},
+			},
+		})
+	})
+
+	if _, err := p.AddTorrentFile(context.Background(), "bad.torrent", []byte("nope"), debrid.AddOptions{}); err == nil {
+		t.Fatal("AddTorrentFile() error = nil, want the per-file error surfaced")
 	}
 }

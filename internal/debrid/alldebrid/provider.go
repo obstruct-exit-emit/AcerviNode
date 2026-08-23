@@ -84,16 +84,33 @@ func (p *Provider) AddMagnet(ctx context.Context, magnetURI string, _ debrid.Add
 	return debrid.ProviderDownloadID(strconv.FormatInt(out.Magnets[0].ID, 10)), nil
 }
 
-// AddTorrentFile uploads a .torrent file.
+// AddTorrentFile uploads a .torrent file to /v4/magnet/upload/file.
 //
-// AllDebrid's own upload endpoint takes multipart file uploads, but every
-// .torrent reduces to a magnet by infohash and AcerviNode already
-// reconstructs magnets that way elsewhere (see torbox.magnetFromHash).
-// Rather than carry a second upload path that can't be exercised without
-// real torrent files, this is deliberately unsupported: internal/api's add
-// endpoint surfaces the error, and the magnet path covers the same ground.
-func (p *Provider) AddTorrentFile(context.Context, string, []byte, debrid.AddOptions) (debrid.ProviderDownloadID, error) {
-	return "", fmt.Errorf("alldebrid: adding a .torrent file is not supported, use a magnet link")
+// Note the response key: this endpoint returns its results under "files",
+// not the "magnets" every other magnet endpoint uses, even though the
+// entries themselves are the same shape. Confirmed against the live API —
+// decoding "magnets" here silently yields nothing.
+//
+// AllDebrid dedupes by content, so uploading a .torrent for something the
+// account already holds returns that existing magnet's id rather than a new
+// one — the same behaviour TorBox has, and what database.InsertOrClaimForArr
+// exists to absorb.
+func (p *Provider) AddTorrentFile(ctx context.Context, filename string, data []byte, _ debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	var out struct {
+		Files []uploadedMagnet `json:"files"`
+	}
+	if err := p.client.doUpload(ctx, "/v4/magnet/upload/file", "files[]", filename, data, &out); err != nil {
+		return "", fmt.Errorf("alldebrid: add torrent file: %w", err)
+	}
+	if len(out.Files) == 0 {
+		return "", fmt.Errorf("alldebrid: add torrent file: no magnet in response")
+	}
+	// Per-file errors ride inside a successful envelope, since the endpoint
+	// accepts a batch — an unsuccessful add is not an unsuccessful request.
+	if e := out.Files[0].Error; e != nil {
+		return "", fmt.Errorf("alldebrid: add torrent file: %w", &APIError{Code: e.Code, Message: e.Message})
+	}
+	return debrid.ProviderDownloadID(strconv.FormatInt(out.Files[0].ID, 10)), nil
 }
 
 // List returns every magnet on the account.
