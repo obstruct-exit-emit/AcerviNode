@@ -108,6 +108,28 @@ func (db *DB) HasAnyDownloads(ctx context.Context) (bool, error) {
 // this only ever blocks re-adopting the exact same now-defunct id.
 const recentlyDeletedGracePeriod = 5 * time.Minute
 
+// unconfirmedDeleteGracePeriod is the tombstone lifetime when the
+// provider-side delete did *not* succeed. The reasoning above — that a
+// short window suffices because the id is genuinely gone — only holds if
+// that call worked. handleDeleteDownload treats it as best-effort and drops
+// the local row either way (a provider outage or rate limit must never
+// leave a row the user can't remove), so on failure the item really is
+// still on the account, and a short window doesn't prevent the ghost it
+// exists to prevent — it just delays it until the window lapses.
+//
+// Confirmed live rather than reasoned about: two downloads were deleted
+// while the account happened to be rate-limited, both provider deletes
+// returned 429, and both reappeared as ghost Manual downloads once the
+// five minutes were up — including one that had been Managed, which came
+// back in the Manual tab.
+//
+// 30 days is deliberately longer than TorBox's own retention window, so an
+// orphan left behind this way ages out of the account on its own before the
+// tombstone lapses. Safe to err long for the same reason the comment above
+// gives: a provider_download_id is never reused for a fresh add, so this
+// only ever suppresses re-adopting the one defunct id.
+const unconfirmedDeleteGracePeriod = 30 * 24 * time.Hour
+
 // RecordDeletedDownload tombstones a just-deleted download so
 // internal/importer's discoverManual doesn't immediately re-adopt it as a
 // "new" discovery if the provider's own listing endpoints haven't caught up
@@ -116,17 +138,26 @@ const recentlyDeletedGracePeriod = 5 * time.Minute
 // older than recentlyDeletedGracePeriod on every call rather than needing a
 // separate cleanup job — this table is small and write-infrequent, so a
 // delete-then-insert on every real deletion is cheap.
-func (db *DB) RecordDeletedDownload(ctx context.Context, provider string, kind Kind, providerDownloadID string) error {
+// providerConfirmed reports whether the provider-side delete actually
+// succeeded, which decides how long the tombstone lives — see
+// unconfirmedDeleteGracePeriod.
+func (db *DB) RecordDeletedDownload(ctx context.Context, provider string, kind Kind, providerDownloadID string, providerConfirmed bool) error {
+	now := time.Now().UTC()
+	grace := recentlyDeletedGracePeriod
+	if !providerConfirmed {
+		grace = unconfirmedDeleteGracePeriod
+	}
+	// Prunes on expiry rather than age: each tombstone now carries its own
+	// lifetime, so a fixed age cutoff would drop long-lived ones early.
 	if _, err := db.ExecContext(ctx,
-		`DELETE FROM deleted_downloads WHERE deleted_at < ?`,
-		time.Now().UTC().Add(-recentlyDeletedGracePeriod),
+		`DELETE FROM deleted_downloads WHERE expires_at < ?`, now,
 	); err != nil {
 		return fmt.Errorf("prune old deleted-download tombstones: %w", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO deleted_downloads (provider, kind, provider_download_id, deleted_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (provider, kind, provider_download_id) DO UPDATE SET deleted_at = excluded.deleted_at`,
-		provider, string(kind), providerDownloadID, time.Now().UTC(),
+		`INSERT INTO deleted_downloads (provider, kind, provider_download_id, deleted_at, expires_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (provider, kind, provider_download_id) DO UPDATE SET deleted_at = excluded.deleted_at, expires_at = excluded.expires_at`,
+		provider, string(kind), providerDownloadID, now, now.Add(grace),
 	); err != nil {
 		return fmt.Errorf("record deleted download %s: %w", providerDownloadID, err)
 	}
@@ -140,8 +171,8 @@ func (db *DB) RecordDeletedDownload(ctx context.Context, provider string, kind K
 // RecordDeletedDownload).
 func (db *DB) RecentlyDeletedDownloads(ctx context.Context, provider string, kind Kind) (map[string]bool, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT provider_download_id FROM deleted_downloads WHERE provider = ? AND kind = ? AND deleted_at >= ?`,
-		provider, string(kind), time.Now().UTC().Add(-recentlyDeletedGracePeriod))
+		`SELECT provider_download_id FROM deleted_downloads WHERE provider = ? AND kind = ? AND expires_at > ?`,
+		provider, string(kind), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list recently deleted downloads: %w", err)
 	}

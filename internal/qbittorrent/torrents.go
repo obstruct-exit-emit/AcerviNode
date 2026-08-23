@@ -274,7 +274,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		if err != nil || d == nil {
 			continue
 		}
+		// Whether the provider actually removed its own copy decides the
+		// tombstone's lifetime: a failed delete leaves the item on the
+		// account, where discovery would re-adopt it as a ghost once a
+		// short window lapsed — see database.RecordDeletedDownload.
+		providerConfirmed := true
 		if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
+			providerConfirmed = false
 			slog.Error("qbittorrent: provider delete failed", "hash", hash, "error", err)
 		}
 		// The provider call above only ever removes the provider-side copy —
@@ -293,7 +299,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		// since the provider's listing hadn't caught up with its own delete
 		// yet and the local row protecting it from re-adoption is gone —
 		// matches handleDeleteDownload's identical reasoning in internal/api.
-		if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+		if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID, providerConfirmed); err != nil {
 			slog.Error("qbittorrent: record deleted-download tombstone failed", "hash", hash, "error", err)
 		}
 		if err := s.db.DeleteDownload(ctx, d.ID); err != nil {

@@ -622,9 +622,24 @@ intentionally removed, showing as "Available" when it genuinely isn't.
 `recentlyDeletedGracePeriod` (5 minutes, generous on purpose — a
 `provider_download_id` that's genuinely gone never legitimately reappears,
 since a fresh add always gets a new one, so this only ever blocks
-re-adopting the exact same now-defunct id). Tombstones older than the grace
-period are pruned opportunistically on every new one recorded, rather than
-needing a separate cleanup job.
+re-adopting the exact same now-defunct id). Tombstones past their own expiry
+are pruned opportunistically on every new one recorded, rather than needing
+a separate cleanup job.
+
+**A tombstone's lifetime depends on whether the provider-side delete
+actually succeeded**, because that five-minute reasoning quietly assumes it
+did. The provider call is best-effort — a provider outage or rate limit must
+never leave a row the user can't remove — so when it fails, the item is
+genuinely still on the account, and a short window doesn't prevent the ghost
+it exists to prevent; it just delays it until the window lapses. A failed
+delete therefore records a much longer tombstone
+(`unconfirmedDeleteGracePeriod`, 30 days — deliberately longer than TorBox's
+own retention, so an orphan left behind this way ages off the account before
+the tombstone does). Found during a live burn-in, not by inspection: two
+downloads were deleted while the account happened to be rate-limited, both
+provider deletes returned `429`, and both reappeared as ghost Manual
+downloads once the five minutes were up — including one that had been
+Managed, which came back in the wrong tab.
 
 **This same race is exactly why a Managed download could turn into a Manual
 one, reported directly and confirmed live.** `internal/qbittorrent`'s and

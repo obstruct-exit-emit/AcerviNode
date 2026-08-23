@@ -160,6 +160,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A download deleted while the provider was unreachable came back as a
+  ghost.** The delete tombstone that stops `discoverManual` re-adopting a
+  just-deleted item lived for five minutes, on the reasoning that a
+  `provider_download_id` that's genuinely gone never legitimately reappears.
+  That quietly assumed the provider-side delete *succeeded*. It's
+  best-effort by design — a provider outage or rate limit must never leave a
+  row the user can't remove — so when it fails the item really is still on
+  the account, and the short window doesn't prevent the ghost, it just
+  delays it. A failed delete now records a 30-day tombstone
+  (`unconfirmedDeleteGracePeriod`), deliberately longer than TorBox's own
+  retention so an orphan ages off the account before the tombstone lapses;
+  each tombstone carries its own `expires_at` rather than sharing one global
+  grace period. All four delete paths (native API, both compat shims, and
+  the importer's retention cleanup) pass through whether the provider
+  confirmed. Found during a live burn-in, not by inspection: two downloads
+  were deleted while the account happened to be rate-limited, both provider
+  deletes returned `429`, and both reappeared as Manual downloads once the
+  five minutes were up — including one that had been Managed, which came
+  back in the wrong tab.
+
 - **Frozen downloads now say why, instead of just looking broken.** While a
   kind is in provider rate-limit cooldown, `internal/importer`'s
   `refreshKind` skips that kind's listing entirely, so every download of

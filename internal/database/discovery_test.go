@@ -46,7 +46,7 @@ func TestRecordDeletedDownload_RecentlyDeletedDownloadsRoundTrips(t *testing.T) 
 	ctx := context.Background()
 	db := openTestDB(t)
 
-	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123", true); err != nil {
 		t.Fatalf("RecordDeletedDownload() error = %v", err)
 	}
 
@@ -77,15 +77,18 @@ func TestRecordDeletedDownload_PrunesOldTombstones(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
-	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "old-one"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "old-one", true); err != nil {
 		t.Fatalf("RecordDeletedDownload() error = %v", err)
 	}
-	// Backdate it past the grace period directly — RecordDeletedDownload
-	// itself always stamps "now", so this simulates time having passed
-	// without needing an actual sleep.
+	// Backdate it past its own expiry directly — RecordDeletedDownload
+	// always stamps "now", so this simulates time having passed without an
+	// actual sleep. Both columns move together to stay self-consistent;
+	// expires_at is what reads and pruning key on now that each tombstone
+	// carries its own lifetime.
+	past := time.Now().UTC().Add(-recentlyDeletedGracePeriod - time.Minute)
 	if _, err := db.ExecContext(ctx,
-		`UPDATE deleted_downloads SET deleted_at = ? WHERE provider_download_id = 'old-one'`,
-		time.Now().UTC().Add(-recentlyDeletedGracePeriod-time.Minute),
+		`UPDATE deleted_downloads SET deleted_at = ?, expires_at = ? WHERE provider_download_id = 'old-one'`,
+		past, past,
 	); err != nil {
 		t.Fatalf("backdate tombstone: %v", err)
 	}
@@ -100,7 +103,7 @@ func TestRecordDeletedDownload_PrunesOldTombstones(t *testing.T) {
 
 	// Recording a new tombstone opportunistically prunes the old one from
 	// the table entirely (not just filtering it out of the read).
-	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "new-one"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "new-one", true); err != nil {
 		t.Fatalf("RecordDeletedDownload() error = %v", err)
 	}
 	var remaining int
@@ -119,10 +122,10 @@ func TestRecordDeletedDownload_OverwritesPreviousTombstone(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 
-	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123", true); err != nil {
 		t.Fatalf("first RecordDeletedDownload() error = %v", err)
 	}
-	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "provider-123", true); err != nil {
 		t.Fatalf("second RecordDeletedDownload() error = %v", err)
 	}
 
@@ -132,5 +135,72 @@ func TestRecordDeletedDownload_OverwritesPreviousTombstone(t *testing.T) {
 	}
 	if !got["provider-123"] {
 		t.Error("RecentlyDeletedDownloads() should still contain provider-123 after a second tombstone")
+	}
+}
+
+// TestRecordDeletedDownload_UnconfirmedDeleteOutlivesShortGrace is the
+// regression for a ghost download coming back after a *failed* provider
+// delete. The short grace period assumes the provider-side delete worked,
+// so the id is gone for good and only the provider's listing lag needs
+// bridging. When that call fails the item is still on the account, and a
+// short tombstone doesn't prevent the ghost — it just delays it.
+//
+// Reproduced live before this fix: two downloads were deleted while the
+// account was rate-limited, both provider deletes returned 429, and both
+// reappeared as Manual downloads once the five minutes lapsed — including
+// one that had been Managed, which came back in the wrong tab.
+func TestRecordDeletedDownload_UnconfirmedDeleteOutlivesShortGrace(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "confirmed", true); err != nil {
+		t.Fatalf("RecordDeletedDownload(confirmed) error = %v", err)
+	}
+	if err := db.RecordDeletedDownload(ctx, "torbox", KindTorrent, "unconfirmed", false); err != nil {
+		t.Fatalf("RecordDeletedDownload(unconfirmed) error = %v", err)
+	}
+
+	// Assert the lifetime the production code actually stored, rather than
+	// writing one here and checking it back — the latter would pass even if
+	// RecordDeletedDownload ignored providerConfirmed entirely.
+	storedExpiry := func(id string) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := db.QueryRowContext(ctx,
+			`SELECT expires_at FROM deleted_downloads WHERE provider_download_id = ?`, id).Scan(&at); err != nil {
+			t.Fatalf("read expires_at for %s: %v", id, err)
+		}
+		return at.UTC()
+	}
+	confirmedExpiry, unconfirmedExpiry := storedExpiry("confirmed"), storedExpiry("unconfirmed")
+	shortCutoff := time.Now().UTC().Add(recentlyDeletedGracePeriod + time.Minute)
+	if confirmedExpiry.After(shortCutoff) {
+		t.Errorf("confirmed delete expires at %v, want within the short grace period", confirmedExpiry)
+	}
+	if !unconfirmedExpiry.After(shortCutoff) {
+		t.Errorf("failed provider delete expires at %v, want well beyond the short grace period — the item is still on the account", unconfirmedExpiry)
+	}
+
+	// Now simulate that much time actually passing, shifting each row by the
+	// same amount so whatever lifetime production chose is preserved.
+	shift := recentlyDeletedGracePeriod + time.Minute
+	for _, id := range []string{"confirmed", "unconfirmed"} {
+		if _, err := db.ExecContext(ctx,
+			`UPDATE deleted_downloads SET deleted_at = ?, expires_at = ? WHERE provider_download_id = ?`,
+			time.Now().UTC().Add(-shift), storedExpiry(id).Add(-shift), id,
+		); err != nil {
+			t.Fatalf("shift tombstone %s: %v", id, err)
+		}
+	}
+
+	got, err := db.RecentlyDeletedDownloads(ctx, "torbox", KindTorrent)
+	if err != nil {
+		t.Fatalf("RecentlyDeletedDownloads() error = %v", err)
+	}
+	if got["confirmed"] {
+		t.Error("a confirmed delete's tombstone should expire after the short grace period")
+	}
+	if !got["unconfirmed"] {
+		t.Error("a failed provider delete must stay tombstoned past the short grace period — otherwise the item, which is still on the account, comes back as a ghost")
 	}
 }

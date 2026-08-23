@@ -1947,7 +1947,7 @@ func TestDiscoverManual_SkipsRecentlyDeletedDownload(t *testing.T) {
 		t.Fatalf("Tick() 1 error = %v", err)
 	}
 
-	if err := db.RecordDeletedDownload(ctx, "faketorbox", database.KindTorrent, "just-deleted"); err != nil {
+	if err := db.RecordDeletedDownload(ctx, "faketorbox", database.KindTorrent, "just-deleted", true); err != nil {
 		t.Fatalf("RecordDeletedDownload() error = %v", err)
 	}
 

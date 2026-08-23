@@ -387,9 +387,18 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	s.settings.CancelFetch(d.ID)
 
 	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
+	// Whether the provider actually removed its own copy decides how long
+	// the tombstone below has to last. A failed delete leaves the item on
+	// the account, so the short listing-lag window would let discovery
+	// re-adopt it as a ghost the moment it lapsed — see
+	// database.RecordDeletedDownload. True when there's no provider to call
+	// at all: there's then no provider-side copy left to come back.
+	providerConfirmed := true
 	if provider := s.deleterForKind(d.Kind); provider != nil {
 		if err := provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
-			slog.Error("api: provider delete failed", "id", d.ID, "error", err)
+			providerConfirmed = false
+			slog.Error("api: provider delete failed, tombstoning for longer so it can't come back as a ghost",
+				"id", d.ID, "provider_id", d.ProviderDownloadID, "error", err)
 		}
 	}
 	// The provider call above only ever removes the provider-side copy —
@@ -410,7 +419,7 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	// item with no local row anymore and adopt it fresh as a ghost Manual
 	// download for something that was just intentionally deleted. See
 	// database.RecordDeletedDownload.
-	if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+	if err := s.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID, providerConfirmed); err != nil {
 		slog.Error("api: record deleted-download tombstone failed", "id", d.ID, "error", err)
 	}
 

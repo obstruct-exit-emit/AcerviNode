@@ -1425,13 +1425,19 @@ func (im *Importer) cleanupDownload(ctx context.Context, d *database.Download) {
 		slog.Warn("importer: cleanup failed to remove local files, continuing anyway", "id", d.ID, "dest", destDir, "error", err)
 	}
 
+	// Whether the provider actually removed its own copy decides the
+	// tombstone's lifetime: a failed delete leaves the item on the account,
+	// where discovery would re-adopt it as a ghost once a short window
+	// lapsed — see database.RecordDeletedDownload.
+	providerConfirmed := true
 	if p := im.providerForKind(d.Kind); p != nil {
 		if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), true); err != nil {
+			providerConfirmed = false
 			slog.Warn("importer: cleanup best-effort provider delete failed", "id", d.ID, "error", err)
 		}
 	}
 
-	if err := im.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID); err != nil {
+	if err := im.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID, providerConfirmed); err != nil {
 		slog.Error("importer: cleanup record deleted-download tombstone failed", "id", d.ID, "error", err)
 	}
 	if err := im.db.DeleteDownload(ctx, d.ID); err != nil {
