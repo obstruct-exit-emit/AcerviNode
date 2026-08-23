@@ -160,6 +160,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The vanished-download circuit breaker could jam on permanently,
+  disabling missing-download detection and logging a warning every tick.**
+  `isSuspectedMassVanish` counted *every* Manual row toward its
+  missing-fraction, including rows already in `error` —
+  but `handleMissingFromProvider`, the only thing that guard protects,
+  skips an already-errored row entirely. That asymmetry made the guard
+  unrecoverable: a row flagged `error` is absent from every future listing
+  forever (it's genuinely gone, or it belongs to a provider account that's
+  since been swapped out), so once enough rows had errored, the fraction
+  could never fall back below the threshold. Missing-detection stayed off
+  for that kind for good, and the "suspected mass-vanish" warning fired on
+  every single poll. Observed on a real instance: 335 identical warnings,
+  `tracked_rows=4 statuses_returned=1`, where three of those four were
+  long-dead rows left behind by an API-key rotation. Already-errored rows
+  are now excluded from both halves of the fraction, matching exactly what
+  `handleMissingFromProvider` acts on; a genuine mass-vanish among healthy
+  rows still trips it.
+
+- **A deleted download leaked its cached live status forever.**
+  `database.DB.refreshState` — the map backing both the refresh-ordering
+  guard and the `LiveStatus` cache — is keyed by download id, and nothing
+  ever removed from it. Every download ever deleted left its entry behind
+  for the lifetime of the process, growing without bound on a long-running
+  instance with ordinary add/remove churn. `DeleteDownload` now forgets it.
+
 - **A stock systemd install could never start.** `packaging/acervinode.service`
   set `ProtectSystem=strict` with `ReadWritePaths=/var/lib/acervinode` only,
   on the stated assumption that AcerviNode "only needs to read its config

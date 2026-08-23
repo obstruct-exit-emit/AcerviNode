@@ -1927,3 +1927,68 @@ func TestInsertOrClaimForArr_FillsMissingHashButKeepsAnExistingOne(t *testing.T)
 		}
 	})
 }
+
+// TestIsSuspectedMassVanish_IgnoresAlreadyErroredRows is the regression for
+// the guard jamming on permanently. handleMissingFromProvider skips a row
+// already in StateError, so counting those rows here meant the fraction
+// could never recover: a row flagged error is absent from every future
+// listing forever, so once enough had errored, missing-detection was
+// disabled for that kind permanently and the warning fired every tick.
+func TestIsSuspectedMassVanish_IgnoresAlreadyErroredRows(t *testing.T) {
+	errored := func(id string) *Download {
+		d := newTestDownload(KindUsenet)
+		d.ProviderDownloadID = id
+		d.AddedVia = AddedViaManual
+		d.State = StateError
+		return d
+	}
+	healthy := func(id string) *Download {
+		d := newTestDownload(KindUsenet)
+		d.ProviderDownloadID = id
+		d.AddedVia = AddedViaManual
+		d.State = StateDownloading
+		return d
+	}
+
+	// The real shape observed live: three long-dead rows from a rotated API
+	// key plus one healthy download that the listing does return.
+	rows := []*Download{errored("dead-1"), errored("dead-2"), errored("dead-3"), healthy("alive")}
+	byID := map[string]debrid.DownloadStatus{"alive": {ID: "alive"}}
+	if isSuspectedMassVanish(rows, byID) {
+		t.Error("mass-vanish suspected when the only non-errored row was present — the guard would stay jammed forever")
+	}
+
+	// A genuine mass-vanish must still trip: healthy rows, listing empty.
+	live := []*Download{healthy("a"), healthy("b"), healthy("c")}
+	if !isSuspectedMassVanish(live, map[string]debrid.DownloadStatus{}) {
+		t.Error("mass-vanish not suspected when every tracked row vanished at once")
+	}
+}
+
+// A deleted download must not leave its refresh-ordering record and cached
+// live status behind — nothing else ever removes from that map, so without
+// cleanup it grows for the lifetime of the process.
+func TestDeleteDownload_ForgetsRefreshState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.State = StateDownloading
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+	statuses := []debrid.DownloadStatus{{
+		ID: debrid.ProviderDownloadID(d.ProviderDownloadID), State: debrid.StateDownloading, ETASeconds: 42,
+	}}
+	db.RefreshFromProvider(ctx, []*Download{d}, statuses, time.Now())
+	if _, ok := db.LiveStatus(d.ID); !ok {
+		t.Fatal("LiveStatus() ok = false after a refresh, want true")
+	}
+
+	if err := db.DeleteDownload(ctx, d.ID); err != nil {
+		t.Fatalf("DeleteDownload() error = %v", err)
+	}
+	if _, ok := db.LiveStatus(d.ID); ok {
+		t.Error("LiveStatus() still cached after the download was deleted — refreshState leaks")
+	}
+}

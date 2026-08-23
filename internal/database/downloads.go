@@ -758,7 +758,19 @@ const (
 func isSuspectedMassVanish(rows []*Download, byID map[string]debrid.DownloadStatus) bool {
 	var manualTotal, manualMissing int
 	for _, d := range rows {
-		if d.AddedVia != AddedViaManual {
+		// StateError is excluded from both halves of the fraction, exactly
+		// as handleMissingFromProvider excludes it — counting rows this
+		// guard protects nothing from is what made it jam permanently.
+		// A row already flagged error stays absent from every future
+		// listing forever (it's gone, or it belongs to a provider account
+		// that was swapped out), so counting it as "missing" meant the
+		// fraction could never fall back below the threshold: once enough
+		// rows had errored, missing-detection was disabled for that kind
+		// for good and this warning fired on every single tick. Observed
+		// live on a real instance — 335 identical warnings, tracked_rows=4
+		// statuses_returned=1, where 3 of those 4 were long-dead rows from
+		// a rotated API key.
+		if d.AddedVia != AddedViaManual || d.State == StateError {
 			continue
 		}
 		manualTotal++
@@ -1090,7 +1102,24 @@ func (db *DB) DeleteDownload(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete download %s: %w", id, err)
 	}
-	return checkRowsAffected(res, id)
+	if err := checkRowsAffected(res, id); err != nil {
+		return err
+	}
+	// refreshState is keyed by download id and nothing else ever removes
+	// from it, so without this every download ever deleted leaves its
+	// ordering timestamp and cached LiveStatus behind for the lifetime of
+	// the process — an unbounded leak on a long-running instance with
+	// ordinary add/remove churn.
+	db.forgetRefreshState(id)
+	return nil
+}
+
+// forgetRefreshState drops a download's refresh-ordering record and cached
+// live status — see refreshGuardAllows, which is what populates it.
+func (db *DB) forgetRefreshState(id string) {
+	db.refreshMu.Lock()
+	defer db.refreshMu.Unlock()
+	delete(db.refreshState, id)
 }
 
 // ReplaceDownloadFiles overwrites the file list for a download — the simplest
