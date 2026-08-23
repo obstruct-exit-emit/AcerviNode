@@ -7,6 +7,7 @@ import (
 	"regexp"
 
 	"github.com/acervinode/acervinode/internal/debrid"
+	"strings"
 )
 
 // Provider adapts Client to debrid.TorrentProvider.
@@ -279,30 +280,66 @@ var downloadingStates = map[string]bool{
 	"pausedUP": true, "queuedUP": true, "checkingUP": true, "forcedUP": true,
 	"allocating": true, "pausedDL": true, "queuedDL": true, "checkingDL": true,
 	"forcedDL": true, "moving": true, "incomplete": true,
+	// Plain "checking" — TorBox's own spelling for hash-checking, distinct
+	// from qBittorrent's checkingDL/checkingUP/checkingResumeData above.
+	// Found live on real downloads that had been sitting in "error" for
+	// hours: TorBox reported download_state "checking" with active=true and
+	// progress 0, and the catch-all below turned that into a failure.
+	"checking": true,
 }
+
+// failureSubstrings mark a raw state that genuinely reports a failure, as
+// opposed to one this mapping simply hasn't seen before. Matched
+// case-insensitively against the raw string, mirroring mapUsenetState.
+var failureSubstrings = []string{"fail", "error", "invalid", "missing", "dead", "stall"}
 
 var completedStates = map[string]bool{
 	"completed": true, "cached": true, "uploading": true, "downloaded": true,
 }
 
 // mapDownloadState translates a raw download_state into AcerviNode's
-// provider-agnostic DownloadState. Anything unmatched — this is the
-// important part, not an oversight — is treated as an error, not "still
-// downloading": TorBox's own help center documents an explicit "Error" state
-// (server error, missing encryption key, missing par2 files, etc.), and a
-// stalled/no-seeds torrent is exactly the kind of dead end decypharr's own
-// mapping treats the same way rather than waiting on it forever.
+// provider-agnostic DownloadState.
+//
+// An unrecognised state is treated as queued, not as an error. This used to
+// be the other way round, on the reasoning that TorBox documents an explicit
+// error state and a stalled torrent is a dead end worth surfacing rather
+// than waiting on forever. The reasoning was sound; the default was not.
+// Any state TorBox reports that this list hasn't seen — a new one, a
+// renamed one, or simply one nobody wrote down — became a failure, and the
+// download was reported as broken while it was quietly progressing. Found
+// on real downloads stuck in "error" for hours whose actual state was
+// "checking" with active=true.
+//
+// Failure is now something the provider has to actually say, via
+// failureSubstrings, which is how mapUsenetState has always worked — this
+// brings torrents in line with it. A download that genuinely stalls is
+// caught by the stuck-download watchdog (see config's
+// stuck_download_timeout_minutes), which is a better tool for it than
+// guessing from an unfamiliar status string.
 func mapDownloadState(raw string) debrid.DownloadState {
 	if raw == "" {
 		return debrid.StateUnknown
 	}
 	normalized := parentheticalSuffix.ReplaceAllString(raw, "")
+	lowered := strings.ToLower(raw)
 	switch {
-	case downloadingStates[normalized]:
-		return debrid.StateDownloading
 	case completedStates[normalized]:
 		return debrid.StateCompleted
-	default:
+	case downloadingStates[normalized]:
+		return debrid.StateDownloading
+	case containsAny(lowered, failureSubstrings):
 		return debrid.StateError
+	default:
+		return debrid.StateQueued
 	}
+}
+
+// containsAny reports whether s contains any of subs.
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

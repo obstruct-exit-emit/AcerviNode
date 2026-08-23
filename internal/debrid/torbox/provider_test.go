@@ -88,7 +88,18 @@ func TestMapDownloadState(t *testing.T) {
 		{"downloaded", debrid.StateCompleted},
 		{"Error", debrid.StateError},
 		{"error", debrid.StateError},
-		{"some-unrecognized-future-state", debrid.StateError},
+		// Plain "checking" is TorBox's own hash-checking state, distinct
+		// from qBittorrent's checkingDL/checkingUP spellings above. It used
+		// to fall through the catch-all and be reported as a failure —
+		// found on real downloads sitting in "error" for hours while
+		// TorBox had them as checking/active.
+		{"checking", debrid.StateDownloading},
+		// An unfamiliar state is queued, not failed. Failure has to be
+		// something the provider actually says (see failureSubstrings);
+		// a download that genuinely stalls is the stuck-download
+		// watchdog's job, not this mapping guessing from a string it has
+		// never seen.
+		{"some-unrecognized-future-state", debrid.StateQueued},
 	}
 	for _, c := range cases {
 		if got := mapDownloadState(c.raw); got != c.want {

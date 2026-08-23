@@ -248,6 +248,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A torrent in an unfamiliar state was reported as failed.** TorBox's
+  torrent state mapping treated anything it didn't recognise as an error,
+  deliberately — the reasoning being that TorBox documents an explicit error
+  state, and a stalled torrent is a dead end worth surfacing rather than
+  waiting on forever. The reasoning was sound; the default was not. Any
+  state TorBox reports that the list hasn't seen — a new one, a renamed one,
+  or simply one nobody wrote down — became a failure, and a download that
+  was progressing perfectly well was shown as broken.
+  Found on two real downloads sitting in `error` for hours. Their actual
+  state was `checking` — TorBox's own spelling for hash-checking, with
+  `active: true` — which the list didn't have, since it only carried
+  qBittorrent's `checkingDL`/`checkingUP`/`checkingResumeData` variants.
+  Failure is now something the provider has to actually say, matched on
+  substrings (`fail`, `error`, `invalid`, `missing`, `dead`, `stall`), and
+  anything else unrecognised is queued. That is how `mapUsenetState` has
+  always worked, so this brings torrents in line with usenet rather than
+  inventing a new rule. A download that genuinely stalls is still caught,
+  both by the explicit `stall` substring and by the stuck-download watchdog
+  (`stuck_download_timeout_minutes`), which is a better tool for it than
+  guessing from an unfamiliar status string. Both affected downloads
+  recovered on their own on the first poll after deploying, with no retry
+  needed.
+
 - **AllDebrid's fast per-download poll never worked.** `magnets` in a
   `/v4.1/magnet/status` response is an array when listing but a bare
   *object* when the query is filtered to a single id, so decoding it as an
