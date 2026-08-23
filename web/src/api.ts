@@ -277,6 +277,9 @@ export function getTorrentInfo(apiKey: string, magnet: string): Promise<TorrentI
 // I use right now" and omits them.
 export interface ProviderSetting {
   name: string
+  // type is which service this entry actually is — equal to name for a
+  // first account, different when one service holds several.
+  type: string
   configured: boolean
   torrent_capable: boolean
   usenet_capable: boolean

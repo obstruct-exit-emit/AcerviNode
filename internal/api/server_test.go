@@ -359,6 +359,8 @@ func (f *fakeSettings) TestProviderConnection(_ context.Context, _ string) (int6
 
 func (f *fakeSettings) ProviderTypes() []string { return []string{testProviderName, "othertype"} }
 
+func (f *fakeSettings) ProviderType(name string) string { return name }
+
 func (f *fakeSettings) AddProvider(_ context.Context, name, providerType, apiKey string) error {
 	if f.addProviderErr != nil {
 		return f.addProviderErr

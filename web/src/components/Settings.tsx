@@ -4,7 +4,6 @@ import {
   getGeneralSettings,
   addProvider,
   getProviderSettings,
-  getProviderTypes,
   removeProvider,
   getStatus,
   getProviderAccount,
@@ -195,10 +194,13 @@ export function Settings({ apiKey }: Props) {
     Record<string, { kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>
   >({})
   const [defaultStatus, setDefaultStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
-  // Adding an entry is how a second account on the same service is set up:
-  // a name of your choosing plus the type it actually is.
-  const [providerTypes, setProviderTypes] = useState<string[]>([])
-  const [newProvider, setNewProvider] = useState({ name: '', type: '', api_key: '' })
+  // Every supported service already has a card whether it's configured or
+  // not, so there's nothing to "add" for a first account — you just fill in
+  // the key. The only thing that genuinely needs adding is a *second*
+  // account on the same service, which is offered from that service's own
+  // card, where the type is implied rather than picked from a list.
+  const [addingAccountFor, setAddingAccountFor] = useState<string | null>(null)
+  const [newAccountName, setNewAccountName] = useState('')
   const [addProviderStatus, setAddProviderStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   // Keyed by provider: each account is its own live call and its own
   // panel, inside that provider's card.
@@ -230,7 +232,7 @@ export function Settings({ apiKey }: Props) {
     // would fetch nothing.
     let providerList: ProviderSetting[] = []
     try {
-      const [providerSettings, generalSettings, cats, statusInfo, types] = await Promise.all([
+      const [providerSettings, generalSettings, cats, statusInfo] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
@@ -238,10 +240,8 @@ export function Settings({ apiKey }: Props) {
         // getStatus's own doc comment), unlike getProviderAccount below, so
         // it's safe to bundle here with everything else.
         getStatus(apiKey),
-        getProviderTypes(apiKey),
       ])
       setSettings(providerSettings)
-      setProviderTypes(types)
       providerList = providerSettings
       setGeneral(generalSettings)
       setForm({
@@ -436,14 +436,17 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
-  async function handleAddProvider(e: FormEvent) {
+  async function handleAddAccount(e: FormEvent, forProvider: string) {
     e.preventDefault()
-    const name = newProvider.name.trim()
+    const name = newAccountName.trim()
     if (!name) return
     setAddProviderStatus({ kind: 'saving' })
     try {
-      await addProvider(apiKey, name, newProvider.type.trim(), newProvider.api_key.trim())
-      setNewProvider({ name: '', type: '', api_key: '' })
+      // Type comes from the card this was started from — no picker, since
+      // "another TorBox account" can only ever be a TorBox account.
+      await addProvider(apiKey, name, forProvider, '')
+      setAddingAccountFor(null)
+      setNewAccountName('')
       setAddProviderStatus({ kind: 'idle' })
       await load()
     } catch (err) {
@@ -786,9 +789,50 @@ export function Settings({ apiKey }: Props) {
                         <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
                           Remove provider
                         </button>
+                        <button
+                          type="button"
+                          className="test-connection-btn"
+                          onClick={() => {
+                            setAddingAccountFor(p.type)
+                            setNewAccountName(`${p.type}-2`)
+                          }}
+                        >
+                          Add another account
+                        </button>
                         {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
                       </>
+                    )}
+
+                    {/* A second account on this same service. Offered here
+                        rather than from a generic "add a provider" form
+                        because every supported service already has a card:
+                        there is nothing to add for a first account, only a
+                        key to fill in. Starting from the card also means
+                        the service is implied, so there is no type to
+                        pick. */}
+                    {addingAccountFor === p.type && (
+                      <form onSubmit={(e) => handleAddAccount(e, p.type)}>
+                        <input
+                          autoFocus
+                          placeholder={`name for the second ${providerLabel(p.type)} account`}
+                          value={newAccountName}
+                          onChange={(e) => setNewAccountName(e.target.value)}
+                        />
+                        <button type="submit" disabled={addProviderStatus.kind === 'saving' || !newAccountName.trim()}>
+                          {addProviderStatus.kind === 'saving' ? 'Adding…' : 'Create'}
+                        </button>
+                        <button type="button" onClick={() => setAddingAccountFor(null)}>
+                          Cancel
+                        </button>
+                        <p className="settings-help">
+                          Its own card appears below, ready for that account's key. Independent from this one:
+                          separate credentials, separate rate limits, separate downloads.
+                        </p>
+                      </form>
+                    )}
+                    {addProviderStatus.kind === 'error' && addingAccountFor === p.type && (
+                      <p className="settings-error">{addProviderStatus.message}</p>
                     )}
 
                     {/* This provider's own account — its plan, its expiry,
@@ -832,40 +876,6 @@ export function Settings({ apiKey }: Props) {
               </section>
             )
           })}
-
-          <section className="settings-card">
-            <h2>Add a provider</h2>
-            <p className="settings-help">
-              A name of your choosing plus the service it actually is. Use a distinct name to run a second account
-              on the same service — “torbox-work” of type “torbox” is an independent provider with its own key,
-              its own rate limits and its own downloads. Leave the type as the name for a first account.
-            </p>
-            <form onSubmit={handleAddProvider}>
-              <input
-                placeholder="name (e.g. torbox-work)"
-                value={newProvider.name}
-                onChange={(e) => setNewProvider({ ...newProvider, name: e.target.value })}
-              />
-              <select value={newProvider.type} onChange={(e) => setNewProvider({ ...newProvider, type: e.target.value })}>
-                <option value="">same as name</option>
-                {providerTypes.map((t) => (
-                  <option key={t} value={t}>
-                    {providerLabel(t)}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="password"
-                placeholder="API key (optional)"
-                value={newProvider.api_key}
-                onChange={(e) => setNewProvider({ ...newProvider, api_key: e.target.value })}
-              />
-              <button type="submit" disabled={addProviderStatus.kind === 'saving' || !newProvider.name.trim()}>
-                {addProviderStatus.kind === 'saving' ? 'Adding…' : 'Add'}
-              </button>
-            </form>
-            {addProviderStatus.kind === 'error' && <p className="settings-error">{addProviderStatus.message}</p>}
-          </section>
 
           {defaultStatus.kind === 'error' && (
             <p className="settings-error">Failed to set default: {defaultStatus.message}</p>

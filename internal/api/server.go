@@ -274,6 +274,9 @@ type Settings interface {
 	// ProviderTypes lists the provider implementations this build can
 	// construct — what AddProvider will accept as a type.
 	ProviderTypes() []string
+	// ProviderType is which implementation an entry uses. Equal to the name
+	// for a first account; different when one service holds several.
+	ProviderType(name string) string
 	// AddProvider registers a new provider entry live and persists it. name
 	// is the entry, providerType the implementation; they differ when one
 	// service holds two accounts. An empty providerType means "same as the

@@ -755,6 +755,18 @@ func (s *liveSettings) ProviderTypes() []string {
 	return knownProviderTypes()
 }
 
+// ProviderType is which implementation an entry uses. Config only records a
+// type when it differs from the name, so an entry without one is its own
+// type — which is what a first account looks like.
+func (s *liveSettings) ProviderType(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pc, ok := s.cfg.Providers[name]; ok {
+		return pc.ResolvedType(name)
+	}
+	return name
+}
+
 // AddProvider registers a new provider entry live and persists it.
 //
 // name is the entry, providerType is the implementation. They are separate

@@ -20,20 +20,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   only when more than one provider handles it — with a single provider it
   would just repeat the line above it.
 
-- **Providers can be added and removed from the web UI.** Previously a
-  second account on the same service meant hand-editing `config.yaml` to
-  add an entry with a `type` field: the UI could manage providers that
-  existed but not create one. New `POST /api/v1/settings/providers`,
-  `DELETE /api/v1/settings/providers/{name}` and
-  `GET /api/v1/settings/provider-types`, with an "Add a provider" form and a
-  per-provider Remove button. Name and type stay separate because that is
-  what allows two accounts on one service — "torbox-work" of type "torbox"
-  is an independent provider with its own credentials, listing cache and
-  rate-limit backoff — and an omitted type still means "same as the name",
-  so a first account needs only a name. Removing a provider deliberately
-  keeps any downloads already tracked against it: those are records of real
-  things, and removing a provider is a configuration change rather than an
-  instruction to discard history.
+- **A second account on the same service can be added from the web UI.**
+  Previously that meant hand-editing `config.yaml` to add an entry with a
+  `type` field: the UI could manage providers that existed but not create
+  one. New `POST /api/v1/settings/providers` and
+  `DELETE /api/v1/settings/providers/{name}`, with a per-provider
+  "Add another account" action and a Remove button.
+
+  Deliberately *not* a general "add a provider" form. Every supported
+  service already has a card whether it's configured or not — a new
+  provider type appears on its own the moment the build supports one — so
+  for a first account there is nothing to add, only a key to fill in. The
+  only thing that genuinely needs creating is a second account on a service
+  already listed, which is offered from that service's own card: starting
+  there means the service is implied, so there is no type to pick and no
+  way to pick the wrong one. Entries still carry a `type` underneath, which
+  is what makes "torbox-work" an independent provider with its own
+  credentials, listing cache and rate-limit backoff.
+
+  Removing a provider deliberately keeps any downloads already tracked
+  against it: those are records of real things, and removing a provider is a
+  configuration change rather than an instruction to discard history.
 
 - **AllDebrid is now feature-complete for what the service actually
   supports**, rather than torrent-only:

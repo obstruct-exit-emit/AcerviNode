@@ -6,7 +6,12 @@ import (
 )
 
 type providerSettingResponse struct {
-	Name           string `json:"name"`
+	Name string `json:"name"`
+	// Type is which service this entry actually is. Equal to Name for a
+	// first account; different when one service holds several, which is
+	// what lets the UI offer "another TorBox account" from TorBox's own
+	// card without asking which service it is.
+	Type           string `json:"type"`
 	Configured     bool   `json:"configured"`
 	TorrentCapable bool   `json:"torrent_capable"`
 	UsenetCapable  bool   `json:"usenet_capable"`
@@ -32,6 +37,7 @@ func (s *Server) handleGetProviderSettings(w http.ResponseWriter, r *http.Reques
 	for _, name := range s.registry.Names() {
 		out = append(out, providerSettingResponse{
 			Name:           name,
+			Type:           s.settings.ProviderType(name),
 			Configured:     s.settings.ProviderConfigured(name),
 			TorrentCapable: s.registry.Torrent(name) != nil,
 			UsenetCapable:  s.registry.Usenet(name) != nil,
