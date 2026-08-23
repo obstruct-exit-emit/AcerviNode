@@ -376,6 +376,22 @@
   font: inherit;
 }
 
+/* The provider action buttons sit in a row that wraps: there are up to five
+   of them, and a narrow card would otherwise run them off the edge. gap
+   spaces them in both directions, so a wrapped second row doesn't collide
+   with the first the way stacked margins would. */
+.provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Inside the row the shared top margin would fight the gap. */
+.provider-actions .test-connection-btn {
+  margin-top: 0;
+}
+
 .test-connection-btn {
   margin-top: 10px;
   padding: 6px 12px;

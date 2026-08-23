@@ -765,40 +765,42 @@ export function Settings({ apiKey }: Props) {
 
                     {p.configured && (
                       <>
-                        <button
-                          type="button"
-                          className="test-connection-btn"
-                          onClick={() => handleTestConnection(p.name)}
-                          disabled={test.kind === 'testing'}
-                        >
-                          {test.kind === 'testing' ? 'Testing…' : 'Test connection'}
-                        </button>
-                        {showDefaultControls && !p.default && (
+                        <div className="provider-actions">
                           <button
                             type="button"
                             className="test-connection-btn"
-                            onClick={() => handleMakeDefault(p.name)}
-                            disabled={defaultStatus.kind === 'saving'}
+                            onClick={() => handleTestConnection(p.name)}
+                            disabled={test.kind === 'testing'}
                           >
-                            Make default
+                            {test.kind === 'testing' ? 'Testing…' : 'Test connection'}
                           </button>
-                        )}
-                        <button type="button" className="test-connection-btn" onClick={() => handleClearProviderKey(p.name)}>
-                          Clear key
-                        </button>
-                        <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
-                          Remove provider
-                        </button>
-                        <button
-                          type="button"
-                          className="test-connection-btn"
-                          onClick={() => {
-                            setAddingAccountFor(p.type)
-                            setNewAccountName(`${p.type}-2`)
-                          }}
-                        >
-                          Add another account
-                        </button>
+                          {showDefaultControls && !p.default && (
+                            <button
+                              type="button"
+                              className="test-connection-btn"
+                              onClick={() => handleMakeDefault(p.name)}
+                              disabled={defaultStatus.kind === 'saving'}
+                            >
+                              Make default
+                            </button>
+                          )}
+                          <button type="button" className="test-connection-btn" onClick={() => handleClearProviderKey(p.name)}>
+                            Clear key
+                          </button>
+                          <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
+                            Remove provider
+                          </button>
+                          <button
+                            type="button"
+                            className="test-connection-btn"
+                            onClick={() => {
+                              setAddingAccountFor(p.type)
+                              setNewAccountName(`${p.type}-2`)
+                            }}
+                          >
+                            Add another account
+                          </button>
+                        </div>
                         {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
                       </>
@@ -825,11 +827,16 @@ export function Settings({ apiKey }: Props) {
                         <button type="button" onClick={() => setAddingAccountFor(null)}>
                           Cancel
                         </button>
-                        <p className="settings-help">
-                          Its own card appears below, ready for that account's key. Independent from this one:
-                          separate credentials, separate rate limits, separate downloads.
-                        </p>
                       </form>
+                    )}
+                    {/* Outside the form deliberately: .settings-card form is
+                        a flex row, so a paragraph inside it would be laid
+                        out as another item in the row rather than below. */}
+                    {addingAccountFor === p.type && (
+                      <p className="settings-help">
+                        Its own card appears below, ready for that account's key. Independent from this one:
+                        separate credentials, separate rate limits, separate downloads.
+                      </p>
                     )}
                     {addProviderStatus.kind === 'error' && addingAccountFor === p.type && (
                       <p className="settings-error">{addProviderStatus.message}</p>
