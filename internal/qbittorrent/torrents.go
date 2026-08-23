@@ -89,7 +89,11 @@ func readFormFile(header *multipart.FileHeader) ([]byte, error) {
 }
 
 func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath string) error {
-	id, err := s.provider.AddMagnet(ctx, magnet, debrid.AddOptions{Name: magnetDisplayName(magnet)})
+	p := s.defaultTorrent()
+	if p == nil {
+		return debrid.ErrNoProvider
+	}
+	id, err := p.AddMagnet(ctx, magnet, debrid.AddOptions{Name: magnetDisplayName(magnet)})
 	if err != nil {
 		return err
 	}
@@ -97,7 +101,11 @@ func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath strin
 }
 
 func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byte, category, savePath string) error {
-	id, err := s.provider.AddTorrentFile(ctx, filename, data, debrid.AddOptions{Name: filename})
+	p := s.defaultTorrent()
+	if p == nil {
+		return debrid.ErrNoProvider
+	}
+	id, err := p.AddTorrentFile(ctx, filename, data, debrid.AddOptions{Name: filename})
 	if err != nil {
 		return err
 	}
@@ -110,7 +118,11 @@ func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byt
 // failing outright — *arr apps will see the row on their next /info poll
 // either way.
 func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, magnet, category, savePath string) error {
-	status, err := s.provider.Status(ctx, id)
+	p := s.defaultTorrent()
+	if p == nil {
+		return debrid.ErrNoProvider
+	}
+	status, err := p.Status(ctx, id)
 	if err != nil {
 		slog.Warn("qbittorrent: provider status not yet available after add, using fallback", "id", id, "error", err)
 		status = debrid.DownloadStatus{
@@ -123,7 +135,7 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 
 	d := &database.Download{
 		ID:                 uuid.NewString(),
-		Provider:           s.provider.Name(),
+		Provider:           p.Name(),
 		ProviderDownloadID: string(id),
 		Kind:               database.KindTorrent,
 		Hash:               strings.ToLower(status.Hash),
@@ -165,7 +177,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	liveByProviderID := s.refreshFromProvider(ctx, rows)
+	live := s.refreshFromProvider(ctx, rows)
 
 	wantHashes := splitFilter(r.URL.Query().Get("hashes"))
 	wantCategory := r.URL.Query().Get("category")
@@ -179,7 +191,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-		items = append(items, toTorrentInfo(d, liveByProviderID[d.ProviderDownloadID], fetchProgress, hasFetchProgress))
+		items = append(items, toTorrentInfo(d, live[liveKeyFor(d, s.registry.Default())], fetchProgress, hasFetchProgress))
 	}
 
 	writeJSON(w, items)
@@ -215,32 +227,62 @@ type listCachedProvider interface {
 // proactive background refresh both share, so an *arr app polling here still
 // gets the freshest possible view even between importer ticks. Also returns
 // each row's current liveTorrentInfo keyed by provider download ID.
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[string]liveTorrentInfo {
-	var statuses []debrid.DownloadStatus
-	var fetchedAt time.Time
-	var err error
-	if lc, ok := s.provider.(listCachedProvider); ok {
-		statuses, fetchedAt, err = lc.ListCached(ctx)
-	} else {
-		fetchedAt = time.Now()
-		statuses, err = s.provider.List(ctx)
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[liveKey]liveTorrentInfo {
+	// Grouped by provider: each account is listed once, and only about its
+	// own rows. Listing every registered provider regardless would ask
+	// accounts about downloads that aren't theirs and cost a request per
+	// provider even when nothing tracked belongs to it.
+	byProvider := map[string][]*database.Download{}
+	for _, d := range rows {
+		name := d.Provider
+		if name == "" {
+			name = s.registry.Default()
+		}
+		byProvider[name] = append(byProvider[name], d)
 	}
-	if err != nil {
-		slog.Error("qbittorrent: provider list failed", "error", err)
-		return nil
-	}
-	s.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 
-	live := make(map[string]liveTorrentInfo, len(statuses))
-	for _, st := range statuses {
-		live[string(st.ID)] = liveTorrentInfo{
-			ETASeconds:         st.ETASeconds,
-			Seeders:            st.Seeders,
-			Leechers:           st.Leechers,
-			DownloadSpeedBytes: st.DownloadSpeedBytes,
+	live := map[liveKey]liveTorrentInfo{}
+	for name, group := range byProvider {
+		p := s.registry.Torrent(name)
+		if p == nil {
+			slog.Warn("qbittorrent: no provider available, skipping refresh", "provider", name, "downloads", len(group))
+			continue
+		}
+		statuses, fetchedAt, err := p.ListCached(ctx)
+		if err != nil {
+			slog.Error("qbittorrent: provider list failed", "provider", name, "error", err)
+			continue
+		}
+		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt)
+		for _, st := range statuses {
+			live[liveKey{provider: name, id: string(st.ID)}] = liveTorrentInfo{
+				ETASeconds:         st.ETASeconds,
+				Seeders:            st.Seeders,
+				Leechers:           st.Leechers,
+				DownloadSpeedBytes: st.DownloadSpeedBytes,
+			}
 		}
 	}
 	return live
+}
+
+// liveKey identifies one download's live status. Keyed by provider as well
+// as id: two providers can legitimately issue the same id, and merging them
+// into one map would let one account's numbers be reported for another's
+// download.
+type liveKey struct {
+	provider string
+	id       string
+}
+
+// liveKeyFor is d's key in the map refreshFromProvider returns, applying
+// the same empty-provider fallback the refresh itself used so the two agree.
+func liveKeyFor(d *database.Download, defaultProvider string) liveKey {
+	name := d.Provider
+	if name == "" {
+		name = defaultProvider
+	}
+	return liveKey{provider: name, id: d.ProviderDownloadID}
 }
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
@@ -256,20 +298,29 @@ func (s *Server) handleProperties(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ownsDownload reports whether d belongs to this shim's provider. A shim
-// only ever has one, so unlike the native API there is nothing to look up —
-// but a row can still name a different provider, either because more than
-// one is configured or because the API key was swapped for a different
-// account after the row was created. Its provider_download_id means nothing
-// to whoever is configured now, so acting on it would at best fail and at
-// worst hit an unrelated download that happens to share the id.
-func (s *Server) ownsDownload(d *database.Download) bool {
-	if d.Provider == "" || d.Provider == s.provider.Name() {
-		return true
+// defaultTorrent is the provider a new torrent goes to, or nil if nothing
+// registered supports torrents.
+func (s *Server) defaultTorrent() *debrid.DynamicTorrentProvider {
+	return s.registry.Torrent(s.registry.Default())
+}
+
+// torrentFor resolves the provider d belongs to, or nil if that provider
+// isn't available for torrents. A provider_download_id means nothing to a
+// different account, so acting on it would at best fail and at worst hit an
+// unrelated download that happens to share the id. A row with no provider
+// recorded falls back to the default — older rows predate the column being
+// populated, and nothing writes an empty provider today.
+func (s *Server) torrentFor(d *database.Download) *debrid.DynamicTorrentProvider {
+	name := d.Provider
+	if name == "" {
+		name = s.registry.Default()
 	}
-	slog.Warn("qbittorrent: skipping provider call, download belongs to a different provider",
-		"id", d.ID, "download_provider", d.Provider, "configured_provider", s.provider.Name())
-	return false
+	p := s.registry.Torrent(name)
+	if p == nil {
+		slog.Warn("qbittorrent: no provider available for download",
+			"id", d.ID, "download_provider", d.Provider, "resolved_name", name)
+	}
+	return p
 }
 
 // handleFiles implements GET /api/v2/torrents/files?hash=...
@@ -278,11 +329,12 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.ownsDownload(d) {
+	p := s.torrentFor(d)
+	if p == nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	files, err := s.provider.Files(r.Context(), debrid.ProviderDownloadID(d.ProviderDownloadID))
+	files, err := p.Files(r.Context(), debrid.ProviderDownloadID(d.ProviderDownloadID))
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -319,9 +371,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		// account, where discovery would re-adopt it as a ghost once a
 		// short window lapsed — see database.RecordDeletedDownload.
 		providerConfirmed := true
-		if !s.ownsDownload(d) {
+		p := s.torrentFor(d)
+		if p == nil {
 			providerConfirmed = false
-		} else if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
+		} else if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			providerConfirmed = false
 			slog.Error("qbittorrent: provider delete failed", "hash", hash, "error", err)
 		}

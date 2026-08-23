@@ -25,7 +25,12 @@ func (s *Server) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	category := r.FormValue("cat")
 	displayName := r.FormValue("nzbname")
 
-	id, err := s.provider.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: displayName})
+	p := s.defaultUsenet()
+	if p == nil {
+		writeJSON(w, map[string]any{"status": false, "error": "no usenet-capable provider configured"})
+		return
+	}
+	id, err := p.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: displayName})
 	if err != nil {
 		slog.Error("sabnzbd: add nzb url failed", "error", err)
 		writeJSON(w, map[string]any{"status": false, "error": err.Error()})
@@ -72,7 +77,12 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	category := r.FormValue("cat")
 	displayName := r.FormValue("nzbname")
 
-	id, err := s.provider.AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: displayName})
+	p := s.defaultUsenet()
+	if p == nil {
+		writeJSON(w, map[string]any{"status": false, "error": "no usenet-capable provider configured"})
+		return
+	}
+	id, err := p.AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: displayName})
 	if err != nil {
 		slog.Error("sabnzbd: add nzb file failed", "error", err)
 		writeJSON(w, map[string]any{"status": false, "error": err.Error()})
@@ -95,7 +105,11 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 // format, so there's nothing to preserve from the provider side (contrast
 // with the qBittorrent shim, which must expose a real infohash).
 func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, fallbackName, category, source string) (nzoID string, err error) {
-	status, statusErr := s.provider.Status(ctx, id)
+	p := s.defaultUsenet()
+	if p == nil {
+		return "", debrid.ErrNoProvider
+	}
+	status, statusErr := p.Status(ctx, id)
 	if statusErr != nil {
 		slog.Warn("sabnzbd: provider status not yet available after add, using fallback", "id", id, "error", statusErr)
 		status = debrid.DownloadStatus{ID: id, Name: fallbackName, State: debrid.StateQueued}
@@ -106,7 +120,7 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 
 	d := &database.Download{
 		ID:                 uuid.NewString(),
-		Provider:           s.provider.Name(),
+		Provider:           p.Name(),
 		ProviderDownloadID: string(id),
 		Kind:               database.KindUsenet,
 		Name:               status.Name,

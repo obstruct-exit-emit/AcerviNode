@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/debrid"
 )
 
 // postMultipart mirrors how *arr apps actually call torrents/add: a real
@@ -79,7 +80,7 @@ func newTestServerWithSettings(t *testing.T, settings settingsSource) (*httptest
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, settings)
+	srv := NewServer(testRegistry(newFakeProvider()), db, settings)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 
@@ -635,7 +636,7 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 		name: "Some Release", size: 276445467, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d's current state/progress exactly
 	}
 
-	srv := &Server{provider: provider, db: db}
+	srv := &Server{registry: testRegistry(provider), db: db}
 	srv.refreshFromProvider(ctx, []*database.Download{d})
 
 	got, err := db.GetDownloadByID(ctx, "dl-1")
@@ -676,7 +677,7 @@ func TestHandleInfo_ReportsETAFromProvider(t *testing.T) {
 		name: "ETA Test", size: 1024, calls: 1, eta: 123,
 	}
 
-	srv := &Server{provider: provider, db: db}
+	srv := &Server{registry: testRegistry(provider), db: db}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/torrents/info", nil)
 	srv.handleInfo(rec, req)
@@ -767,7 +768,7 @@ func TestHandleAdd_ClaimsAnExistingManualRow(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	ts := httptest.NewServer(NewServer(newFakeProvider(), db, staticAPIKey("test-api-key")))
+	ts := httptest.NewServer(NewServer(testRegistry(newFakeProvider()), db, staticAPIKey("test-api-key")))
 	t.Cleanup(ts.Close)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -817,29 +818,106 @@ func TestHandleAdd_ClaimsAnExistingManualRow(t *testing.T) {
 	}
 }
 
-// TestOwnsDownload_GuardsAnotherProvidersDownload covers the shim half of
-// routing by the download's own provider. A shim only ever holds one
-// provider, so there is no lookup to get wrong — but a row can still name a
-// different one, either because several are configured or because the API
-// key was swapped for a different account after the row was created. Its
-// provider_download_id means nothing to whoever is configured now.
-func TestOwnsDownload_GuardsAnotherProvidersDownload(t *testing.T) {
-	srv := &Server{provider: newFakeProvider()}
+// TestTorrentFor_ResolvesTheDownloadsOwnProvider covers the shim resolving
+// per download rather than holding one provider. A row can name a provider
+// this shim can't reach — several configured, or the account swapped after
+// the row was created — and its provider_download_id means nothing there.
+func TestTorrentFor_ResolvesTheDownloadsOwnProvider(t *testing.T) {
+	srv := &Server{registry: testRegistry(newFakeProvider())}
 
-	owned := &database.Download{ID: "a", Provider: "faketorbox"}
-	if !srv.ownsDownload(owned) {
-		t.Error("ownsDownload() = false for this provider's own download")
+	owned := &database.Download{ID: "a", Provider: fakeProviderName}
+	if srv.torrentFor(owned) == nil {
+		t.Error("torrentFor() = nil for this provider's own download")
 	}
 
-	// An older row predating the field, or a fake that never set it, must
-	// not be locked out — there is nothing to contradict.
+	// An older row predating the column, or a fake that never set it, falls
+	// back to the default rather than being locked out.
 	unattributed := &database.Download{ID: "b"}
-	if !srv.ownsDownload(unattributed) {
-		t.Error("ownsDownload() = false for a row with no provider recorded")
+	if srv.torrentFor(unattributed) == nil {
+		t.Error("torrentFor() = nil for a row with no provider recorded")
 	}
 
 	foreign := &database.Download{ID: "c", Provider: "some-other-provider"}
-	if srv.ownsDownload(foreign) {
-		t.Error("ownsDownload() = true for a download belonging to a different provider")
+	if srv.torrentFor(foreign) != nil {
+		t.Error("torrentFor() returned a provider for a download belonging to a different one")
+	}
+}
+
+// fakeProviderName is the name fakes register under, matching what
+// fakeProvider.Name reports so a download attributed to it resolves.
+const fakeProviderName = "faketorbox"
+
+// testRegistry wraps a fake in the registry the shim now resolves through.
+func testRegistry(p *fakeProvider) *debrid.Registry {
+	return testRegistryNamed(fakeProviderName, p)
+}
+
+func testRegistryNamed(name string, p *fakeProvider) *debrid.Registry {
+	r := debrid.NewRegistry()
+	var d *debrid.DynamicTorrentProvider
+	if p != nil {
+		d = debrid.NewDynamicTorrentProvider(name)
+		d.Set(p)
+		// Reuse disabled: these tests drive a fake whose state advances on
+		// each call and poll it twice back to back to observe a transition.
+		// Real *arr polling is orders of magnitude slower than the cache's
+		// TTL, so this restores what they were written against without
+		// weakening what they assert — see debrid.ListCache.TTL.
+		d.SetListCacheTTL(-1)
+	}
+	r.Register(name, d, nil, nil)
+	return r
+}
+
+// TestRefreshFromProvider_GroupsRowsByProvider covers the shim listing each
+// account once, about its own rows only. Two providers can legitimately
+// issue the same id, so the live-status map is keyed by provider as well —
+// merging on id alone would report one account's numbers for another's
+// download.
+func TestRefreshFromProvider_GroupsRowsByProvider(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	// Same provider-side id on both accounts, deliberately.
+	const sharedID = "shared-1"
+	alpha := newFakeProvider()
+	alpha.entries[sharedID] = &fakeEntry{name: "Alpha Release", size: 100, eta: 11, calls: 1}
+	beta := newFakeProvider()
+	beta.entries[sharedID] = &fakeEntry{name: "Beta Release", size: 200, eta: 22, calls: 1}
+
+	registry := debrid.NewRegistry()
+	for name, f := range map[string]*fakeProvider{"alpha": alpha, "beta": beta} {
+		d := debrid.NewDynamicTorrentProvider(name)
+		d.Set(f)
+		d.SetListCacheTTL(-1)
+		registry.Register(name, d, nil, nil)
+	}
+	srv := &Server{registry: registry, db: db}
+
+	rows := []*database.Download{}
+	for _, name := range []string{"alpha", "beta"} {
+		d := &database.Download{
+			ID: "dl-" + name, Provider: name, ProviderDownloadID: sharedID,
+			Kind: database.KindTorrent, Hash: "h-" + name, Name: name,
+			State: database.StateDownloading,
+		}
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload(%s) error = %v", name, err)
+		}
+		rows = append(rows, d)
+	}
+
+	live := srv.refreshFromProvider(ctx, rows)
+
+	got := live[liveKey{provider: "alpha", id: sharedID}]
+	if got.ETASeconds != 11 {
+		t.Errorf("alpha ETA = %d, want 11 — its own account's number", got.ETASeconds)
+	}
+	if got := live[liveKey{provider: "beta", id: sharedID}]; got.ETASeconds != 22 {
+		t.Errorf("beta ETA = %d, want 22 — its own account's number", got.ETASeconds)
 	}
 }

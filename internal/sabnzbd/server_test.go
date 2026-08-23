@@ -48,7 +48,7 @@ func newTestServerWithSettings(t *testing.T, settings settingsSource) *httptest.
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := NewServer(newFakeProvider(), db, settings)
+	srv := NewServer(testRegistry(newFakeProvider()), db, settings)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts
@@ -463,7 +463,7 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 		name: "Some NZB Release", size: 987654321, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d exactly
 	}
 
-	srv := &Server{provider: provider, db: db}
+	srv := &Server{registry: testRegistry(provider), db: db}
 	srv.refreshFromProvider(ctx, []*database.Download{d})
 
 	got, err := db.GetDownloadByID(ctx, "dl-1")
@@ -500,7 +500,7 @@ func TestHandleQueue_ReportsTimeLeftFromProvider(t *testing.T) {
 		name: "ETA Test", size: 1024, calls: 1, eta: 754, // 754s = 0:12:34
 	}
 
-	srv := &Server{provider: provider, db: db, categories: newCategoryStore()}
+	srv := &Server{registry: testRegistry(provider), db: db, categories: newCategoryStore()}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil)
 	srv.handleQueue(rec, req)
@@ -546,7 +546,7 @@ func TestHandleQueue_ReportsAggregateSpeed(t *testing.T) {
 		provider.entries[debrid.ProviderDownloadID(id)] = &fakeEntry{name: id, size: 1024, calls: 1, speed: speed}
 	}
 
-	srv := &Server{provider: provider, db: db, categories: newCategoryStore()}
+	srv := &Server{registry: testRegistry(provider), db: db, categories: newCategoryStore()}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil)
 	srv.handleQueue(rec, req)
@@ -676,7 +676,7 @@ func TestAddURL_ClaimsAnExistingManualRow(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	ts := httptest.NewServer(NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey)))
+	ts := httptest.NewServer(NewServer(testRegistry(newFakeProvider()), db, staticAPIKey(testAPIKey)))
 	t.Cleanup(ts.Close)
 
 	addResp, err := http.PostForm(ts.URL+"/api", url.Values{
@@ -726,4 +726,30 @@ func TestAddURL_ClaimsAnExistingManualRow(t *testing.T) {
 	if len(rows) != 1 {
 		t.Errorf("got %d rows, want 1 — claiming must promote in place, not duplicate", len(rows))
 	}
+}
+
+// fakeProviderName is the name fakes register under, matching what
+// fakeProvider.Name reports so a download attributed to it resolves.
+const fakeProviderName = "faketorbox"
+
+// testRegistry wraps a fake in the registry the shim now resolves through.
+func testRegistry(p *fakeProvider) *debrid.Registry {
+	return testRegistryNamed(fakeProviderName, p)
+}
+
+func testRegistryNamed(name string, p *fakeProvider) *debrid.Registry {
+	r := debrid.NewRegistry()
+	var d *debrid.DynamicUsenetProvider
+	if p != nil {
+		d = debrid.NewDynamicUsenetProvider(name)
+		d.Set(p)
+		// Reuse disabled: these tests drive a fake whose state advances on
+		// each call and poll it twice back to back to observe a transition.
+		// Real *arr polling is orders of magnitude slower than the cache's
+		// TTL, so this restores what they were written against without
+		// weakening what they assert — see debrid.ListCache.TTL.
+		d.SetListCacheTTL(-1)
+	}
+	r.Register(name, nil, d, nil)
+	return r
 }

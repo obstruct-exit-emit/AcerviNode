@@ -35,9 +35,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		// account, where discovery would re-adopt it as a ghost once a
 		// short window lapsed — see database.RecordDeletedDownload.
 		providerConfirmed := true
-		if !s.ownsDownload(d) {
+		p := s.usenetFor(d)
+		if p == nil {
 			providerConfirmed = false
-		} else if err := s.provider.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
+		} else if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), deleteFiles); err != nil {
 			providerConfirmed = false
 			slog.Error("sabnzbd: provider delete failed", "nzo_id", nzoID, "error", err)
 		}

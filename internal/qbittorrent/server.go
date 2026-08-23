@@ -33,7 +33,10 @@ type settingsSource interface {
 // download-related and to the shared downloads table for everything local
 // (category, save path, the AcerviNode-side state machine).
 type Server struct {
-	provider debrid.TorrentProvider
+	// registry is every configured provider. Adds go to the default; work
+	// on an existing download resolves that download's own provider — see
+	// defaultTorrent and torrentFor.
+	registry *debrid.Registry
 	db       *database.DB
 	// settings' APIKey is the password accepted by /api/v2/auth/login — any
 	// username is accepted, matching how the SABnzbd shim treats its own
@@ -46,9 +49,9 @@ type Server struct {
 }
 
 // NewServer builds a qBittorrent-compat Server backed by provider and db.
-func NewServer(provider debrid.TorrentProvider, db *database.DB, settings settingsSource) *Server {
+func NewServer(registry *debrid.Registry, db *database.DB, settings settingsSource) *Server {
 	s := &Server{
-		provider:   provider,
+		registry:   registry,
 		db:         db,
 		settings:   settings,
 		sessions:   newSessionStore(),

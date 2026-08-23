@@ -36,30 +36,61 @@ type listCachedProvider interface {
 // provider recomputes on every call, so unlike state/progress/size none of
 // them are persisted to the database, just read fresh and attached to the
 // response here (see toQueueSlot/handleQueue).
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[string]int64, phase map[string]string, totalSpeedBytes int64) {
-	var statuses []debrid.DownloadStatus
-	var fetchedAt time.Time
-	var err error
-	if lc, ok := s.provider.(listCachedProvider); ok {
-		statuses, fetchedAt, err = lc.ListCached(ctx)
-	} else {
-		fetchedAt = time.Now()
-		statuses, err = s.provider.List(ctx)
+func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[liveKey]int64, phase map[liveKey]string, totalSpeedBytes int64) {
+	// Grouped by provider: each account is listed once, and only about its
+	// own rows. Listing every registered provider regardless would ask
+	// accounts about downloads that aren't theirs and cost a request per
+	// provider even when nothing tracked belongs to it.
+	byProvider := map[string][]*database.Download{}
+	for _, d := range rows {
+		name := d.Provider
+		if name == "" {
+			name = s.registry.Default()
+		}
+		byProvider[name] = append(byProvider[name], d)
 	}
-	if err != nil {
-		slog.Error("sabnzbd: provider list failed", "error", err)
-		return nil, nil, 0
-	}
-	s.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt)
 
-	eta = make(map[string]int64, len(statuses))
-	phase = make(map[string]string, len(statuses))
-	for _, st := range statuses {
-		eta[string(st.ID)] = st.ETASeconds
-		phase[string(st.ID)] = st.Phase
-		totalSpeedBytes += st.DownloadSpeedBytes
+	eta = map[liveKey]int64{}
+	phase = map[liveKey]string{}
+	for name, group := range byProvider {
+		p := s.registry.Usenet(name)
+		if p == nil {
+			slog.Warn("sabnzbd: no provider available, skipping refresh", "provider", name, "downloads", len(group))
+			continue
+		}
+		statuses, fetchedAt, err := p.ListCached(ctx)
+		if err != nil {
+			slog.Error("sabnzbd: provider list failed", "provider", name, "error", err)
+			continue
+		}
+		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt)
+		for _, st := range statuses {
+			k := liveKey{provider: name, id: string(st.ID)}
+			eta[k] = st.ETASeconds
+			phase[k] = st.Phase
+			totalSpeedBytes += st.DownloadSpeedBytes
+		}
 	}
 	return eta, phase, totalSpeedBytes
+}
+
+// liveKey identifies one download's live status. Keyed by provider as well
+// as id: two providers can legitimately issue the same id, and merging them
+// into one map would let one account's numbers be reported for another's
+// download.
+type liveKey struct {
+	provider string
+	id       string
+}
+
+// liveKeyFor is d's key in the maps refreshFromProvider returns, applying
+// the same empty-provider fallback the refresh itself used so the two agree.
+func liveKeyFor(d *database.Download, defaultProvider string) liveKey {
+	name := d.Provider
+	if name == "" {
+		name = defaultProvider
+	}
+	return liveKey{provider: name, id: d.ProviderDownloadID}
 }
 
 type queueSlot struct {
@@ -92,14 +123,15 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return
 	}
-	etaByProviderID, phaseByProviderID, totalSpeedBytes := s.refreshFromProvider(ctx, rows)
+	eta, phase, totalSpeedBytes := s.refreshFromProvider(ctx, rows)
 
 	slots := make([]queueSlot, 0, len(rows))
 	for _, d := range rows {
 		switch d.State {
 		case database.StateQueued, database.StateDownloading, database.StateProviderCompleted:
 			fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-			slots = append(slots, toQueueSlot(d, etaByProviderID[d.ProviderDownloadID], phaseByProviderID[d.ProviderDownloadID], fetchProgress, hasFetchProgress))
+			k := liveKeyFor(d, s.registry.Default())
+			slots = append(slots, toQueueSlot(d, eta[k], phase[k], fetchProgress, hasFetchProgress))
 		}
 	}
 	// kbpersec is real SABnzbd's own aggregate-speed field, at the top of

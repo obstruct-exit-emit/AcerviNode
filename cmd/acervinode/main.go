@@ -192,11 +192,8 @@ func run(ctx context.Context) error {
 func buildHandler(db *database.DB, registry *debrid.Registry, settings *liveSettings) http.Handler {
 	mux := http.NewServeMux()
 
-	// The shims still take one provider each; they resolve through the
-	// registry in a later increment. With a single provider these are the
-	// same objects the native API reaches through it.
-	qbtServer := qbittorrent.NewServer(registry.Torrent(registry.Default()), db, settings)
-	sabServer := sabnzbd.NewServer(registry.Usenet(registry.Default()), db, settings)
+	qbtServer := qbittorrent.NewServer(registry, db, settings)
+	sabServer := sabnzbd.NewServer(registry, db, settings)
 	settings.SetShimServers(qbtServer, sabServer)
 
 	mux.Handle("/api/v1/", api.NewServer(version, db, registry, settings))

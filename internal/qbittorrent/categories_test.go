@@ -14,7 +14,7 @@ func TestServer_CategoriesAndAddCategory(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
+	s := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey("test-api-key"))
 
 	if got := s.Categories(); len(got) != 0 {
 		t.Errorf("Categories() = %v, want empty before anything is added", got)
@@ -43,7 +43,7 @@ func TestServer_RemoveCategory(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s := NewServer(newFakeProvider(), db, staticAPIKey("test-api-key"))
+	s := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey("test-api-key"))
 	s.AddCategory("movies")
 	s.AddCategory("tv-sonarr")
 

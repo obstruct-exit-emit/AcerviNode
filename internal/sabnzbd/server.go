@@ -28,27 +28,39 @@ type settingsSource interface {
 	DeleteLocalFiles(d *database.Download) error
 }
 
-// ownsDownload reports whether d belongs to this shim's provider. A shim
-// only ever has one, so unlike the native API there is nothing to look up —
-// but a row can still name a different provider, either because more than
-// one is configured or because the API key was swapped for a different
-// account after the row was created. Its provider_download_id means nothing
-// to whoever is configured now, so acting on it would at best fail and at
-// worst hit an unrelated download that happens to share the id.
-func (s *Server) ownsDownload(d *database.Download) bool {
-	if d.Provider == "" || d.Provider == s.provider.Name() {
-		return true
+// defaultUsenet is the provider a new download goes to, or nil if nothing
+// registered supports usenet.
+func (s *Server) defaultUsenet() *debrid.DynamicUsenetProvider {
+	return s.registry.Usenet(s.registry.Default())
+}
+
+// usenetFor resolves the provider d belongs to, or nil if that provider
+// isn't available for usenet. A provider_download_id means nothing to a
+// different account, so acting on it would at best fail and at worst hit an
+// unrelated download that happens to share the id. A row with no provider
+// recorded falls back to the default — older rows predate the column being
+// populated, and nothing writes an empty provider today.
+func (s *Server) usenetFor(d *database.Download) *debrid.DynamicUsenetProvider {
+	name := d.Provider
+	if name == "" {
+		name = s.registry.Default()
 	}
-	slog.Warn("sabnzbd: skipping provider call, download belongs to a different provider",
-		"id", d.ID, "download_provider", d.Provider, "configured_provider", s.provider.Name())
-	return false
+	p := s.registry.Usenet(name)
+	if p == nil {
+		slog.Warn("sabnzbd: no provider available for download",
+			"id", d.ID, "download_provider", d.Provider, "resolved_name", name)
+	}
+	return p
 }
 
 // Server is an http.Handler implementing the SABnzbd API surface AcerviNode
 // needs. It talks to a debrid.UsenetProvider for everything download-related
 // and to the shared downloads table for everything local.
 type Server struct {
-	provider debrid.UsenetProvider
+	// registry is every configured provider. Adds go to the default; work
+	// on an existing download resolves that download's own provider — see
+	// defaultUsenet and usenetFor.
+	registry *debrid.Registry
 	db       *database.DB
 	// settings.APIKey() is checked against the "apikey" query/form parameter
 	// on every request — SABnzbd's real auth model has no login step (see
@@ -60,9 +72,9 @@ type Server struct {
 }
 
 // NewServer builds a SABnzbd-compat Server backed by provider and db.
-func NewServer(provider debrid.UsenetProvider, db *database.DB, settings settingsSource) *Server {
+func NewServer(registry *debrid.Registry, db *database.DB, settings settingsSource) *Server {
 	s := &Server{
-		provider:   provider,
+		registry:   registry,
 		db:         db,
 		settings:   settings,
 		categories: newCategoryStore(),

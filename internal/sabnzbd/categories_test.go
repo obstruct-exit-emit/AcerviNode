@@ -14,7 +14,7 @@ func TestServer_CategoriesAndAddCategory(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s := NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey))
+	s := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey(testAPIKey))
 
 	// "*" is a protocol requirement (see categoryStore's doc comment) that
 	// Categories() deliberately filters back out — it's not something
@@ -49,7 +49,7 @@ func TestServer_RemoveCategory(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s := NewServer(newFakeProvider(), db, staticAPIKey(testAPIKey))
+	s := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey(testAPIKey))
 	s.AddCategory("movies")
 	s.AddCategory("tv-sonarr")
 
