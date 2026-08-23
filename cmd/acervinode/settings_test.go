@@ -27,7 +27,10 @@ func TestLiveSettings_SetTorBoxAPIKey_PersistsAndConfigures(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	if settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = true before Set, want false")
 	}
@@ -78,7 +81,10 @@ func TestSettingsAPI_SetKeyThenUseShimImmediately(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -136,7 +142,7 @@ func TestLiveSettings_RegenerateAPIKey_PersistsAndApplies(t *testing.T) {
 	}
 	oldKey := cfg.APIKey
 
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	newKey, err := settings.RegenerateAPIKey(context.Background())
 	if err != nil {
@@ -166,7 +172,7 @@ func TestLiveSettings_General_ReflectsConfig(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 	got := settings.General()
 
 	if got.APIKey != cfg.APIKey || got.Port != cfg.Port || got.DataDir != cfg.DataDir ||
@@ -194,7 +200,10 @@ func TestSettingsAPI_RegenerateAPIKey_OldKeyStopsWorkingNewKeyWorks(t *testing.T
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	handler := buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -285,7 +294,9 @@ func TestLiveSettings_UpdateGeneral_AppliesLiveAndPersists(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, _, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
 
 	levelVar := new(slog.LevelVar)
 	levelVar.Set(slog.LevelInfo)
@@ -401,7 +412,10 @@ func TestLiveSettings_UpdateGeneral_RebuildsProvidersOnTimeoutChange(t *testing.
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 
 	ctx := context.Background()
 	if err := settings.SetTorBoxAPIKey(ctx, "a-real-looking-key"); err != nil {
@@ -455,7 +469,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForPortAndDataDir(t *testing.
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port + 1, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -481,7 +495,7 @@ func TestLiveSettings_UpdateGeneral_RejectsInvalidValues(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 	originalLogLevel := cfg.LogLevel
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -506,7 +520,7 @@ func TestLiveSettings_UpdateGeneral_RestartRequiredForTLSChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	restartRequired, err := settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -541,7 +555,7 @@ func TestLiveSettings_UpdateGeneral_RejectsTLSPortCollidingWithPort(t *testing.T
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	_, err = settings.UpdateGeneral(context.Background(), api.GeneralUpdate{
 		Port: cfg.Port, DataDir: cfg.DataDir, DownloadDir: cfg.DownloadDir,
@@ -560,7 +574,7 @@ func TestLiveSettings_SupervisedBySystemd_ReflectsInvocationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	t.Setenv("INVOCATION_ID", "")
 	os.Unsetenv("INVOCATION_ID")
@@ -584,7 +598,7 @@ func TestLiveSettings_RequestRestart_ErrorsWhenNoTriggerWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if err := settings.RequestRestart(context.Background()); err == nil {
 		t.Error("RequestRestart() with no trigger wired: expected an error, got nil")
@@ -597,7 +611,7 @@ func TestLiveSettings_RequestRestart_CallsWiredTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	called := false
 	settings.SetRestartTrigger(func() { called = true })
@@ -617,7 +631,7 @@ func TestLiveSettings_RegenerateCertificate_GeneratesFreshCert(t *testing.T) {
 		t.Fatalf("config.Load() error = %v", err)
 	}
 	cfg.DataDir = t.TempDir()
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	certPath := filepath.Join(cfg.DataDir, "tls", "cert.pem")
 	if _, err := os.Stat(certPath); err == nil {
@@ -658,7 +672,7 @@ func TestLiveSettings_RegenerateCertificate_RefusesWhenBYOConfigured(t *testing.
 	}
 	cfg.TLSCertFile = "/somewhere/cert.pem"
 	cfg.TLSKeyFile = "/somewhere/key.pem"
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if err := settings.RegenerateCertificate(context.Background()); err == nil {
 		t.Error("RegenerateCertificate() with a BYO override configured: expected an error, got nil")
@@ -674,7 +688,7 @@ func TestLiveSettings_TestTorBoxConnection_NotConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if _, err := settings.TestTorBoxConnection(context.Background()); err == nil {
 		t.Error("TestTorBoxConnection() with nothing configured: expected an error, got nil")
@@ -696,7 +710,10 @@ func TestLiveSettings_CategoriesAndAddCategory(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect, seeding defaultArrCategories
 
 	// Custom names, deliberately not among defaultArrCategories, so this
@@ -755,7 +772,10 @@ func TestLiveSettings_SetShimServers_SeedsDefaultArrCategories(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
 	}
@@ -798,7 +818,9 @@ func TestLiveSettings_SetCategoryPath(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, _, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
 	imp := importer.New(db, torrentDyn, usenetDyn, cfg.DownloadDir, time.Minute, 5)
 	settings.SetImporter(imp)
 
@@ -857,7 +879,10 @@ func TestLiveSettings_SetCategoryPath_RegistersCategoryWithBothShims(t *testing.
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings) // wires SetShimServers as a side effect
 
 	ctx := context.Background()
@@ -907,7 +932,10 @@ func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 
 	ctx := context.Background()
@@ -925,7 +953,10 @@ func TestLiveSettings_SetCategoryPath_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() reload error = %v", err)
 	}
-	torrentDyn2, usenetDyn2, webDownloadDyn2, settings2 := setupProviders(reloadedCfg, configPath)
+	registry, settings2 := setupProviders(reloadedCfg, configPath)
+	torrentDyn2 := registry.Torrent(registry.Default())
+	usenetDyn2 := registry.Usenet(registry.Default())
+	webDownloadDyn2 := registry.WebDL(registry.Default())
 	buildHandler(db, torrentDyn2, usenetDyn2, webDownloadDyn2, settings2)
 
 	torrentCats, usenetCats := settings2.Categories()
@@ -970,7 +1001,10 @@ func TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects(t *te
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	if err := settings.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() error = %v", err)
 	}
@@ -1005,7 +1039,10 @@ func TestLiveSettings_SeedDefaultCategoriesOnce_PersistsAndNeverResurrects(t *te
 	if err != nil {
 		t.Fatalf("config.Load() reload error = %v", err)
 	}
-	torrentDyn2, usenetDyn2, webDownloadDyn2, settings2 := setupProviders(reloadedCfg, configPath)
+	registry, settings2 := setupProviders(reloadedCfg, configPath)
+	torrentDyn2 := registry.Torrent(registry.Default())
+	usenetDyn2 := registry.Usenet(registry.Default())
+	webDownloadDyn2 := registry.WebDL(registry.Default())
 	if err := settings2.SeedDefaultCategoriesOnce(); err != nil {
 		t.Fatalf("SeedDefaultCategoriesOnce() (post-restart) error = %v", err)
 	}
@@ -1053,7 +1090,10 @@ func TestLiveSettings_RemoveCategory(t *testing.T) {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	buildHandler(db, torrentDyn, usenetDyn, webDownloadDyn, settings)
 
 	ctx := context.Background()
@@ -1106,7 +1146,7 @@ func TestLiveSettings_SetupNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if !settings.SetupNeeded() {
 		t.Error("SetupNeeded() = false for a fresh instance, want true")
@@ -1128,7 +1168,7 @@ func TestLiveSettings_SetupNeeded_FalseOnceAuthEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if err := settings.Setup(context.Background(), "alice", "somehash"); err != nil {
 		t.Fatalf("Setup() error = %v", err)
@@ -1147,7 +1187,7 @@ func TestLiveSettings_Setup_CreatesDefaultAdminAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 
 	if err := settings.Setup(context.Background(), "alice", "hashed-pw"); err != nil {
 		t.Fatalf("Setup() error = %v", err)
@@ -1178,7 +1218,7 @@ func TestLiveSettings_AddRemoveSetPasswordSetRoleSetDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 	ctx := context.Background()
 
 	if err := settings.Setup(ctx, "alice", "hash1"); err != nil {
@@ -1244,7 +1284,7 @@ func TestLiveSettings_RemoveUser_RefusesDefaultAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 	if err := settings.Setup(context.Background(), "alice", "hash1"); err != nil {
 		t.Fatalf("Setup() error = %v", err)
 	}
@@ -1259,7 +1299,7 @@ func TestLiveSettings_FindUser_UnknownUsername(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
-	_, _, _, settings := setupProviders(cfg, configPath)
+	_, settings := setupProviders(cfg, configPath)
 	if _, _, found := settings.FindUser("nobody"); found {
 		t.Error("FindUser() found = true for an unknown username, want false")
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/acervinode/acervinode/internal/sabnzbd"
 	"github.com/acervinode/acervinode/internal/tlscert"
 	"github.com/acervinode/acervinode/web"
+	"sort"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...", the
@@ -70,7 +71,14 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	// Consumers still take one provider per kind; wiring the registry
+	// through them is the next increment. With a single provider these are
+	// the same objects either way.
+	defaultProvider := registry.Default()
+	torrentDyn := registry.Torrent(defaultProvider)
+	usenetDyn := registry.Usenet(defaultProvider)
+	webDownloadDyn := registry.WebDL(defaultProvider)
 	settings.SetLevelVar(levelVar)
 	// One-time only (see SeedDefaultCategoriesOnce's own doc comment) —
 	// must run before buildHandler/SetShimServers below, so whatever this
@@ -236,24 +244,73 @@ func newTorBoxProviders(apiKey string, requestTimeout time.Duration) (debrid.Tor
 	return torbox.NewProvider(apiKey, opt), torbox.NewUsenetProvider(apiKey, opt), torbox.NewWebDownloadProvider(apiKey, opt)
 }
 
-// setupProviders builds the Dynamic*Provider wrappers that are the single
-// shared source of truth for "which TorBox credentials are currently
-// active" — every consumer (both compat shims, the native API, and the
-// importer) holds the same instances, so a key set later through the
-// settings API takes effect for all of them at once, live, with no restart.
-// Pre-populated from cfg if a key is already there. Split out from run() so
-// tests can build the same wiring without going through the full startup
-// sequence.
-func setupProviders(cfg *config.Config, configPath string) (*debrid.DynamicTorrentProvider, *debrid.DynamicUsenetProvider, *debrid.DynamicWebDownloadProvider, *liveSettings) {
-	torrentDyn := debrid.NewDynamicTorrentProvider("torbox")
-	usenetDyn := debrid.NewDynamicUsenetProvider("torbox")
-	webDownloadDyn := debrid.NewDynamicWebDownloadProvider("torbox")
-	if torboxCfg, ok := cfg.Providers["torbox"]; ok && torboxCfg.APIKey != "" {
-		tp, up, wp := newTorBoxProviders(torboxCfg.APIKey, time.Duration(cfg.ProviderRequestTimeoutSeconds)*time.Second)
-		torrentDyn.Set(tp)
-		usenetDyn.Set(up)
-		webDownloadDyn.Set(wp)
+// providerConstructor builds one provider's three per-kind implementations
+// from an API key. A provider that doesn't support a kind returns nil for
+// it — nothing here assumes every provider does all three.
+type providerConstructor func(apiKey string, requestTimeout time.Duration) (debrid.TorrentProvider, debrid.UsenetProvider, debrid.WebDownloadProvider)
+
+// knownProviders is every provider type AcerviNode can actually construct,
+// keyed by the name used in config.Providers. Adding a second debrid
+// service is an entry here plus its implementation of the debrid
+// interfaces — deliberately the only place a provider name is written down
+// in wiring, rather than repeated at each Dynamic*Provider construction as
+// it used to be.
+var knownProviders = map[string]providerConstructor{
+	"torbox": newTorBoxProviders,
+}
+
+// knownProviderNames lists knownProviders in a stable order, so registry
+// ordering (and therefore GET /api/v1/providers) doesn't reshuffle between
+// runs on Go's randomised map iteration.
+func knownProviderNames() []string {
+	names := make([]string, 0, len(knownProviders))
+	for name := range knownProviders {
+		names = append(names, name)
 	}
-	settings := &liveSettings{cfg: cfg, configPath: configPath, torrentDyn: torrentDyn, usenetDyn: usenetDyn, webDownloadDyn: webDownloadDyn}
-	return torrentDyn, usenetDyn, webDownloadDyn, settings
+	sort.Strings(names)
+	return names
+}
+
+// setupProviders builds the provider registry: one Dynamic*Provider per
+// provider per kind, which together are the single shared source of truth
+// for "which credentials are currently active". Every consumer (both compat
+// shims, the native API, and the importer) resolves through the same
+// instances, so a key set later through the settings API takes effect for
+// all of them at once, live, with no restart.
+//
+// Every known provider type is registered whether or not it has a key yet:
+// the wrapper *is* the slot a key gets set into, so it has to exist before
+// one is configured. A provider with no key simply answers
+// debrid.ErrNoProvider until it has one.
+//
+// Split out from run() so tests can build the same wiring without going
+// through the full startup sequence.
+func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *liveSettings) {
+	registry := debrid.NewRegistry()
+	timeout := time.Duration(cfg.ProviderRequestTimeoutSeconds) * time.Second
+
+	for _, name := range knownProviderNames() {
+		t := debrid.NewDynamicTorrentProvider(name)
+		u := debrid.NewDynamicUsenetProvider(name)
+		w := debrid.NewDynamicWebDownloadProvider(name)
+		if pc, ok := cfg.Providers[name]; ok && pc.APIKey != "" {
+			tp, up, wp := knownProviders[name](pc.APIKey, timeout)
+			t.Set(tp)
+			u.Set(up)
+			w.Set(wp)
+		}
+		registry.Register(name, t, u, w)
+	}
+
+	// A configured name nothing knows how to build is worth saying out
+	// loud — silently ignoring it would look exactly like a provider that
+	// simply never works.
+	for name := range cfg.Providers {
+		if _, known := knownProviders[name]; !known {
+			slog.Warn("unknown provider in config, ignoring", "provider", name)
+		}
+	}
+
+	settings := &liveSettings{cfg: cfg, configPath: configPath, registry: registry}
+	return registry, settings
 }

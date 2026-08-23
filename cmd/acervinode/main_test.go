@@ -59,7 +59,10 @@ func TestBuildHandler_RoutesBothCompatShimsAndNativeAPI(t *testing.T) {
 	defer db.Close()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	if !settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = false, want true (key was set via env)")
 	}
@@ -149,7 +152,10 @@ func TestBuildHandler_NoProviderConfigured(t *testing.T) {
 	defer db.Close()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	torrentDyn, usenetDyn, webDownloadDyn, settings := setupProviders(cfg, configPath)
+	registry, settings := setupProviders(cfg, configPath)
+	torrentDyn := registry.Torrent(registry.Default())
+	usenetDyn := registry.Usenet(registry.Default())
+	webDownloadDyn := registry.WebDL(registry.Default())
 	if settings.TorBoxConfigured() {
 		t.Fatal("TorBoxConfigured() = true, want false (no key set)")
 	}
@@ -308,4 +314,49 @@ func freePort(t *testing.T) string {
 		t.Fatalf("split host port: %v", err)
 	}
 	return port
+}
+
+// TestSetupProviders_BuildsRegistryFromConfig covers the wiring that used to
+// hardcode "torbox" three times: the registry is now built by walking the
+// provider types AcerviNode knows how to construct, and a config entry
+// naming something it doesn't know is skipped rather than silently
+// producing a provider that can never work.
+func TestSetupProviders_BuildsRegistryFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"torbox":   {APIKey: "some-key"},
+			"nonsense": {APIKey: "x"},
+		},
+		ProviderRequestTimeoutSeconds: 30,
+	}
+	registry, _ := setupProviders(cfg, filepath.Join(t.TempDir(), "config.yaml"))
+
+	if got := registry.Names(); len(got) != 1 || got[0] != "torbox" {
+		t.Errorf("Names() = %v, want [torbox] — an unrecognised name must not register", got)
+	}
+	if registry.Default() != "torbox" {
+		t.Errorf("Default() = %q, want torbox — the only registered provider", registry.Default())
+	}
+	if p := registry.Torrent("torbox"); p == nil || !p.Configured() {
+		t.Error("torbox's torrent wrapper should be configured from the key in config")
+	}
+	if registry.Torrent("nonsense") != nil {
+		t.Error("Torrent(\"nonsense\") returned a wrapper for an unrecognised provider")
+	}
+}
+
+// A provider with no key yet still has to be registered: the wrapper is the
+// slot a key gets set into later through the settings API, so it must exist
+// before one is configured.
+func TestSetupProviders_RegistersKnownProviderWithNoKey(t *testing.T) {
+	cfg := &config.Config{ProviderRequestTimeoutSeconds: 30}
+	registry, _ := setupProviders(cfg, filepath.Join(t.TempDir(), "config.yaml"))
+
+	p := registry.Torrent("torbox")
+	if p == nil {
+		t.Fatal("torbox is not registered when no key is configured")
+	}
+	if p.Configured() {
+		t.Error("Configured() = true with no key in config")
+	}
 }

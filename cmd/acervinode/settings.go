@@ -34,12 +34,14 @@ import (
 // since a handful of tests build a liveSettings without going through the
 // full startup sequence.
 type liveSettings struct {
-	mu             sync.Mutex
-	cfg            *config.Config
-	configPath     string
-	torrentDyn     *debrid.DynamicTorrentProvider
-	usenetDyn      *debrid.DynamicUsenetProvider
-	webDownloadDyn *debrid.DynamicWebDownloadProvider
+	mu         sync.Mutex
+	cfg        *config.Config
+	configPath string
+	// registry is every configured provider. The TorBox-specific methods
+	// below look their wrappers up by name, which is honest while those
+	// methods are themselves TorBox-specific — generalising both to
+	// "whichever provider the caller means" is its own piece of work.
+	registry       *debrid.Registry
 	levelVar       *slog.LevelVar
 	imp            *importer.Importer
 	qbt            *qbittorrent.Server
@@ -184,8 +186,14 @@ func (s *liveSettings) SeedDefaultCategoriesOnce() error {
 	return nil
 }
 
+// torBoxProviderName is the registry key for TorBox — the one place the
+// name is spelled in this file, so the TorBox-specific methods below can be
+// generalised without hunting for string literals.
+const torBoxProviderName = "torbox"
+
 func (s *liveSettings) TorBoxConfigured() bool {
-	return s.torrentDyn.Configured()
+	t := s.registry.Torrent(torBoxProviderName)
+	return t != nil && t.Configured()
 }
 
 func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
@@ -193,9 +201,15 @@ func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 	defer s.mu.Unlock()
 
 	torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(apiKey, time.Duration(s.cfg.ProviderRequestTimeoutSeconds)*time.Second)
-	s.torrentDyn.Set(torrentProvider)
-	s.usenetDyn.Set(usenetProvider)
-	s.webDownloadDyn.Set(webDownloadProvider)
+	if t := s.registry.Torrent(torBoxProviderName); t != nil {
+		t.Set(torrentProvider)
+	}
+	if u := s.registry.Usenet(torBoxProviderName); u != nil {
+		u.Set(usenetProvider)
+	}
+	if w := s.registry.WebDL(torBoxProviderName); w != nil {
+		w.Set(webDownloadProvider)
+	}
 
 	if s.cfg.Providers == nil {
 		s.cfg.Providers = map[string]config.ProviderConfig{}
@@ -212,11 +226,12 @@ func (s *liveSettings) SetTorBoxAPIKey(_ context.Context, apiKey string) error {
 // currently configured key and times it — a genuine connectivity+auth
 // check, not just "is a key set" (see TorBoxConfigured).
 func (s *liveSettings) TestTorBoxConnection(ctx context.Context) (int64, error) {
-	if !s.torrentDyn.Configured() {
+	t := s.registry.Torrent(torBoxProviderName)
+	if t == nil || !t.Configured() {
 		return 0, fmt.Errorf("torbox is not configured")
 	}
 	start := time.Now()
-	_, err := s.torrentDyn.List(ctx)
+	_, err := t.List(ctx)
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		return latencyMs, fmt.Errorf("connection test failed: %w", err)
@@ -397,9 +412,15 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	// for a timeout-only change too, so it doesn't need its own restart.
 	if requestTimeoutChanged && torboxAPIKey != "" {
 		torrentProvider, usenetProvider, webDownloadProvider := newTorBoxProviders(torboxAPIKey, time.Duration(candidate.ProviderRequestTimeoutSeconds)*time.Second)
-		s.torrentDyn.Set(torrentProvider)
-		s.usenetDyn.Set(usenetProvider)
-		s.webDownloadDyn.Set(webDownloadProvider)
+		if t := s.registry.Torrent(torBoxProviderName); t != nil {
+			t.Set(torrentProvider)
+		}
+		if u := s.registry.Usenet(torBoxProviderName); u != nil {
+			u.Set(usenetProvider)
+		}
+		if w := s.registry.WebDL(torBoxProviderName); w != nil {
+			w.Set(webDownloadProvider)
+		}
 	}
 
 	return restartRequired, nil
@@ -625,10 +646,17 @@ func (s *liveSettings) CancelFetch(id string) {
 
 // AccountStatus reports the configured TorBox account's own plan/usage —
 // see debrid.DynamicTorrentProvider.Account, which this delegates to
-// directly (torrentDyn already holds whichever concrete provider is
+// directly (the wrapper already holds whichever concrete provider is
 // currently active, live-swapped the same way as everything else here).
+// Reports the default provider's account — the settings UI still shows a
+// single account panel; one panel per configured provider comes with the
+// rest of the multi-provider settings surface.
 func (s *liveSettings) AccountStatus(ctx context.Context) (debrid.AccountStatus, error) {
-	return s.torrentDyn.Account(ctx)
+	t := s.registry.Torrent(s.registry.Default())
+	if t == nil {
+		return debrid.AccountStatus{}, debrid.ErrNoProvider
+	}
+	return t.Account(ctx)
 }
 
 // Status assembles api.StatusInfo from the Importer's own live health
