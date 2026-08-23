@@ -301,6 +301,31 @@ export function setProviderApiKey(apiKey: string, provider: string, providerKey:
   })
 }
 
+// getProviderTypes lists the implementations this build can construct. A
+// provider's name is free text; its type is not — the two differ when one
+// service holds more than one account.
+export function getProviderTypes(apiKey: string): Promise<string[]> {
+  return request('/api/v1/settings/provider-types', apiKey)
+}
+
+// addProvider registers a new provider entry. Pass a type when it differs
+// from the name, which is how a second account on the same service is
+// added: name "torbox-work", type "torbox".
+export function addProvider(apiKey: string, name: string, type: string, providerKey: string): Promise<void> {
+  return request('/api/v1/settings/providers', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, type, api_key: providerKey }),
+  })
+}
+
+// removeProvider deletes a provider entry. Downloads already tracked
+// against it are left alone — they're records of real things, and removing
+// a provider is a configuration change, not an instruction to discard them.
+export function removeProvider(apiKey: string, provider: string): Promise<void> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}`, apiKey, { method: 'DELETE' })
+}
+
 export function setDefaultProvider(apiKey: string, provider: string): Promise<void> {
   return request('/api/v1/settings/providers/default', apiKey, {
     method: 'PUT',
@@ -499,6 +524,17 @@ export function getProviderAccount(apiKey: string, provider: string): Promise<Pr
 // account state, e.g. cooldown_until) — this answers "is polling itself
 // working," not "is the provider account restricted." A fast, purely local
 // call (no live network call to the provider), unlike getProviderAccount.
+// ProviderKindStatus is one provider's handling of one kind. kinds below
+// aggregates across providers, which answers "is this kind working" but not
+// "which provider is struggling" — with two configured, one failing every
+// list while the other succeeds leaves the kind looking healthy.
+export interface ProviderKindStatus {
+  provider: string
+  kind: string
+  last_successful_list_at?: string
+  rate_limited_until?: string
+}
+
 export interface KindStatus {
   last_successful_list_at?: string
   rate_limited_until?: string
@@ -508,6 +544,7 @@ export interface KindStatus {
 export interface StatusInfo {
   last_tick_at?: string
   kinds: Record<string, KindStatus>
+  providers?: ProviderKindStatus[]
 }
 
 export function getStatus(apiKey: string): Promise<StatusInfo> {

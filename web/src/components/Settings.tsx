@@ -2,7 +2,10 @@ import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'r
 import {
   getCategories,
   getGeneralSettings,
+  addProvider,
   getProviderSettings,
+  getProviderTypes,
+  removeProvider,
   getStatus,
   getProviderAccount,
   regenerateApiKey,
@@ -192,6 +195,11 @@ export function Settings({ apiKey }: Props) {
     Record<string, { kind: 'idle' | 'testing' | 'ok' | 'error'; message?: string; latencyMs?: number }>
   >({})
   const [defaultStatus, setDefaultStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
+  // Adding an entry is how a second account on the same service is set up:
+  // a name of your choosing plus the type it actually is.
+  const [providerTypes, setProviderTypes] = useState<string[]>([])
+  const [newProvider, setNewProvider] = useState({ name: '', type: '', api_key: '' })
+  const [addProviderStatus, setAddProviderStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   // Keyed by provider: each account is its own live call and its own
   // panel, inside that provider's card.
   const [accounts, setAccounts] = useState<Record<string, ProviderAccount>>({})
@@ -222,7 +230,7 @@ export function Settings({ apiKey }: Props) {
     // would fetch nothing.
     let providerList: ProviderSetting[] = []
     try {
-      const [providerSettings, generalSettings, cats, statusInfo] = await Promise.all([
+      const [providerSettings, generalSettings, cats, statusInfo, types] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
@@ -230,8 +238,10 @@ export function Settings({ apiKey }: Props) {
         // getStatus's own doc comment), unlike getProviderAccount below, so
         // it's safe to bundle here with everything else.
         getStatus(apiKey),
+        getProviderTypes(apiKey),
       ])
       setSettings(providerSettings)
+      setProviderTypes(types)
       providerList = providerSettings
       setGeneral(generalSettings)
       setForm({
@@ -423,6 +433,36 @@ export function Settings({ apiKey }: Props) {
       }))
     } catch (err) {
       setTestStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
+  async function handleAddProvider(e: FormEvent) {
+    e.preventDefault()
+    const name = newProvider.name.trim()
+    if (!name) return
+    setAddProviderStatus({ kind: 'saving' })
+    try {
+      await addProvider(apiKey, name, newProvider.type.trim(), newProvider.api_key.trim())
+      setNewProvider({ name: '', type: '', api_key: '' })
+      setAddProviderStatus({ kind: 'idle' })
+      await load()
+    } catch (err) {
+      setAddProviderStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  async function handleRemoveProvider(provider: string) {
+    if (
+      !confirm(
+        `Remove provider "${provider}"? Downloads already tracked against it are kept — they're records of real things — but they'll stop resolving until it's configured again.`,
+      )
+    )
+      return
+    try {
+      await removeProvider(apiKey, provider)
+      await load()
+    } catch (err) {
+      setAddProviderStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -743,6 +783,9 @@ export function Settings({ apiKey }: Props) {
                         <button type="button" className="test-connection-btn" onClick={() => handleClearProviderKey(p.name)}>
                           Clear key
                         </button>
+                        <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
+                          Remove provider
+                        </button>
                         {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
                       </>
@@ -790,6 +833,40 @@ export function Settings({ apiKey }: Props) {
             )
           })}
 
+          <section className="settings-card">
+            <h2>Add a provider</h2>
+            <p className="settings-help">
+              A name of your choosing plus the service it actually is. Use a distinct name to run a second account
+              on the same service — “torbox-work” of type “torbox” is an independent provider with its own key,
+              its own rate limits and its own downloads. Leave the type as the name for a first account.
+            </p>
+            <form onSubmit={handleAddProvider}>
+              <input
+                placeholder="name (e.g. torbox-work)"
+                value={newProvider.name}
+                onChange={(e) => setNewProvider({ ...newProvider, name: e.target.value })}
+              />
+              <select value={newProvider.type} onChange={(e) => setNewProvider({ ...newProvider, type: e.target.value })}>
+                <option value="">same as name</option>
+                {providerTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {providerLabel(t)}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="password"
+                placeholder="API key (optional)"
+                value={newProvider.api_key}
+                onChange={(e) => setNewProvider({ ...newProvider, api_key: e.target.value })}
+              />
+              <button type="submit" disabled={addProviderStatus.kind === 'saving' || !newProvider.name.trim()}>
+                {addProviderStatus.kind === 'saving' ? 'Adding…' : 'Add'}
+              </button>
+            </form>
+            {addProviderStatus.kind === 'error' && <p className="settings-error">{addProviderStatus.message}</p>}
+          </section>
+
           {defaultStatus.kind === 'error' && (
             <p className="settings-error">Failed to set default: {defaultStatus.message}</p>
           )}
@@ -815,6 +892,10 @@ export function Settings({ apiKey }: Props) {
                   const k = health.kinds[kind]
                   if (!k) return null
                   const rateLimited = k.rate_limited_until && new Date(k.rate_limited_until).getTime() > Date.now()
+                  // Per-provider rows for this kind, shown only when more
+                  // than one provider handles it — with a single provider
+                  // they would just repeat the aggregate line above.
+                  const perProvider = (health.providers ?? []).filter((p) => p.kind === kind)
                   return (
                     <Fragment key={kind}>
                       <dt>{kind}</dt>
@@ -822,6 +903,22 @@ export function Settings({ apiKey }: Props) {
                         {k.last_successful_list_at ? `last synced ${formatRelativeTime(k.last_successful_list_at)}` : 'never synced yet'}
                         {rateLimited && <> · rate-limited until {new Date(k.rate_limited_until as string).toLocaleTimeString()}</>}
                         {k.error_count > 0 && <> · {k.error_count} in error</>}
+                        {perProvider.length > 1 && (
+                          <ul className="status-per-provider">
+                            {perProvider.map((p) => {
+                              const limited = p.rate_limited_until && new Date(p.rate_limited_until).getTime() > Date.now()
+                              return (
+                                <li key={p.provider}>
+                                  {p.provider}:{' '}
+                                  {p.last_successful_list_at
+                                    ? `synced ${formatRelativeTime(p.last_successful_list_at)}`
+                                    : 'never synced'}
+                                  {limited && <> · rate-limited until {new Date(p.rate_limited_until as string).toLocaleTimeString()}</>}
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
                       </dd>
                     </Fragment>
                   )

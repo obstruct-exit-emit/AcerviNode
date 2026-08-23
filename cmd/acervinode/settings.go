@@ -748,6 +748,94 @@ func (s *liveSettings) AccountStatus(ctx context.Context, provider string) (debr
 	return debrid.AccountStatus{}, debrid.ErrNoProvider
 }
 
+// ProviderTypes lists the provider implementations this build can
+// construct, for the settings UI's "add a provider" picker — a name is free
+// text, but the type has to be one of these.
+func (s *liveSettings) ProviderTypes() []string {
+	return knownProviderTypes()
+}
+
+// AddProvider registers a new provider entry live and persists it.
+//
+// name is the entry, providerType is the implementation. They are separate
+// so one service can hold two accounts: "torbox" and "torbox-work" both
+// with type "torbox" are two independent providers, each with its own
+// credentials, listing cache and rate-limit backoff.
+//
+// An empty providerType means "same as the name", matching how config is
+// read — so adding "torbox" needs no type at all, and only a second account
+// has to say what it is.
+func (s *liveSettings) AddProvider(_ context.Context, name, providerType, apiKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if name == "" {
+		return fmt.Errorf("provider name must not be empty")
+	}
+	if _, exists := s.cfg.Providers[name]; exists {
+		return fmt.Errorf("provider %s already exists", name)
+	}
+	resolved := providerType
+	if resolved == "" {
+		resolved = name
+	}
+	if _, known := knownProviders[resolved]; !known {
+		return fmt.Errorf("unknown provider type %q", resolved)
+	}
+
+	timeout := time.Duration(s.cfg.ProviderRequestTimeoutSeconds) * time.Second
+	if err := registerProviderEntry(s.registry, name, resolved, apiKey, timeout); err != nil {
+		return err
+	}
+
+	if s.cfg.Providers == nil {
+		s.cfg.Providers = map[string]config.ProviderConfig{}
+	}
+	entry := config.ProviderConfig{APIKey: apiKey}
+	// Only recorded when it actually differs, so the common single-account
+	// config stays exactly as it was.
+	if resolved != name {
+		entry.Type = resolved
+	}
+	s.cfg.Providers[name] = entry
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	// The importer's shared listing caches are retuned on the next config
+	// change; a brand-new provider starts on the package default until
+	// then, which is a few seconds either way.
+	return nil
+}
+
+// RemoveProvider deletes a provider entry live and persists it.
+//
+// Downloads already tracked against it are deliberately left alone rather
+// than deleted: they are the user's records of real things, and removing a
+// provider is a configuration change, not an instruction to discard
+// history. They stop resolving to a provider, which the API and importer
+// already handle by declining to act rather than erroring — see
+// providerFor.
+func (s *liveSettings) RemoveProvider(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.cfg.Providers[name]; !exists {
+		return fmt.Errorf("provider %s is not configured", name)
+	}
+	s.registry.Unregister(name)
+	delete(s.cfg.Providers, name)
+
+	// A removed default hands over to whatever the registry fell back to,
+	// so the persisted setting doesn't keep naming something that is gone.
+	if s.cfg.DefaultProvider == name {
+		s.cfg.DefaultProvider = s.registry.Default()
+	}
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	return nil
+}
+
 // Status assembles api.StatusInfo from the Importer's own live health
 // signals — see api.StatusInfo's doc comment for what each field means. A
 // nil imp (tests, or a moment before run() finishes wiring it in) reports an
@@ -777,6 +865,20 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		kinds[string(kind)] = ks
 	}
 
+	var providerStatuses []api.ProviderKindStatus
+	for _, ps := range imp.ProviderStatuses() {
+		entry := api.ProviderKindStatus{Provider: ps.Provider, Kind: ps.Kind}
+		if !ps.LastSuccessfulListAt.IsZero() {
+			t := ps.LastSuccessfulListAt
+			entry.LastSuccessfulListAt = &t
+		}
+		if !ps.RateLimitedUntil.IsZero() {
+			t := ps.RateLimitedUntil
+			entry.RateLimitedUntil = &t
+		}
+		providerStatuses = append(providerStatuses, entry)
+	}
+
 	counts, err := imp.ErrorCounts(ctx)
 	if err != nil {
 		return api.StatusInfo{}, fmt.Errorf("status: count error downloads: %w", err)
@@ -787,7 +889,7 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		kinds[string(kind)] = ks
 	}
 
-	status := api.StatusInfo{Kinds: kinds}
+	status := api.StatusInfo{Kinds: kinds, Providers: providerStatuses}
 	if t, ok := imp.LastTickAt(); ok {
 		status.LastTickAt = &t
 	}

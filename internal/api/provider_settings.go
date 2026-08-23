@@ -162,3 +162,71 @@ func (s *Server) handleGetProviderAccountStatus(w http.ResponseWriter, r *http.R
 		CooldownUntil:        status.CooldownUntil,
 	})
 }
+
+// handleGetProviderTypes implements GET /api/v1/settings/provider-types —
+// the implementations this build can construct, for the "add a provider"
+// picker. A provider's *name* is free text; its type is not.
+func (s *Server) handleGetProviderTypes(w http.ResponseWriter, r *http.Request) {
+	types := s.settings.ProviderTypes()
+	if types == nil {
+		types = []string{}
+	}
+	writeJSON(w, types)
+}
+
+type addProviderRequest struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	// APIKey is optional: adding the entry and pasting its key can
+	// reasonably be two steps.
+	APIKey string `json:"api_key"`
+}
+
+// handleAddProvider implements POST /api/v1/settings/providers — registers
+// a new provider entry live and persists it.
+//
+// The name/type split is what allows two accounts on one service: entries
+// "torbox" and "torbox-work" both of type "torbox" are independent
+// providers, each with its own credentials, listing cache and rate-limit
+// backoff. An omitted type means "same as the name", so adding a first
+// account needs only a name.
+func (s *Server) handleAddProvider(w http.ResponseWriter, r *http.Request) {
+	var req addProviderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return
+	}
+	if s.providerRegistered(req.Name) {
+		http.Error(w, "provider "+req.Name+" already exists", http.StatusConflict)
+		return
+	}
+	if err := s.settings.AddProvider(r.Context(), req.Name, req.Type, req.APIKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// handleRemoveProvider implements DELETE /api/v1/settings/providers/{name}.
+//
+// Downloads already tracked against the provider are deliberately left
+// alone: they are records of real things, and removing a provider is a
+// configuration change rather than an instruction to discard history. They
+// simply stop resolving to a provider, which every caller already handles
+// by declining to act — see providerFor.
+func (s *Server) handleRemoveProvider(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.providerRegistered(name) {
+		http.Error(w, "unknown provider "+name, http.StatusNotFound)
+		return
+	}
+	if err := s.settings.RemoveProvider(r.Context(), name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -69,6 +69,30 @@ func (r *Registry) Register(name string, t *DynamicTorrentProvider, u *DynamicUs
 	}
 }
 
+// Unregister removes a provider entirely — for one deleted at runtime
+// through the settings API. Safe to call for a name that isn't registered.
+//
+// If the removed provider was the default, the fallback moves to whatever
+// is registered first, so an add immediately afterwards still resolves
+// somewhere rather than failing on a name that no longer exists.
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.torrent, name)
+	delete(r.usenet, name)
+	delete(r.webdl, name)
+	if i, ok := r.indexOf(name); ok {
+		r.order = append(r.order[:i], r.order[i+1:]...)
+	}
+	if r.fallback == name {
+		r.fallback = ""
+		if len(r.order) > 0 {
+			r.fallback = r.order[0]
+		}
+	}
+}
+
 // indexOf reports a name's position in order. Callers hold r.mu.
 func (r *Registry) indexOf(name string) (int, bool) {
 	for i, n := range r.order {

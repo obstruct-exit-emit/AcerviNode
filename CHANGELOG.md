@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`GET /api/v1/status` now reports per-provider detail**, alongside the
+  existing per-kind aggregate. The aggregate answers "is this kind working
+  at all" but cannot answer "which provider is struggling": with two
+  configured, one failing every list while the other succeeds still leaves
+  the kind looking healthy, because the healthy one keeps the timestamp
+  moving. A new `providers` array carries one entry per provider/kind pair
+  actually polled, each with its own last-successful-list time and
+  rate-limit cooldown. Added rather than replacing `kinds`, so existing
+  monitors keep working. The Settings page shows the breakdown under a kind
+  only when more than one provider handles it — with a single provider it
+  would just repeat the line above it.
+
+- **Providers can be added and removed from the web UI.** Previously a
+  second account on the same service meant hand-editing `config.yaml` to
+  add an entry with a `type` field: the UI could manage providers that
+  existed but not create one. New `POST /api/v1/settings/providers`,
+  `DELETE /api/v1/settings/providers/{name}` and
+  `GET /api/v1/settings/provider-types`, with an "Add a provider" form and a
+  per-provider Remove button. Name and type stay separate because that is
+  what allows two accounts on one service — "torbox-work" of type "torbox"
+  is an independent provider with its own credentials, listing cache and
+  rate-limit backoff — and an omitted type still means "same as the name",
+  so a first account needs only a name. Removing a provider deliberately
+  keeps any downloads already tracked against it: those are records of real
+  things, and removing a provider is a configuration change rather than an
+  instruction to discard history.
+
 - **AllDebrid is now feature-complete for what the service actually
   supports**, rather than torrent-only:
   - **`.torrent` file uploads** (`/v4/magnet/upload/file`). Previously

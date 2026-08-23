@@ -38,6 +38,29 @@ type StatusInfo struct {
 	// whether a provider is actually configured for each — an unconfigured
 	// kind just reports zero values throughout.
 	Kinds map[string]KindStatus `json:"kinds"`
+	// Providers is one entry per provider/kind pair actually polled.
+	//
+	// Kinds above aggregates across providers, which answers "is this kind
+	// working at all" but cannot answer "which provider is struggling":
+	// with two configured, one failing every list while the other succeeds
+	// still leaves the kind looking healthy, because the healthy one keeps
+	// the timestamp moving. Added rather than replacing Kinds so existing
+	// monitors keep working.
+	Providers []ProviderKindStatus `json:"providers"`
+}
+
+// ProviderKindStatus is one provider's handling of one kind within
+// StatusInfo.
+type ProviderKindStatus struct {
+	Provider string `json:"provider"`
+	Kind     string `json:"kind"`
+	// LastSuccessfulListAt is when this provider last answered a bulk
+	// listing for this kind without erroring. Omitted if it never has.
+	LastSuccessfulListAt *time.Time `json:"last_successful_list_at,omitempty"`
+	// RateLimitedUntil is set while this provider is backing off for this
+	// kind. Per provider, not per kind: one provider being limited does not
+	// stall another.
+	RateLimitedUntil *time.Time `json:"rate_limited_until,omitempty"`
 }
 
 // KindStatus is one kind's (torrent/usenet/webdl) own health signals within
@@ -248,6 +271,16 @@ type Settings interface {
 	// says otherwise; SetDefaultProvider changes and persists it.
 	DefaultProvider() string
 	SetDefaultProvider(name string) error
+	// ProviderTypes lists the provider implementations this build can
+	// construct — what AddProvider will accept as a type.
+	ProviderTypes() []string
+	// AddProvider registers a new provider entry live and persists it. name
+	// is the entry, providerType the implementation; they differ when one
+	// service holds two accounts. An empty providerType means "same as the
+	// name".
+	AddProvider(ctx context.Context, name, providerType, apiKey string) error
+	// RemoveProvider deletes a provider entry live and persists it.
+	RemoveProvider(ctx context.Context, name string) error
 	// APIKey returns AcerviNode's own current API key — the live source of
 	// truth every authenticated route (native API and both compat shims)
 	// checks against, so a regenerated key takes effect everywhere at once.
@@ -466,6 +499,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAdmin(s.handleGetProviderSettings))
 	// "default" is registered ahead of {name} so it can never be read as a
 	// provider by that name.
+	s.mux.HandleFunc("POST /api/v1/settings/providers", s.requireAdmin(s.handleAddProvider))
+	s.mux.HandleFunc("GET /api/v1/settings/provider-types", s.requireAdmin(s.handleGetProviderTypes))
+	s.mux.HandleFunc("DELETE /api/v1/settings/providers/{name}", s.requireAdmin(s.handleRemoveProvider))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/default", s.requireAdmin(s.handleSetDefaultProvider))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}", s.requireAdmin(s.handleSetProviderAPIKey))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/{name}/test", s.requireAdmin(s.handleTestProviderConnection))

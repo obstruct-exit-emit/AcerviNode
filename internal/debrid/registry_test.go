@@ -125,3 +125,30 @@ func TestRegistry_DefaultForUnsupportedKindIsNil(t *testing.T) {
 		t.Errorf("DefaultNameFor(usenet) = %q, want empty", got)
 	}
 }
+
+func TestRegistry_Unregister(t *testing.T) {
+	r := NewRegistry()
+	r.Register("a", NewDynamicTorrentProvider("a"), nil, nil)
+	r.Register("b", NewDynamicTorrentProvider("b"), nil, nil)
+	r.SetDefault("a")
+
+	r.Unregister("a")
+
+	if got, want := r.Names(), []string{"b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Names() = %v, want %v", got, want)
+	}
+	if r.Torrent("a") != nil {
+		t.Error("Torrent(\"a\") still resolves after Unregister")
+	}
+	// Removing the default must hand it to whatever remains, or an add
+	// straight afterwards would resolve to a name that no longer exists.
+	if r.Default() != "b" {
+		t.Errorf("Default() = %q after removing the default, want b", r.Default())
+	}
+
+	// Removing something that was never there is a no-op, not a panic.
+	r.Unregister("never-existed")
+	if got, want := r.Names(), []string{"b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Names() = %v after removing an unknown name, want %v", got, want)
+	}
+}

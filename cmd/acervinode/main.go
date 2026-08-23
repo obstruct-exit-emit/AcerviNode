@@ -293,6 +293,47 @@ var knownProviderCapabilities = map[string]providerCapabilities{
 	"alldebrid": {torrent: true, webdl: true},
 }
 
+// registerProviderEntry builds one provider entry's wrappers and registers
+// them. Shared by startup and by the settings API, which can add an entry at
+// runtime — so both paths produce identical wiring rather than one of them
+// reimplementing it slightly differently.
+//
+// An empty apiKey still registers: the wrapper *is* the slot a key gets set
+// into later, so it has to exist before one is configured.
+func registerProviderEntry(registry *debrid.Registry, name, typeName, apiKey string, timeout time.Duration) error {
+	construct, known := knownProviders[typeName]
+	if !known {
+		return fmt.Errorf("unknown provider type %q", typeName)
+	}
+
+	var tp debrid.TorrentProvider
+	var up debrid.UsenetProvider
+	var wp debrid.WebDownloadProvider
+	if apiKey != "" {
+		tp, up, wp = construct(name, apiKey, timeout)
+	}
+	// A provider that doesn't support a kind contributes no wrapper for it,
+	// so it simply never appears for that kind — see debrid.Registry.
+	var t *debrid.DynamicTorrentProvider
+	var u *debrid.DynamicUsenetProvider
+	var w *debrid.DynamicWebDownloadProvider
+	caps := knownProviderCapabilities[typeName]
+	if caps.torrent {
+		t = debrid.NewDynamicTorrentProvider(name)
+		t.Set(tp)
+	}
+	if caps.usenet {
+		u = debrid.NewDynamicUsenetProvider(name)
+		u.Set(up)
+	}
+	if caps.webdl {
+		w = debrid.NewDynamicWebDownloadProvider(name)
+		w.Set(wp)
+	}
+	registry.Register(name, t, u, w)
+	return nil
+}
+
 // providerIdentity is what makes two config entries the same account: the
 // implementation they use plus the credentials they use it with.
 type providerIdentity struct {
@@ -355,6 +396,18 @@ func defaultProviderName(cfg *config.Config, registry *debrid.Registry) string {
 	return ""
 }
 
+// knownProviderTypes lists the provider implementations this build can
+// construct, sorted so the settings UI's picker is stable rather than
+// following Go's randomised map iteration.
+func knownProviderTypes() []string {
+	names := make([]string, 0, len(knownProviders))
+	for name := range knownProviders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // providerEntryNames lists every provider entry to register, in a stable
 // order: each configured entry, plus every known type that has no entry yet
 // so a fresh install still has a slot to put a key into. Stable because
@@ -408,42 +461,14 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *l
 	// the wrapper *is* the slot a key gets set into.
 	for _, name := range providerEntryNames(cfg) {
 		typeName := name
+		apiKey := ""
 		if pc, ok := cfg.Providers[name]; ok {
 			typeName = pc.ResolvedType(name)
+			apiKey = pc.APIKey
 		}
-		construct, known := knownProviders[typeName]
-		if !known {
-			slog.Warn("unknown provider type in config, ignoring entry",
-				"provider", name, "type", typeName)
-			continue
+		if err := registerProviderEntry(registry, name, typeName, apiKey, timeout); err != nil {
+			slog.Warn("ignoring provider entry", "provider", name, "type", typeName, "error", err)
 		}
-
-		var tp debrid.TorrentProvider
-		var up debrid.UsenetProvider
-		var wp debrid.WebDownloadProvider
-		if pc, ok := cfg.Providers[name]; ok && pc.APIKey != "" {
-			tp, up, wp = construct(name, pc.APIKey, timeout)
-		}
-		// A provider that doesn't support a kind contributes no wrapper for
-		// it, so it simply never appears for that kind — see
-		// debrid.Registry.
-		var t *debrid.DynamicTorrentProvider
-		var u *debrid.DynamicUsenetProvider
-		var w *debrid.DynamicWebDownloadProvider
-		caps := knownProviderCapabilities[typeName]
-		if caps.torrent {
-			t = debrid.NewDynamicTorrentProvider(name)
-			t.Set(tp)
-		}
-		if caps.usenet {
-			u = debrid.NewDynamicUsenetProvider(name)
-			u.Set(up)
-		}
-		if caps.webdl {
-			w = debrid.NewDynamicWebDownloadProvider(name)
-			w.Set(wp)
-		}
-		registry.Register(name, t, u, w)
 	}
 
 	warnOnDuplicateProviderKeys(cfg)

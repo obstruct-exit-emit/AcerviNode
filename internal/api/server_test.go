@@ -169,14 +169,17 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
-	defaultProvider string
-	configured      bool
-	setCalls        []string
-	setErr          error
-	apiKey          string
-	regenCalls      int
-	regenErr        error
-	general         GeneralInfo
+	defaultProvider  string
+	addedProviders   [][3]string
+	removedProviders []string
+	addProviderErr   error
+	configured       bool
+	setCalls         []string
+	setErr           error
+	apiKey           string
+	regenCalls       int
+	regenErr         error
+	general          GeneralInfo
 
 	testLatencyMs int64
 	testErr       error
@@ -352,6 +355,21 @@ func (f *fakeSettings) SetProviderAPIKey(_ context.Context, _, apiKey string) er
 
 func (f *fakeSettings) TestProviderConnection(_ context.Context, _ string) (int64, error) {
 	return f.testLatencyMs, f.testErr
+}
+
+func (f *fakeSettings) ProviderTypes() []string { return []string{testProviderName, "othertype"} }
+
+func (f *fakeSettings) AddProvider(_ context.Context, name, providerType, apiKey string) error {
+	if f.addProviderErr != nil {
+		return f.addProviderErr
+	}
+	f.addedProviders = append(f.addedProviders, [3]string{name, providerType, apiKey})
+	return nil
+}
+
+func (f *fakeSettings) RemoveProvider(_ context.Context, name string) error {
+	f.removedProviders = append(f.removedProviders, name)
+	return nil
 }
 
 func (f *fakeSettings) DefaultProvider() string {
@@ -3345,5 +3363,74 @@ func TestHandleAddTorrent_ManagedAddClaimsAnExistingManualRow(t *testing.T) {
 	}
 	if got.Category != "tv-sonarr" {
 		t.Errorf("category = %q, want the one the Managed add asked for", got.Category)
+	}
+}
+
+// TestHandleAddProvider covers the name/type split that lets one service
+// hold two accounts: an entry named "torbox-work" of type "torbox" is a
+// second, independent provider rather than a redefinition of the first.
+func TestHandleAddProvider(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/providers",
+		strings.NewReader(`{"name":"torbox-work","type":"`+testProviderName+`","api_key":"k2"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.addedProviders) != 1 || settings.addedProviders[0] != [3]string{"torbox-work", testProviderName, "k2"} {
+		t.Errorf("addedProviders = %v, want one entry with name/type/key preserved", settings.addedProviders)
+	}
+}
+
+// Re-using an existing name is a conflict, not a silent redefinition that
+// would replace a working provider's credentials.
+func TestHandleAddProvider_DuplicateNameIsConflict(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/settings/providers",
+		strings.NewReader(`{"name":"`+testProviderName+`"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+	if len(settings.addedProviders) != 0 {
+		t.Error("a duplicate name still reached AddProvider")
+	}
+}
+
+func TestHandleRemoveProvider(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/settings/providers/"+testProviderName))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(settings.removedProviders) != 1 || settings.removedProviders[0] != testProviderName {
+		t.Errorf("removedProviders = %v, want [%s]", settings.removedProviders, testProviderName)
+	}
+}
+
+func TestHandleRemoveProvider_UnknownIs404(t *testing.T) {
+	settings := &fakeSettings{}
+	srv, _ := newTestServer(t, &fakeProvider{}, nil, settings)
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/settings/providers/nope"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+	if len(settings.removedProviders) != 0 {
+		t.Error("an unknown provider still reached RemoveProvider")
 	}
 }

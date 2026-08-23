@@ -972,6 +972,48 @@ func (im *Importer) RateLimitCooldownUntil(kind database.Kind) (time.Time, bool)
 	return latest, !latest.IsZero()
 }
 
+// ProviderKindStatus is one provider's handling of one kind, for
+// GET /api/v1/status. The aggregate accessors above answer "is this kind
+// working at all"; this answers "which provider is the one struggling",
+// which an aggregate cannot: with two providers configured, one failing
+// every list while the other succeeds still leaves the kind looking healthy,
+// because the healthy one keeps the timestamp moving.
+type ProviderKindStatus struct {
+	Provider             string
+	Kind                 string
+	LastSuccessfulListAt time.Time
+	RateLimitedUntil     time.Time
+}
+
+// ProviderStatuses reports every provider/kind pair the importer actually
+// polls, in the registry's stable order so the output doesn't reshuffle
+// between requests.
+func (im *Importer) ProviderStatuses() []ProviderKindStatus {
+	var out []ProviderKindStatus
+	im.eachProvider(func(kind database.Kind, name string, _ provider) {
+		pk := providerKind{provider: name, kind: kind}
+
+		im.statsMu.Lock()
+		listAt := im.successfulListAt[pk]
+		im.statsMu.Unlock()
+
+		var until time.Time
+		im.rateLimitMu.Lock()
+		if st, ok := im.rateLimitState[pk]; ok && time.Now().Before(st.nextAttempt) {
+			until = st.nextAttempt
+		}
+		im.rateLimitMu.Unlock()
+
+		out = append(out, ProviderKindStatus{
+			Provider:             name,
+			Kind:                 string(kind),
+			LastSuccessfulListAt: listAt,
+			RateLimitedUntil:     until,
+		})
+	})
+	return out
+}
+
 // LastTickAt reports when Tick last ran, regardless of what it found once
 // inside — a liveness signal for GET /api/v1/status: if this stops
 // advancing, the tick loop itself has stalled or crashed, as opposed to one
