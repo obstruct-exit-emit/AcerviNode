@@ -216,6 +216,13 @@
   margin: 10px 0 0;
 }
 
+/* An advisory inside a status line: something is wrong enough to mention,
+   but AcerviNode is deliberately not acting on it yet. Warning-coloured
+   rather than error-coloured for exactly that reason. */
+.status-warn {
+  color: var(--state-fetching);
+}
+
 .api-key-row {
   display: flex;
   align-items: center;

@@ -943,6 +943,9 @@ export function Settings({ apiKey }: Props) {
                         {k.last_successful_list_at ? `last synced ${formatRelativeTime(k.last_successful_list_at)}` : 'never synced yet'}
                         {rateLimited && <> · rate-limited until {new Date(k.rate_limited_until as string).toLocaleTimeString()}</>}
                         {k.error_count > 0 && <> · {k.error_count} in error</>}
+                        {perProvider.some((p) => p.listing_anomalous_since) && perProvider.length <= 1 && (
+                          <> · <span className="status-warn">listing looks empty — not removing anything yet</span></>
+                        )}
                         {perProvider.length > 1 && (
                           <ul className="status-per-provider">
                             {perProvider.map((p) => {
@@ -954,6 +957,13 @@ export function Settings({ apiKey }: Props) {
                                     ? `synced ${formatRelativeTime(p.last_successful_list_at)}`
                                     : 'never synced'}
                                   {limited && <> · rate-limited until {new Date(p.rate_limited_until as string).toLocaleTimeString()}</>}
+                                  {p.listing_anomalous_since && (
+                                    <>
+                                      {' '}
+                                      · <span className="status-warn">listing looks empty since{' '}
+                                      {formatRelativeTime(p.listing_anomalous_since)} — not removing anything yet</span>
+                                    </>
+                                  )}
                                 </li>
                               )
                             })}

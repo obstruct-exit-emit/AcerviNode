@@ -245,11 +245,23 @@ func (s *liveSettings) SetProviderAPIKey(_ context.Context, name, apiKey string)
 	if apiKey == "" {
 		delete(s.cfg.Providers, name)
 	} else {
-		s.cfg.Providers[name] = config.ProviderConfig{APIKey: apiKey}
+		// Updated in place rather than replaced, so the entry keeps its
+		// Type. Writing a fresh ProviderConfig here dropped it, which broke
+		// exactly the case the field exists for: a second account on one
+		// service (type: torbox under some other name) survived the change
+		// in memory but lost its type in config.yaml, so the next restart
+		// resolved the type from the entry's own name, found no such
+		// provider, and the account silently vanished.
+		entry := s.cfg.Providers[name]
+		entry.APIKey = apiKey
+		s.cfg.Providers[name] = entry
 	}
 	if err := s.cfg.Save(s.configPath); err != nil {
 		return fmt.Errorf("persist config: %w", err)
 	}
+	// Same reasoning as AddProvider: pasting a key that another entry
+	// already uses is easiest to do here, and easiest to miss.
+	warnOnDuplicateProviderKeys(s.cfg)
 	return nil
 }
 
@@ -866,6 +878,12 @@ func (s *liveSettings) AddProvider(_ context.Context, name, providerType, apiKey
 	if err := s.cfg.Save(s.configPath); err != nil {
 		return fmt.Errorf("persist config: %w", err)
 	}
+	// Checked here as well as at startup: adding a second account through
+	// the UI is the single most likely moment to paste the same key twice,
+	// and warning only on the next restart means the operator sees two
+	// entries discovering identical downloads with no explanation until
+	// then.
+	warnOnDuplicateProviderKeys(s.cfg)
 	// The importer's shared listing caches are retuned on the next config
 	// change; a brand-new provider starts on the package default until
 	// then, which is a few seconds either way.

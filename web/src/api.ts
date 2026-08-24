@@ -540,6 +540,11 @@ export interface ProviderKindStatus {
   kind: string
   last_successful_list_at?: string
   rate_limited_until?: string
+  // Set while this provider/kind's listing is being disbelieved by the
+  // mass-vanish guard: succeeding, but empty enough that acting on it would
+  // flag every tracked download as gone. The one state where everything
+  // else reads healthy while nothing is actually reconciling.
+  listing_anomalous_since?: string
 }
 
 export interface KindStatus {

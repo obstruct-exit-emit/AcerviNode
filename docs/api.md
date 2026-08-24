@@ -226,7 +226,21 @@ surface). The web UI shows `files_error` directly instead of a generic
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web
-UI's "+ Add" button uses. Lands as `added_via: "manual"` by default (shown in
+UI's "+ Add" button uses.
+
+**These three take form bodies, not JSON** — `multipart/form-data` or
+`application/x-www-form-urlencoded` — unlike every other `POST` in this API.
+That is what allows `torrent` and `usenet` to accept a `.torrent`/`.nzb`
+upload in the same request shape as a link. A JSON body is rejected with
+`400 invalid request body`, which is easy to hit precisely because the rest
+of the API is JSON:
+
+```sh
+# correct
+curl -X POST http://localhost:7846/api/v1/downloads/torrent   -H "Authorization: Bearer $ACERVINODE_API_KEY"   -F 'magnet=magnet:?xt=urn:btih:...' -F 'provider=alldebrid'
+```
+
+Lands as `added_via: "manual"` by default (shown in
 the Manual tab, never auto-fetched to local disk) — see
 [Providers](providers.md#managed-vs-manual). An optional `category` field is
 accepted by all three, but only has any effect on a Manual add if `added_via`

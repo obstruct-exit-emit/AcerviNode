@@ -1271,3 +1271,51 @@ func TestLiveSettings_FindUser_UnknownUsername(t *testing.T) {
 		t.Error("FindUser() found = true for an unknown username, want false")
 	}
 }
+
+// TestSetProviderAPIKey_KeepsTheEntrysType proves changing a provider's key
+// doesn't erase its type.
+//
+// SetProviderAPIKey used to write a fresh config.ProviderConfig holding only
+// the key, dropping Type. That broke the exact case the field exists for: a
+// second account on one service (say "torbox-work" with type: torbox) kept
+// working in memory but lost its type in config.yaml, so the next restart
+// resolved the type from the entry's own name, found no provider called
+// "torbox-work", and the account silently disappeared. Confirmed live before
+// fixing — the type line vanished from config.yaml immediately after the PUT.
+func TestSetProviderAPIKey_KeepsTheEntrysType(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.Providers = map[string]config.ProviderConfig{
+		"torbox-work": {APIKey: "original-key", Type: "torbox"},
+	}
+	registry, s := setupProviders(cfg, configPath)
+	if registry.Torrent("torbox-work") == nil {
+		t.Fatal("torbox-work was not registered from config")
+	}
+
+	if err := s.SetProviderAPIKey(context.Background(), "torbox-work", "replacement-key"); err != nil {
+		t.Fatalf("SetProviderAPIKey() error = %v", err)
+	}
+
+	if got := cfg.Providers["torbox-work"].APIKey; got != "replacement-key" {
+		t.Errorf("APIKey = %q, want the replacement", got)
+	}
+	if got := cfg.Providers["torbox-work"].Type; got != "torbox" {
+		t.Errorf("Type = %q, want %q — losing it breaks the entry on restart", got, "torbox")
+	}
+
+	// And it has to survive the round-trip to disk, which is where the
+	// restart actually reads it back from.
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if got := reloaded.Providers["torbox-work"].ResolvedType("torbox-work"); got != "torbox" {
+		t.Errorf("after reload ResolvedType() = %q, want %q", got, "torbox")
+	}
+}

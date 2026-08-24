@@ -312,6 +312,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Changing a provider's API key erased its type, breaking two-accounts-
+  per-service on the next restart.** `SetProviderAPIKey` wrote a fresh
+  `config.ProviderConfig` holding only the key, dropping `Type`. A second
+  account (say `torbox-work` with `type: torbox`) kept working in memory, so
+  nothing looked wrong — but `config.yaml` had lost the type, and the next
+  restart resolved it from the entry's own name, found no provider called
+  `torbox-work`, and the account silently disappeared. The entry is now
+  updated in place. Confirmed live before fixing: the `type:` line vanished
+  from `config.yaml` the moment the `PUT` returned `204`.
+
+- **The duplicate-credential warning only fired at startup.** Adding a second
+  account through the UI is the single most likely moment to paste the same
+  key twice, and that path never checked — so two entries would quietly
+  discover identical downloads until the next restart explained why.
+  `AddProvider` and `SetProviderAPIKey` now run the same check.
+
+- **`POST /api/v1/downloads/{torrent,usenet,webdl}` take form bodies, not
+  JSON**, and the docs only said so for `webdl`. Since every other `POST` in
+  the API is JSON, assuming JSON is natural — and gets a bare
+  `400 invalid request body`. Now stated explicitly, with a worked `curl`
+  example. (Documentation only; the endpoints were always form-based, which
+  is what lets them accept a `.torrent`/`.nzb` upload in the same shape.)
+
 - **Changing your own password logged you out of the browser you changed it
   in.** `handleSetUserPassword` passed `""` as `revokeUser`'s except-token,
   revoking every session for the account including the caller's own — the

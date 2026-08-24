@@ -1695,6 +1695,15 @@ something real if you trust the docs instead:
 - **No cache-check endpoint.** `/v4/magnet/instant` is gone and there was
   never a hoster-link equivalent, so `CheckCached` answers from what is
   already on the account — which is the sense the caller is asking about.
+- **AllDebrid is actively retiring endpoints**, so what it answers matters
+  more than what its docs list. Re-checked live against a real account:
+  `/v4/user`, `/v4/user/links`, `/v4/magnet/files` and `/v4/link/unlock` all
+  answer normally with no deprecation flag. `/v4/magnet/status` now returns
+  `DISCONTINUED` outright — AcerviNode does not use it, reading magnet state
+  from `/v4/magnet/files` instead, so nothing here depends on it. Worth
+  re-running that check when AllDebrid behaviour looks off, since a
+  discontinued endpoint fails as a normal API error rather than anything
+  obviously version-related.
 - **Torrent status is a numeric `statusCode`**: 0–3 downloading, 4 ready,
   5 and up terminal failure. A cached magnet arrives already ready, skipping
   the transfer codes entirely.
