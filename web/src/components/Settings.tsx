@@ -762,6 +762,33 @@ export function Settings({ apiKey }: Props) {
                     ) : (
                       <span className="badge badge-queued">Not configured</span>
                     )}
+                    {/* Which kinds this provider can actually handle. Shown
+                        including the ones it can't, struck through, because
+                        an absent chip is ambiguous — "no usenet" and "this
+                        didn't load" would look identical. AllDebrid having
+                        no usenet service at all is the case that keeps
+                        coming up. */}
+                    <span className="provider-caps">
+                      {(
+                        [
+                          ['torrent_capable', 'Torrents'],
+                          ['usenet_capable', 'Usenet'],
+                          ['webdl_capable', 'Web links'],
+                        ] as const
+                      ).map(([field, label]) => (
+                        <span
+                          key={label}
+                          className={`cap${p[field] ? '' : ' cap-off'}`}
+                          title={
+                            p[field]
+                              ? `${providerLabel(p.name)} handles ${label.toLowerCase()}`
+                              : `${providerLabel(p.name)} has no ${label.toLowerCase()} service — adds of this kind go to another configured provider`
+                          }
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </span>
                   </span>
                   <span className={`settings-card-chevron${expanded ? ' settings-card-chevron-open' : ''}`}>▸</span>
                 </div>

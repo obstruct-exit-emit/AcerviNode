@@ -637,6 +637,30 @@ table.downloads tbody tr:hover {
   white-space: normal;
 }
 
+.provider-caps {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Capability chips sit alongside the status badges but must not compete
+   with them: status is a coloured pill, capability is quiet outlined text. */
+.cap {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* A kind the provider has no service for. Struck rather than hidden, so
+   "doesn't support this" can't be mistaken for "didn't load". */
+.cap-off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 10px;

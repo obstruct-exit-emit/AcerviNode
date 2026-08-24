@@ -60,6 +60,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Provider cards show which kinds each provider actually handles.**
+  Settings → Provider previously showed only status (Default / Configured),
+  so nothing on the page explained why a usenet add never reaches AllDebrid
+  — a question that came up more than once, since AllDebrid's own marketing
+  reads as though it does usenet. Each card now carries Torrents / Usenet /
+  Web links chips.
+
+  Unsupported kinds are shown struck through rather than omitted: an absent
+  chip is ambiguous, since "this provider has no usenet service" and "this
+  didn't load" would look identical. Styled as quiet outlined text so it
+  doesn't compete with the status pills beside it, and each chip carries a
+  title explaining that adds of an unsupported kind route to another
+  configured provider instead.
+
 - **Scheduled database backups.** Everything AcerviNode knows lives in one
   SQLite file — configuration, download history, categories, login accounts
   and sessions — and until now nothing copied it anywhere. It now snapshots
