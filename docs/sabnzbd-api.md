@@ -36,12 +36,22 @@ login step required.
 | `fullstatus` | Basic server status |
 | `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download and, since it was found not to previously (see docs/providers.md#local-file-deletion), the local files too. Every delete also records a tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
 
-## How NZB-shaped adds map onto TorBox
+## How NZB-shaped adds map onto a provider
 
 TorBox has a real usenet service (create/list/request-download-link/delete,
 mirroring its torrent API), so `addfile`/`addurl` calls translate directly onto
 TorBox's usenet endpoints via `debrid.UsenetProvider` — there's no fabrication or
 protocol-bridging trick here, TorBox genuinely does usenet downloads.
+
+**This shim needs a usenet-capable provider configured.** Not every debrid
+service has one: AllDebrid has no usenet service at all, so an instance with
+only AllDebrid configured still mounts this shim (both shims are always
+mounted — see [Providers](providers.md#live-settings)) but every add fails with
+no provider available. TorBox is currently the only implemented provider that
+does usenet. Routing resolves per kind, so configuring both and setting
+AllDebrid as `default_provider` does **not** break usenet adds — they fall
+through to whichever configured provider actually supports the kind, see
+[Providers](providers.md#multiple-providers-debridregistry).
 
 ## State mapping
 

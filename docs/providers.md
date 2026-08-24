@@ -1,9 +1,17 @@
 # Providers
 
-AcerviNode talks to debrid services through two small interfaces in
-`internal/debrid`. Every add, status check, and link resolution a compat shim
-performs goes through one of these — never through a concrete provider package
-directly.
+AcerviNode talks to debrid services through four small interfaces in
+`internal/debrid` — `TorrentProvider`, `UsenetProvider`, `WebDownloadProvider`
+and `AccountProvider`. Every add, status check, and link resolution a compat
+shim performs goes through one of these — never through a concrete provider
+package directly.
+
+They are separate interfaces rather than one big one because a service
+supports whichever subset it happens to support, and the type system is the
+right place to say so: TorBox implements all four, AllDebrid implements every
+one except `UsenetProvider` because it has no usenet service at all. A
+provider simply isn't registered for a kind it can't do, so it never gets
+routed one — see [Multiple providers](#multiple-providers-debridregistry).
 
 ## `TorrentProvider`
 
@@ -93,12 +101,59 @@ concern — \*arr apps set them purely to know which local path to watch for
 completed imports, and AcerviNode stores them directly on the `downloads` row. The
 provider interfaces stay protocol-agnostic.
 
+## Multiple providers (`debrid.Registry`)
+
+More than one provider can be configured at once. `debrid.Registry` holds them
+by name, with a separate map per kind, so "which provider" is a lookup rather
+than a field.
+
+**Name is not type.** An entry's name is free text; `providers.<name>.type`
+picks the implementation and defaults to the name. That split is the whole
+mechanism behind **two accounts on one service**: entries `torbox` and
+`torbox-work`, both `type: torbox`, are fully independent providers — separate
+credentials, separate listing cache, separate rate-limit backoff. One account
+hitting a 429 does not slow the other down, which was verified live rather
+than only unit-tested.
+
+**A provider registers only the kinds it can actually do.** TorBox registers
+all three; AllDebrid registers torrent and webdl and is simply absent from the
+usenet map. This is why the accessors return a typed pointer rather than an
+interface — a nil `*DynamicTorrentProvider` stored in an interface is not a nil
+interface, and every caller has to decide what to do when a provider isn't
+there.
+
+**Routing resolves per kind, not globally.** `default_provider` names one
+entry, but `DefaultNameFor(kind)` falls through to the first registered entry
+that supports that kind when the default doesn't. Without the fallback, making
+AllDebrid the default would break usenet outright: every usenet add would
+resolve to a provider with no usenet service and fail, even with TorBox
+configured right beside it. That was found live, doing exactly that.
+
+Whatever the routing resolves to is **recorded on the download row** at add
+time, so every later status poll, link request and delete goes back to the
+same account. A provider removed later leaves those rows intact but no longer
+resolving — see `DELETE /api/v1/settings/providers/{name}` in [API](api.md).
+
+**Rate-limit backoff is per `(provider, kind)` pair**, not global and not
+per-provider. A provider's usenet listing being throttled must not stop its
+torrent polling, and one account's limit must not stop another's. Backoff is
+exponential from a 30s base, capped at 5 minutes.
+
+**One listing per provider, shared by every consumer.** `debrid.ListCache`
+means several \*arr apps polling at once cost one provider call, not one each.
+Callers that must not act on stale data — the importer's own tick — use
+`Refresh()`/`ListFresh()`, which always fetch but still populate the cache for
+everyone else. That distinction is load-bearing: reading its own shared cache
+let the importer act on data a full poll interval old.
+
 ## Live settings
 
 Provider credentials can be set or changed two ways: hand-editing
-`providers.torbox.api_key` in `config.yaml` (restart required, the original
-mechanism), or `PUT /api/v1/settings/providers/torbox` (the web UI's Settings tab
-uses this) — no restart needed. Both end up in the same place.
+`providers.<name>.api_key` in `config.yaml` (restart required, the original
+mechanism), or `PUT /api/v1/settings/providers/<name>` (the web UI's Settings
+tab uses this) — no restart needed. Both end up in the same place. `<name>` is
+the entry name, so an instance holding two TorBox accounts addresses them
+separately.
 
 This works because `cmd/acervinode` never hands a concrete provider directly to
 the compat shims, the importer, or the native API — it hands each of them the
@@ -107,15 +162,17 @@ same `*debrid.DynamicTorrentProvider`/`*debrid.DynamicUsenetProvider` instance
 delegating to whatever's currently `Set()`. Both compat shims are **always**
 mounted now (not conditionally on a provider existing at startup) — before a key
 is set, every provider-backed call just returns `debrid.ErrNoProvider` instead of
-the route not existing, which is what makes configuring TorBox for the first time
+the route not existing, which is what makes configuring a provider for the first time
 through the settings API (not just at startup) possible at all. `cmd/acervinode`'s
 `liveSettings` type is what `PUT` actually calls: it swaps the Dynamic wrappers'
 inner provider and calls `config.Save` to persist the change, all under one mutex
 so concurrent settings changes don't race.
 
-The settings API is deliberately narrow — `SetTorBoxAPIKey`, not a generic
-"configure any provider" endpoint — since TorBox is the only provider that exists.
-Generalize this (and `Settings` in `internal/api`) when a second provider is added.
+That generalization has since happened. The settings API is no longer
+TorBox-shaped: `liveSettings.SetProviderAPIKey(ctx, name, key)` takes the
+provider entry by name, and `POST`/`DELETE /api/v1/settings/providers` add and
+remove entries at runtime. Nothing needs a restart, and nothing in
+`internal/api` names a concrete provider any more.
 
 ## Completed Download Handling (`internal/importer`)
 
@@ -1059,7 +1116,7 @@ at the time.
 
 ## TorBox (`internal/debrid/torbox`)
 
-The first, and so far only, concrete provider. TorBox exposes both a torrent
+The first concrete provider, and the only one implementing all three kinds. TorBox exposes both a torrent
 service and a usenet service under `https://api.torbox.app/v1/api`, authenticated
 with `Authorization: Bearer <key>` (the `requestdl` endpoint also accepts
 `token=<key>` as a query parameter, since the resulting URL is meant to be handed
@@ -1496,6 +1553,67 @@ without erroring, but not against a genuinely cached item — the test account
 had no usenet/webdl downloads on hand at the time to produce a true
 `cached: true` positive for either.
 
+## AllDebrid (`internal/debrid/alldebrid`)
+
+The second concrete provider, under `https://api.alldebrid.com`. Torrents and
+hoster links only — **AllDebrid has no usenet service**, so it registers no
+usenet wrapper and never appears as an option for a usenet add. That was
+checked three independent ways before being treated as settled, because their
+marketing copy reads as though it might.
+
+Auth is `Authorization: Bearer <key>`, plus a required `agent` parameter on
+every call (`agent=acervinode`) identifying the calling application — a request
+without it is rejected regardless of the key.
+
+Torrent endpoints used: `POST /v4/magnet/upload` (magnet),
+`POST /v4/magnet/upload/file` (multipart `.torrent`), `GET /v4/magnet/files`,
+`POST /v4/magnet/delete`. Hoster links use `POST /v4/link/unlock`,
+`GET /v4/user/links`, `POST /v4/user/links/save`,
+`POST /v4/user/links/delete`. Account status comes from `GET /v4/user`.
+
+### Things AllDebrid's own documentation gets wrong
+
+Each of these was found live, against a real account, and each one breaks
+something real if you trust the docs instead:
+
+- **Magnet status comes back in two different shapes.** A single-magnet
+  lookup and a bulk one don't return the same structure, and the client
+  accepts both rather than assuming either.
+- **Saving a hoster link normalises it.** A Mega link submitted as
+  `mega.nz/file/ID#KEY` comes back from `/v4/user/links` as
+  `mega.co.nz/#!ID!KEY`. This is load-bearing: returning the caller's original
+  link as the id would mean every later listing reported a link matching
+  nothing tracked locally, so each of these downloads would look like it had
+  vanished from the account moments after being added, and missing-detection
+  would eventually flag them all as gone. `AddLink` therefore makes a second
+  call and matches the stored form back by filename and size.
+- **503 is how AllDebrid actually sheds load, not 429.** 80 concurrent
+  requests produced zero 429s and 21 nginx `503 Service Unavailable`
+  responses. Both map to the same rate-limit backoff; treating only 429 as a
+  limit would have missed the real signal entirely.
+- **`MAGNET_TOO_MANY_ACTIVE` is a rate limit in everything but name** and is
+  mapped as one, so it backs off rather than erroring the download.
+
+### How the shapes differ from TorBox
+
+- **A saved hoster link is born complete.** AllDebrid unlocks synchronously —
+  one call validates the link, resolves the host and returns a direct URL —
+  so there is no in-progress web-download object to poll. Saving the link is
+  what gives it a durable presence the listing can enumerate, so it maps onto
+  AcerviNode's add/poll/fetch shape by arriving already `completed`. Honest,
+  since by then AllDebrid really has resolved it.
+- **Direct URLs are unlocked on demand, never cached.** They are short-lived
+  and session-bound, so a stored one would work now and quietly 404 later.
+- **No zipped multi-file download.** AllDebrid unlocks one link at a time with
+  no bundling endpoint, so `RequestZipDownloadLink` says so rather than faking
+  it locally.
+- **No cache-check endpoint.** `/v4/magnet/instant` is gone and there was
+  never a hoster-link equivalent, so `CheckCached` answers from what is
+  already on the account — which is the sense the caller is asking about.
+- **Torrent status is a numeric `statusCode`**: 0–3 downloading, 4 ready,
+  5 and up terminal failure. A cached magnet arrives already ready, skipping
+  the transfer codes entirely.
+
 ## Auth: login accounts and roles
 
 The API key (`config.yaml`'s `api_key`) has always been AcerviNode's only
@@ -1721,12 +1839,35 @@ so without an explicit URL the admin would have no obvious next step.
 ## Adding a new provider
 
 1. New subpackage under `internal/debrid/<name>/`.
-2. Implement `debrid.TorrentProvider`. Implement `debrid.UsenetProvider`,
-   `debrid.WebDownloadProvider`, and/or `debrid.AccountProvider` too, only for
-   whichever of those the service actually has a real backend for.
-3. Register it in `cmd/acervinode`'s provider construction (`newTorBoxProviders`
-   and `liveSettings`, or their equivalents for the new provider) — that's the
-   only place a concrete provider type is referenced outside its own package.
+2. Implement only the interfaces the service actually has a real backend for.
+   Implementing `UsenetProvider` against a service with no usenet is worse than
+   not implementing it: a provider that isn't registered for a kind never gets
+   routed one, whereas a stub gets routed adds it can only fail.
+3. Add a constructor to `knownProviders` in `cmd/acervinode/main.go`, matching
+   `providerConstructor` — this stays the only place a concrete provider type
+   is named outside its own package.
+4. Declare what it supports in `knownProviderCapabilities` in the same file.
+   `registerProviderEntry` reads it to decide which wrappers to register, and
+   it is what the settings UI uses to decide which kinds to offer.
 
-No changes are needed in `internal/qbittorrent`, `internal/sabnzbd`, or
-`internal/database` to add a provider — that's the point of the interface seam.
+That's all. Nothing in `internal/qbittorrent`, `internal/sabnzbd`,
+`internal/database` or `internal/api` needs touching — that's the point of the
+interface seam, and adding AllDebrid changed none of them.
+
+A few things worth knowing before writing the client, all learned the
+expensive way:
+
+- **Verify what the service actually supports before implementing it**, not
+  from its marketing pages. AllDebrid's copy reads as though it does usenet;
+  it does not.
+- **Map every way the service signals overload** to the rate-limit error, not
+  just HTTP 429 — AllDebrid uses 503, and names one of its limits
+  `MAGNET_TOO_MANY_ACTIVE`. Backoff only works if the signal is recognised.
+- **Return ids exactly as the service will report them back** in its own
+  listing. If saving or adding normalises what you sent, the normalised form
+  is the id — otherwise every later listing matches nothing locally and
+  missing-detection eventually declares the downloads gone.
+- **Don't cache resolved direct URLs** unless the service documents them as
+  durable. Most are short-lived and session-bound.
+- **Test against a real account.** Every provider-specific bug listed in this
+  document was found live; none surfaced in unit tests against a fake.

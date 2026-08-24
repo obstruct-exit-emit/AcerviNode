@@ -312,6 +312,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Documentation audit: filled in what shipped undocumented, corrected what
+  had gone stale.** The multi-provider refactor, AllDebrid and backups all
+  landed without the docs catching up. Checked mechanically against the code
+  rather than by reading — config keys diffed against the `Config` struct,
+  documented routes against the registered ones, body fields against
+  `GeneralUpdate` — plus a link checker over every internal link and anchor.
+
+  Wrong in a way that would have cost someone real time:
+
+  - `PUT /api/v1/settings/general`'s documented body was missing **8 of its 24
+    fields**, in a request the same sentence describes as a full replacement.
+    Following the docs would have silently zeroed the cleanup, filter and
+    (once added) backup settings. The list is now complete and spells out that
+    an omitted field overwrites rather than being ignored.
+  - `GET /api/v1/setup/status` was documented — and commented in `auth.go` —
+    as also requiring no provider configured. `SetupNeeded()` checks only for a
+    login account, deliberately: an instance with a key but no account is still
+    a fresh install, and the code says so. Doc and comment corrected to match.
+  - The README's provider table said AllDebrid had no Web Downloads support,
+    and prose claimed its hoster debriding "doesn't fit" the model. It shipped
+    working; the table and prose were left over from the earlier assessment.
+  - `docs/index.md` still described the local mount/import step as a later
+    phase needing Linux-specific filesystem tricks. It shipped as plain HTTP
+    with no FUSE, which `development.md` had been contradicting for a while.
+  - `quickstart.md` told you to enter your API key in the web UI. Login has
+    been mandatory since Phase 9 — there is no API-key-only way in — and a
+    fresh instance shows a setup wizard. It also still called multi-provider
+    support a blocked future phase.
+  - `providers.md` claimed the settings API was deliberately TorBox-shaped
+    "since TorBox is the only provider that exists", named two interfaces where
+    there are five, and its add-a-provider guide predated the registry.
+
+  Missing entirely: AllDebrid had **zero** mentions anywhere under `docs/`.
+  Added a full provider section (endpoints, the four things its own
+  documentation gets wrong, how its shapes differ from TorBox), a
+  `debrid.Registry` section covering per-kind routing, two accounts per
+  service and per-`(provider, kind)` backoff, config rows for its credentials,
+  and a note in the SABnzbd doc that the shim needs a usenet-capable provider.
+  Also added the 6 endpoints that were never in the API table, `/api/v1/status`'s
+  per-provider array, `default_categories_seeded`, and the one exception to the
+  admin-only rule (any account may change its own password).
+
+  One broken anchor fixed (`providers.md#status-monitoring`, which gained an
+  endpoint suffix its links never followed). Internal links and anchors now
+  verify clean.
+
 - **AllDebrid sheds load with 503, not 429**, so a rate limit went
   unrecognised. Confirmed live: 80 concurrent requests produced no 429s at
   all and 21 nginx "503 Service Temporarily Unavailable" pages — AllDebrid's

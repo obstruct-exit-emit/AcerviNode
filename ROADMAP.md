@@ -111,11 +111,32 @@ this unattended. Recommendations first.
 
 **Someday / maybe** — deprioritized on purpose, not dismissed:
 
-- 💡 **Database backup story.** No documented or automated backup for
-  `acervinode.db`. Explicitly deprioritized by the user ("I don't care if we
-  lose database") — re-discovery would eventually re-adopt anything still on
-  the provider anyway, so the actual cost of losing it is lower than it
-  first looks. Revisit if that changes.
+- ✅ **Database backup story.** Previously deprioritized by the user ("I don't
+  care if we lose database"), on the reasoning that re-discovery would
+  re-adopt anything still sitting on the provider. What changed that: the
+  database stopped being only a download cache. Since Phase 9 it also holds
+  every login account and session, plus categories, path overrides and all
+  live settings — none of which any provider can hand back. Losing it now
+  means losing the way in, not just the history.
+
+  `internal/backup` snapshots the database to `<data_dir>/backups` every
+  `backup_interval_hours` (default 24), keeping `backup_keep` (default 7),
+  via SQLite's `VACUUM INTO` — consistent against a live database with no
+  need to stop the service, and self-contained with no `-wal`/`-shm`
+  sidecars. This is the **only** retention setting that defaults to on:
+  every other one removes something, so doing nothing is the safe default,
+  whereas doing nothing here is the one case that has a cost.
+
+  Pruning runs only after a *successful* backup (trimming first would mean a
+  failed backup had also discarded a good one), `backup_keep: 0` retains
+  everything, and only files AcerviNode wrote are ever pruned. Nothing is
+  backed up at startup, so a restart loop can't flush good snapshots out of
+  the window. `GET`/`POST /api/v1/settings/backups` plus a Settings → Backup
+  tab; the API returns names and sizes but never a snapshot's contents,
+  since one holds every account and session. Restore is manual and
+  documented. Live-verified: retention pruned 4 to the newest 2, the
+  interval retuned without a restart, and a restored snapshot opened clean
+  with its rows intact.
 - ✅ **Alerting/observability, part (a).** Built proactively, picked directly
   off this list's own "(a) first ... it's nearly free" note, while the user
   was away — the only way to know the importer's stuck used to be manually

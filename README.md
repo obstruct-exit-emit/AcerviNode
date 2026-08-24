@@ -51,17 +51,18 @@ can be configured either way and land on the same download pipeline underneath.
 | Provider | Torrents | Usenet | Web Downloads | Status |
 |---|---|---|---|---|
 | TorBox | ✅ | ✅ | ✅ | working |
-| AllDebrid | ✅ | — | — | working |
+| AllDebrid | ✅ | — *(no usenet service)* | ✅ | working |
 | Others (Real-Debrid, Debrid-Link, Premiumize) | — | — | — | planned |
 
 "Web Downloads" debrids a direct link from a hoster (Mega, 1Fichier, Mediafire,
 and ~160 others TorBox currently supports) — no torrent or NZB involved, just a
 plain URL.
 
-AllDebrid is torrents only: it has no usenet service, and its hoster debriding
-is a synchronous unlock with nothing to track, so it doesn't fit the "add, then
-watch it" model the other kinds use. A provider simply never appears for a kind
-it can't do.
+AllDebrid has no usenet service at all, so it never appears as an option for a
+usenet add — a provider simply doesn't show up for a kind it can't do. Its
+hoster debriding *is* supported: unlocking is synchronous with nothing to poll,
+so AcerviNode saves the link to the account, which gives it something durable to
+list, track and delete like any other download.
 
 **More than one account** is supported, on the same service or different ones —
 give each entry its own name in `providers`, set `type` when the name isn't the
@@ -107,15 +108,15 @@ the storage layer.
   one), settings — API-key authenticated, the exact API the UI itself uses
 - A React (Vite) single-page dashboard, embedded into the binary, split into
   **Managed** (added through Sonarr/Radarr, auto-fetched to disk) and
-  **Manual** (added directly, or discovered already sitting in your TorBox
+  **Manual** (added directly, or discovered already sitting in your provider
   account — never auto-fetched, browse and grab files on demand instead) —
   live state/progress, provider status, one-click delete, a "+ Add" button
   to push a magnet/torrent file/NZB/hoster link straight in, a per-download
   detail view (full metadata, streamed/zip/per-file downloads, retry
-  status), and a Settings tab to add/change your TorBox key without
+  status), and a Settings tab to add/change any provider's key without
   touching `config.yaml` — takes effect immediately, no restart
 - A Manual download whose provider item vanishes entirely (deleted directly
-  through TorBox's own site, or genuinely expired) is detected proactively
+  through the provider's own site, or genuinely expired) is detected proactively
   and flagged, instead of sitting stuck looking "Available" forever. Re-add
   works for it too, not just a Managed download — it resubmits the original
   magnet/NZB URL/hoster link, or a stored NZB file for one added by upload,
@@ -124,13 +125,18 @@ the storage layer.
   dirs, log level, import settings), its own API key — copyable straight from
   the UI instead of digging through server logs or `config.yaml`, with a
   one-click regenerate that applies immediately across the native API and both
-  compat shims — and your TorBox account's own plan/subscription/usage status
+  compat shims — and each provider account's own plan/subscription/usage status
 
 **🗄️ Storage**
 
 - SQLite (pure Go, no cgo) — one `downloads` table shared by both shims, tracking
   every add from `queued` through `ready_for_import`
 - Embedded, ordered migrations
+- **Automatic backups, on by default** — everything AcerviNode knows (config,
+  history, categories, login accounts) lives in that one file, so it snapshots
+  itself daily and keeps the last 7. Taken with SQLite's own consistent-snapshot
+  support, so they're safe to take while it's running and open cleanly on their
+  own — see [Backups and restore](docs/installation.md#backups-and-restore)
 
 ## Quick start
 
@@ -156,10 +162,10 @@ pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
 | [Installation](docs/installation.md) | Linux, from source |
 | [Quickstart](docs/quickstart.md) | First-run walkthrough, both compat shims |
 | [Configuration](docs/configuration.md) | config.yaml, providers, ports |
-| [Providers](docs/providers.md) | The provider interfaces, TorBox specifics, adding a new provider |
+| [Providers](docs/providers.md) | The provider interfaces, the multi-provider registry, TorBox and AllDebrid specifics, adding a new provider |
 | [API](docs/api.md) | The native `/api/v1` — everything the web UI does is scriptable |
 | [qBittorrent API](docs/qbittorrent-api.md) | Which qBittorrent Web API surface is emulated, and why |
-| [SABnzbd API](docs/sabnzbd-api.md) | Which SABnzbd API surface is emulated, and how NZB adds map onto TorBox's usenet service |
+| [SABnzbd API](docs/sabnzbd-api.md) | Which SABnzbd API surface is emulated, and how NZB adds map onto a provider's usenet service |
 | [Development](docs/development.md) | Building, layout, contributing |
 | [Roadmap](ROADMAP.md) | Development history and what's next |
 
@@ -167,8 +173,10 @@ pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
 
 - **Backend:** Go — one self-contained binary per OS, no runtime dependencies
 - **Database:** SQLite (pure Go, no cgo), embedded migrations
-- **Provider layer:** `internal/debrid` defines `TorrentProvider` and `UsenetProvider`
-  interfaces; `internal/debrid/torbox` is the first concrete implementation
+- **Provider layer:** `internal/debrid` defines the `TorrentProvider`,
+  `UsenetProvider`, `WebDownloadProvider` and `AccountProvider` interfaces plus
+  the `Registry` that routes between configured accounts per kind;
+  `internal/debrid/torbox` and `internal/debrid/alldebrid` implement them
 - **Compat shims:** `internal/qbittorrent` and `internal/sabnzbd` each translate a
   real \*arr download-client protocol onto the provider interfaces
 - **Completed Download Handling:** `internal/importer` fetches finished downloads'
@@ -179,8 +187,16 @@ pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
 
 ## Security
 
-API-key auth on the native API (and, by default, on both compat shims — the same
-key). For remote access, run behind a TLS reverse proxy.
+- **API key** on the native API and both compat shims — what Sonarr/Radarr and
+  scripts use, since they can't do cookie logins.
+- **Login accounts are mandatory for the web UI**, with `admin` and `member`
+  roles; there's no API-key-only way into the dashboard. A fresh instance shows
+  a first-run setup wizard to claim it. Every `/api/v1/settings/*` endpoint is
+  admin-only, with one exception: any account may change its own password.
+- **Built-in HTTPS** (`tls_enabled`) on a second port, with a self-signed
+  certificate generated on first need, or point it at a real cert/key pair. The
+  plain-HTTP listener keeps running unchanged either way. A TLS reverse proxy
+  in front is still perfectly reasonable.
 
 ## Development
 

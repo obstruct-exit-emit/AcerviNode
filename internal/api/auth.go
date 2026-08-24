@@ -314,8 +314,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleSetup claims a fresh instance: creates the first (Default, always
 // admin) login account and signs this browser in, in one step — no API key
-// required. Refused (403) the moment the instance has a login account or a
-// configured provider (see Settings.SetupNeeded).
+// required. Refused (403) the moment the instance has a login account (see
+// Settings.SetupNeeded — a configured provider deliberately does not close
+// this window, since login is the only way into the web UI at all).
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if !s.settings.SetupNeeded() {
 		http.Error(w, "this instance is already set up", http.StatusForbidden)

@@ -31,7 +31,9 @@ units without a mounted config file.
 | `default_provider` | *(none)* | *(the only configured provider)* | Which provider a new download goes to when nothing says otherwise — the native add endpoints without an explicit `provider`, and both compat shims, which have no field in their protocols to carry one. Unset selects the first registered provider, so a single-provider install needs nothing here. A name that isn't configured is ignored rather than rejected: this is persisted, and the provider it names may simply have been removed since |
 | `providers.<name>.type` | *(none)* | *(the entry's own name)* | Which provider implementation an entry uses, when that differs from its name. This is what allows **two accounts on the same service**: entries named `torbox` and `torbox-work` can both set `type: torbox` and be configured, defaulted and routed to independently. Omit it for the normal one-account-per-service case |
 | `providers.torbox.api_key` | `ACERVINODE_PROVIDERS_TORBOX_API_KEY` | *(none — required to enable TorBox)* | Bearer token used for every TorBox API call. Can also be set (or changed) without a restart via the web UI's Settings tab, or `PUT /api/v1/settings/providers/torbox` — see [API](api.md) and [Providers](providers.md#live-settings). `POST /api/v1/settings/providers/torbox/test` makes one real, live call to confirm the key actually works |
+| `providers.alldebrid.api_key` | `ACERVINODE_PROVIDERS_ALLDEBRID_API_KEY` | *(none — required to enable AllDebrid)* | API key used for every AllDebrid call. Same live-editable treatment as TorBox's above (web UI Settings, or `PUT /api/v1/settings/providers/alldebrid`), and `POST /api/v1/settings/providers/alldebrid/test` confirms it live. AllDebrid covers **torrents and hoster links only — it has no usenet service**, so it never appears as an option for usenet adds however it's configured; see [Providers](providers.md#alldebrid-internaldebridalldebrid) |
 | `category_paths.<category>` | *(none — set via API/UI, not env)* | *(none)* | Per-category override for `download_dir`, e.g. to route one category to a different disk/mount — see [Categories and save paths](#categories-and-save-paths) below. Editable live (no restart) via `PUT /api/v1/settings/categories/path` or the web UI's Settings tab |
+| `default_categories_seeded` | *(none — managed by AcerviNode)* | *(set to `true` after the first start)* | Internal marker, written once. On an instance's very first start AcerviNode seeds the well-known \*arr default category names into `category_paths` so Sonarr/Radarr accept them immediately; this flag records that it happened, which is what makes those seeded categories genuinely **editable and deletable** — without it they'd silently reappear on every restart. Deleting the line (or setting it `false`) re-seeds them on the next start, which is the supported way to get them back after deleting some. Don't set it `true` on a fresh instance unless you want no seeding at all |
 | `auth.users` | *(none — set via API/UI, not env)* | *(none — first run triggers the setup wizard)* | Login accounts for the web UI, on top of the API key (which keeps working unaffected — Sonarr/Radarr and scripts always use it, never a login session). Login is mandatory for the web UI: an instance with no accounts yet shows the first-run setup wizard instead of the dashboard, not an API-key prompt. Managed via the web UI's Settings → Security, the first-run setup wizard, or `/api/v1/settings/users`/`/api/v1/setup` directly — see [Providers](providers.md#auth-login-accounts-and-roles) for the full design (roles, the protected Default account, session mechanics). Never hand-edit a password hash into this file — there's no supported way to generate one outside the app |
 | `tls_enabled` | `ACERVINODE_TLS_ENABLED` | `false` | Starts a second HTTP server on `tls_port`, serving HTTPS with a self-signed certificate auto-generated on first need — the plain-HTTP listener on `port` keeps running completely unchanged either way (dual-listen, never a replacement). Mainly exists so the browser's File System Access API (folder-picker downloads) works when AcerviNode is only reachable over a plain LAN IP, not `localhost` — that API requires a secure context. Editable via the web UI's Settings tab or the first-run wizard, but **requires a restart** — see [Providers](providers.md#tls-self-signed-https) |
 | `tls_port` | `ACERVINODE_TLS_PORT` | `8443` | Where the HTTPS listener binds when `tls_enabled`. Must differ from `port`. Requires a restart to take effect, same as `tls_enabled` |
@@ -86,9 +88,23 @@ providers:
 
 ## Provider config shape
 
-`providers` is a map keyed by provider name (`torbox` today; `realdebrid` and
-others land here as they're implemented — see [Providers](providers.md) and the
-[roadmap](../ROADMAP.md)). Both compat shims are always mounted, whether or not a
+`providers` is a map keyed by **entry name**, not by service. `torbox` and
+`alldebrid` ship today; others land here as they're implemented — see
+[Providers](providers.md) and the [roadmap](../ROADMAP.md).
+
+An entry's name is free text and its `type` is what picks the implementation,
+defaulting to the name. That split is what lets one service hold **two
+accounts**: `torbox` and `torbox-work` can both set `type: torbox` and be
+configured, defaulted and routed to entirely independently, each with its own
+credentials, listing cache and rate-limit backoff — one account hitting a rate
+limit doesn't slow the other down.
+
+Providers also differ in what they can do, and routing accounts for that per
+kind rather than globally: `default_provider` names one entry, but an add for a
+kind that entry doesn't support falls through to the first configured entry
+that *does*. Making AllDebrid the default would otherwise break usenet
+outright — its adds would resolve to a provider with no usenet service and
+fail, even with TorBox configured right beside it. Both compat shims are always mounted, whether or not a
 provider is configured yet — see [Providers](providers.md#live-settings) for why
 that's what makes setting a key through the web UI (rather than only at startup)
 possible at all.

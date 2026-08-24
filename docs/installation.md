@@ -24,7 +24,7 @@ sudo chmod 600 /etc/acervinode/config.yaml
 ```
 
 That ownership isn't optional. AcerviNode persists every live settings change
-by rewriting this file — the TorBox API key entered in the Settings UI, a
+by rewriting this file — a provider API key entered in the Settings UI, a
 category's save-path override, a changed poll interval — and it writes during
 an ordinary startup too, when the one-time default-category seeding runs
 before the server is even listening. A `config.yaml` the service can't write
@@ -118,7 +118,8 @@ into via a forgotten step.
 
 By default AcerviNode binds `:7846` and looks for `config.yaml` in the working
 directory (see [Configuration](configuration.md) for every key). At minimum you'll
-want a TorBox API key set before the provider comes up.
+want one provider's API key set before it comes up — or add it through the web
+UI afterwards, which needs no restart.
 
 ## Linux deployment
 

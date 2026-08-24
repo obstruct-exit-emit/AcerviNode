@@ -18,13 +18,14 @@ provider instead of doing real P2P or NNTP work.
 
 *arr apps only know how to talk to download clients that speak a protocol they
 recognize — qBittorrent's Web API or SABnzbd's API, among others. Debrid services
-(TorBox, Real-Debrid, ...) speak neither. AcerviNode is the translation layer:
+(TorBox, AllDebrid, Real-Debrid, ...) speak neither. AcerviNode is the translation layer:
 it implements those two client protocols for real, and behind them, calls a debrid
 provider's actual API to add, track, and resolve downloads. Your \*arr app never
 needs to know the difference.
 
 This is the same trick [decypharr](https://github.com/sirrobot01/decypharr) uses.
 AcerviNode is a from-scratch alternative: one static Go binary, an embedded SQLite
-store, no Docker/FUSE requirement to get the compat shims working (the local
-mount/import step, which does need Linux-specific filesystem tricks, is a later,
-clearly-marked phase — see the [roadmap](../ROADMAP.md)).
+store, and no Docker or FUSE requirement anywhere — including Completed Download
+Handling, which fetches finished downloads to local disk over plain HTTP rather
+than mounting anything. That's the whole stack, not just the compat shims, so it
+runs the same on Windows as on Linux.

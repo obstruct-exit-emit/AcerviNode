@@ -42,8 +42,12 @@ npm run build    # production build into web/dist, embedded on the next go build
 cmd/acervinode/         entrypoint: config, database, provider registry, HTTP servers, importer
 internal/config/         config.yaml + env overrides, defaults/validation
 internal/database/        SQLite open + embedded migrations, downloads CRUD
-internal/debrid/           TorrentProvider / UsenetProvider interfaces + shared types
-    torbox/                  TorBox client + both provider adapters
+internal/debrid/           provider interfaces (Torrent/Usenet/WebDownload/
+                            Account/TorrentInfo), the Registry, shared types
+    torbox/                  TorBox client + all three provider adapters
+    alldebrid/               AllDebrid client + torrent and web-download adapters
+internal/backup/          scheduled VACUUM INTO snapshots of the database
+internal/tlscert/          self-signed certificate generation for the HTTPS listener
 internal/importer/        Completed Download Handling: fetches provider_completed
                             downloads' files to local disk over plain HTTP
 internal/qbittorrent/     qBittorrent Web API compat shim (torrent-shaped adds)
@@ -55,11 +59,16 @@ docs/                        this documentation
 
 ## Adding a provider
 
-See [Providers](providers.md) for the interface shapes. The short version: a new
-provider is a new subpackage under `internal/debrid/`, implementing
-`debrid.TorrentProvider` and, only if the service genuinely supports it,
-`debrid.UsenetProvider`. Neither compat shim nor the database layer needs to change
-— they only ever depend on the interfaces, never on a concrete provider package.
+See [Providers](providers.md#adding-a-new-provider) for the full guide and the
+interface shapes. The short version: a new provider is a new subpackage under
+`internal/debrid/`, implementing only the interfaces the service genuinely
+supports, then registered in `knownProviders` and `knownProviderCapabilities` in
+`cmd/acervinode/main.go`. Implementing an interface the service can't actually
+back is worse than leaving it out — an unregistered kind is never routed to that
+provider, while a stub gets routed adds it can only fail. Neither compat shim,
+the database layer, nor `internal/api` needs to change: they only ever depend on
+the interfaces, never on a concrete provider package. Adding AllDebrid touched
+none of them.
 
 ## Releases
 
