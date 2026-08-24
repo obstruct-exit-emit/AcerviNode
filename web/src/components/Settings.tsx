@@ -761,10 +761,9 @@ export function Settings({ apiKey }: Props) {
                       see .settings-card-toggle-collapsed, which reclaims the
                       bottom margin that only earns its place when expanded. */}
                   <span className="provider-headline">
+                    <span className="provider-titlerow">
                     <h2>{providerLabel(p.name)}</h2>
-                    <span className="provider-meta">
                     <span className="provider-status">
-                      {p.default && showDefaultControls && <span className="cap cap-default">Default</span>}
                       {p.configured ? (
                         <span className="cap">Configured</span>
                       ) : (
@@ -799,6 +798,11 @@ export function Settings({ apiKey }: Props) {
                       ))}
                     </span>
                     </span>
+                    {p.default && showDefaultControls && (
+                      <span className="provider-default">
+                        <span className="cap cap-default">Default</span>
+                      </span>
+                    )}
                   </span>
                   <span className={`settings-card-chevron${expanded ? ' settings-card-chevron-open' : ''}`}>▸</span>
                 </div>

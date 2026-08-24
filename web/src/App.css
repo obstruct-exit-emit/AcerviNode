@@ -150,14 +150,26 @@
   line-height: 1.1;
 }
 
-/* Status and capabilities share one row under the name, so "Configured"
-   lines up with the capability chips instead of sitting on a line of its
-   own. Wraps rather than overflowing on a narrow window. */
-.provider-meta {
+/* Name, configured state and capabilities all on one row, as they were.
+   Wraps rather than overflowing on a narrow window. */
+.provider-titlerow {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.provider-titlerow h2 {
+  margin: 0;
+  line-height: 1.1;
+}
+
+/* Default gets the second line to itself. It is the only status here that
+   changes where a download actually goes, which is worth a line; everything
+   else is description and stays up on the title row. Rendered only when it
+   applies, so a non-default provider's card stays a single row tall. */
+.provider-default {
+  display: inline-flex;
 }
 
 .provider-status {
