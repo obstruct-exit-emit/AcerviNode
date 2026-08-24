@@ -387,9 +387,23 @@ handing one over hands over the provider account behind it.
 So: **giving someone a member account effectively gives them your provider
 API key**, as soon as there is any download whose files they can list. Treat
 member accounts as trusted with the provider account, or don't create them.
-Closing this properly would mean AcerviNode proxying the transfer itself
-rather than redirecting to the provider, which is a deliberate non-goal here
-— see the paragraph above about not sitting in the middle of the transfer.
+**Why it is left this way, having been measured rather than assumed.** Two
+things were checked directly against TorBox's CDN:
+
+- It rejects `Authorization: Bearer` outright (`400`), so `?token=` is the
+  only auth it accepts. No amount of rewriting the URL avoids carrying the
+  key — the alternative isn't a safer link, it's no link.
+- It fully supports Range (`206 Partial Content`, `accept-ranges: bytes`,
+  correct `content-range` on a ~1GB file), so AcerviNode *could* proxy the
+  transfer with seeking and resume intact. The machinery already exists:
+  `internal/importer` fetches Managed downloads over HTTP exactly this way.
+
+So proxying is viable, not impossible — it is declined on cost. It would put
+AcerviNode in the middle of every byte, doubling bandwidth and giving up the
+direct CDN connection, to protect a secret from accounts the operator chose
+to create. The trade-off is stated here rather than hidden so it can be
+revisited deliberately; the honest summary is that the member tier assumes
+trust, and this is one of the places that assumption is load-bearing.
 
 Two auth models meet at this boundary, deliberately: the `link` call itself
 needs AcerviNode's own `Authorization: Bearer <api_key>` like every other

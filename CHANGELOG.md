@@ -424,8 +424,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `400 missing field 'token'` from TorBox's CDN, so AcerviNode cannot remove
   it while still handing back a working link. Now stated plainly in the API
   docs, the roles section and the README, since it changes what creating a
-  member account means. Closing it properly would require proxying transfers
-  through AcerviNode, a deliberate non-goal.
+  member account means.
+
+  Revisited afterwards to check whether it could simply be closed. Two facts
+  measured against the CDN: it rejects `Authorization: Bearer` (`400`), so
+  `?token=` is the only auth and no URL rewriting avoids carrying the key;
+  and it fully supports Range (`206`, `accept-ranges: bytes`, correct
+  `content-range` on a ~1GB file), so AcerviNode *could* proxy the transfer
+  with seeking and resume intact. Proxying is therefore viable rather than
+  impossible — declined on cost, since it would put AcerviNode in the middle
+  of every byte and give up the direct CDN connection. Recorded in the docs
+  as a deliberate trade-off so it can be revisited, rather than as a
+  limitation.
 
 - **A refresh pass could flag another provider's downloads as vanished.**
   The importer listed tracked rows by *kind* alone, so polling AllDebrid

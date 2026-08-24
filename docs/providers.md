@@ -1757,10 +1757,11 @@ a flat `400 missing field 'token'` from the CDN), and resolving such a link
 for a Manual download is precisely what the member tier exists to allow. So
 the key travels with the link, to anyone entitled to request one.
 
-Treat a member account as trusted with the provider account behind it. The
-only real fix would be proxying transfers through AcerviNode instead of
-redirecting to the provider, which is a deliberate non-goal — see
-[API](api.md#direct-file-downloads).
+Treat a member account as trusted with the provider account behind it.
+Proxying the transfer through AcerviNode would close it — and is technically
+viable, since the CDN supports Range and the importer already fetches over
+HTTP the same way — but is declined on cost rather than being impossible.
+See [API](api.md#direct-file-downloads) for what was measured and why.
 
 This is enforced server-side, not just hidden in the UI (`internal/api`):
 - `downloadByID` — the single choke point every single-download handler
