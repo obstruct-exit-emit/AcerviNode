@@ -823,6 +823,11 @@ type massVanishEntry struct {
 	// and was handed back to normal missing-detection, so the transition is
 	// announced once rather than on every subsequent pass.
 	released bool
+	// lastSeen is when this scope was last evaluated at all. A scope is
+	// normally evaluated every poll interval, so a long gap means it stopped
+	// being polled — its provider was removed, or reconfigured. See
+	// massVanishDecision for why an inherited clock would be wrong.
+	lastSeen time.Time
 }
 
 // massVanishDecision converts "this pass looks anomalous" into "distrust it",
@@ -848,7 +853,17 @@ func (db *DB) massVanishDecision(scope string, suspect bool, now time.Time) (dis
 	if e == nil {
 		e = &massVanishEntry{since: now}
 		db.massVanish[scope] = e
+	} else if now.Sub(e.lastSeen) > massVanishMaxDuration {
+		// This scope stopped being polled for longer than the grace period
+		// itself — a provider removed and later re-added under the same
+		// name, most plausibly. The old clock describes a different
+		// provider's history, and inheriting it would hand the re-added one
+		// an already-expired grace period: its very first anomalous listing
+		// would be believed outright, with no benefit of the doubt the
+		// setting exists to give. Start it over.
+		*e = massVanishEntry{since: now}
 	}
+	e.lastSeen = now
 
 	if now.Sub(e.since) > massVanishMaxDuration {
 		// Long past any plausible glitch — believe the provider. Announced

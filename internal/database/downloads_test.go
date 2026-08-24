@@ -2018,6 +2018,15 @@ func TestRefreshFromProvider_MassVanish_ReleasesAfterGracePeriod(t *testing.T) {
 		}
 	}
 
+	// Keep polling across the grace period the way the importer does, rather
+	// than jumping the clock: a gap longer than the grace period is read as
+	// the scope having stopped being polled altogether, and deliberately
+	// restarts it — see TestMassVanishDecision_AGapInPollingRestartsTheClock.
+	for elapsed := time.Minute; elapsed <= massVanishMaxDuration; elapsed += time.Minute {
+		db.RefreshFromProvider(ctx, downloads, nil, start.Add(elapsed),
+			RefreshOptions{DetectMissing: true, Provider: "torbox", Kind: Kind("torrent")})
+	}
+
 	// Past it, the listing is believed — but each row still needs
 	// missingDetectionThreshold consecutive misses, which is the second
 	// safety layer releasing the guard deliberately does not bypass.
@@ -2114,5 +2123,55 @@ func TestMassVanishDecision_ScopesAreIndependent(t *testing.T) {
 	}
 	if _, ok := db.MassVanishSince("alldebrid/torrent"); ok {
 		t.Error("a healthy scope should record nothing")
+	}
+}
+
+// TestMassVanishDecision_AGapInPollingRestartsTheClock covers a provider
+// removed while its listing looked anomalous and later re-added under the
+// same name.
+//
+// The guard's state is keyed by provider/kind and survives in memory, so the
+// re-added provider would otherwise inherit a clock that had already run
+// past the grace period — and its very first anomalous listing would be
+// believed outright, with none of the benefit of the doubt the grace period
+// exists to give. A gap longer than the grace period itself means the scope
+// stopped being polled, so the old history describes something else.
+func TestMassVanishDecision_AGapInPollingRestartsTheClock(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Now()
+
+	// Anomalous, then the provider is removed and nothing polls this scope.
+	if distrust, _, _ := db.massVanishDecision("torbox/torrent", true, start); !distrust {
+		t.Fatal("first anomalous pass should be distrusted")
+	}
+
+	// Re-added well after the grace period would have lapsed.
+	late := start.Add(massVanishMaxDuration + time.Hour)
+	distrust, since, _ := db.massVanishDecision("torbox/torrent", true, late)
+	if !distrust {
+		t.Error("a re-added provider's first anomalous listing was believed immediately, skipping its grace period")
+	}
+	if !since.Equal(late) {
+		t.Errorf("since = %v, want the clock restarted at %v", since, late)
+	}
+}
+
+// TestMassVanishDecision_ContinuousPollingStillExpires is the guard against
+// the reset above being too eager: a scope polled steadily must still reach
+// the hand-back, which is the entire point of bounding the guard.
+func TestMassVanishDecision_ContinuousPollingStillExpires(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Now()
+
+	// Poll every minute across the whole grace period, as the importer does.
+	for elapsed := time.Duration(0); elapsed <= massVanishMaxDuration; elapsed += time.Minute {
+		if distrust, _, _ := db.massVanishDecision("torbox/torrent", true, start.Add(elapsed)); !distrust {
+			t.Fatalf("released early at %s into the grace period", elapsed)
+		}
+	}
+
+	past := start.Add(massVanishMaxDuration + time.Minute)
+	if distrust, _, _ := db.massVanishDecision("torbox/torrent", true, past); distrust {
+		t.Error("still distrusting the listing after the grace period lapsed under continuous polling")
 	}
 }
