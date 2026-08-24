@@ -71,3 +71,170 @@ func TestRefreshFromProvider_DoesNotFlagAnotherProvidersRows(t *testing.T) {
 		}
 	}
 }
+
+// TestListDownloadsByProvider_ScopesToOneProvider covers the query added to
+// fix cross-provider missing-detection. It was exercised only indirectly
+// through the importer, so a regression in the SQL itself — a dropped WHERE
+// clause, say — would surface as downloads being wrongly flagged gone rather
+// than as a failing test here.
+func TestListDownloadsByProvider_ScopesToOneProvider(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	seedForProvider(t, db, "alldebrid", 3)
+	seedForProvider(t, db, "torbox", 2)
+
+	all, err := db.ListDownloadsByProvider(ctx, "alldebrid", KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloadsByProvider() error = %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("alldebrid rows = %d, want 3", len(all))
+	}
+	for _, d := range all {
+		if d.Provider != "alldebrid" {
+			t.Errorf("returned a %q row for an alldebrid query", d.Provider)
+		}
+	}
+
+	tb, err := db.ListDownloadsByProvider(ctx, "torbox", KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloadsByProvider() error = %v", err)
+	}
+	if len(tb) != 2 {
+		t.Errorf("torbox rows = %d, want 2", len(tb))
+	}
+
+	// Kind still narrows as well as provider — a usenet query must not pick
+	// up this provider's torrents.
+	none, err := db.ListDownloadsByProvider(ctx, "torbox", KindUsenet)
+	if err != nil {
+		t.Fatalf("ListDownloadsByProvider() error = %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("torbox usenet rows = %d, want 0", len(none))
+	}
+
+	// An unknown provider is empty, not everything.
+	unknown, err := db.ListDownloadsByProvider(ctx, "not-configured", KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloadsByProvider() error = %v", err)
+	}
+	if len(unknown) != 0 {
+		t.Errorf("unknown provider returned %d rows, want 0", len(unknown))
+	}
+}
+
+// TestListStuckDownloads_OnlyInFlightAndOnlyStale backs the stuck-download
+// watchdog, which auto-errors what it returns. Untested until now, and it
+// defaults to disabled — so the first time anyone switches it on would have
+// been the first time this query ran in anger.
+func TestListStuckDownloads_OnlyInFlightAndOnlyStale(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	old := time.Now().Add(-2 * time.Hour)
+	recent := time.Now()
+
+	n := 0
+	mk := func(state string, updated time.Time) string {
+		d := newTestDownload(KindTorrent)
+		// Unique per row: (provider, provider_download_id) is the identity
+		// pair and carries a UNIQUE constraint, so the fixture's fixed id
+		// would collide on the second insert.
+		n++
+		d.ProviderDownloadID = fmt.Sprintf("row-%d", n)
+		d.State = state
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE downloads SET updated_at = ? WHERE id = ?`, updated, d.ID); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+		return d.ID
+	}
+
+	staleQueued := mk(StateQueued, old)
+	staleDownloading := mk(StateDownloading, old)
+	freshDownloading := mk(StateDownloading, recent)
+	// Terminal and post-provider states are none of the watchdog's business:
+	// auto-erroring a download whose files are already on disk would undo
+	// completed work.
+	staleReady := mk(StateReadyForImport, old)
+	staleCompleted := mk(StateProviderCompleted, old)
+	staleErrored := mk(StateError, old)
+
+	got, err := db.ListStuckDownloads(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListStuckDownloads() error = %v", err)
+	}
+	ids := map[string]bool{}
+	for _, d := range got {
+		ids[d.ID] = true
+	}
+
+	for _, want := range []string{staleQueued, staleDownloading} {
+		if !ids[want] {
+			t.Errorf("stale in-flight download %s not returned", want)
+		}
+	}
+	for name, id := range map[string]string{
+		"recently updated":   freshDownloading,
+		"ready_for_import":   staleReady,
+		"provider_completed": staleCompleted,
+		"already errored":    staleErrored,
+	} {
+		if ids[id] {
+			t.Errorf("%s download was returned as stuck; the watchdog would auto-error it", name)
+		}
+	}
+}
+
+// TestListErroredDownloadsEligibleForCleanup_OnlyStaleErrors backs error-state
+// cleanup, which deletes what it returns — local files, the provider-side
+// download and the row. Also untested until now, and also disabled by default.
+func TestListErroredDownloadsEligibleForCleanup_OnlyStaleErrors(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	n := 0
+	mk := func(state string, updated time.Time) string {
+		d := newTestDownload(KindTorrent)
+		// Unique per row: (provider, provider_download_id) is the identity
+		// pair and carries a UNIQUE constraint, so the fixture's fixed id
+		// would collide on the second insert.
+		n++
+		d.ProviderDownloadID = fmt.Sprintf("row-%d", n)
+		d.State = state
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE downloads SET updated_at = ? WHERE id = ?`, updated, d.ID); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+		return d.ID
+	}
+
+	old := time.Now().Add(-48 * time.Hour)
+	staleError := mk(StateError, old)
+	freshError := mk(StateError, time.Now())
+	staleReady := mk(StateReadyForImport, old)
+
+	got, err := db.ListErroredDownloadsEligibleForCleanup(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("ListErroredDownloadsEligibleForCleanup() error = %v", err)
+	}
+	ids := map[string]bool{}
+	for _, d := range got {
+		ids[d.ID] = true
+	}
+	if !ids[staleError] {
+		t.Error("a long-errored download was not eligible for cleanup")
+	}
+	if ids[freshError] {
+		t.Error("a freshly errored download was eligible; it would be deleted before anyone saw it")
+	}
+	if ids[staleReady] {
+		t.Error("a ready_for_import download was returned by the *errored* cleanup query")
+	}
+}

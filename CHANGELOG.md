@@ -44,6 +44,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   behind, and that clearing a key leaves the provider registered so it can
   be reconfigured without a restart. `cmd/acervinode` 67% → 73%.
 
+- **Covered the two queries behind the features that delete things.**
+  `ListStuckDownloads` (which the watchdog auto-errors) and
+  `ListErroredDownloadsEligibleForCleanup` (which cleanup deletes, files
+  and provider-side download included) both had no test, and both default
+  to disabled — so the first time anyone switched them on would have been
+  the first time the query ran in anger. Both verified correct: only stale
+  in-flight rows and only stale errored rows respectively, never
+  `ready_for_import`, never a freshly-errored row someone hasn't seen yet.
+  Also covers `ListDownloadsByProvider` directly, since until now it was
+  only exercised through the importer — a dropped `WHERE` there would have
+  surfaced as downloads wrongly flagged gone rather than a failing test.
+  `internal/database` 73% → 78%.
+
 
 ### Added
 
