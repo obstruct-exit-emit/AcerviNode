@@ -1728,9 +1728,9 @@ underlying signal, but in practice it's permanently true from the moment the
 first account is created — nothing ever removes the last one (see the
 Default account below).
 
-**Roles**: `admin` can do everything — Settings (TorBox key, general
-config, categories, cleanup policy), user management, and both the Managed
-and Manual tabs. `member` is scoped to Manual downloads only — adding,
+**Roles**: `admin` can do everything — Settings (provider keys, general
+config, categories, cleanup policy, backups), user management, and both the
+Managed and Manual tabs. `member` is scoped to Manual downloads only — adding,
 viewing, and managing a magnet/NZB/hoster link grabbed directly, the same
 things the Manual tab's own "+ Add" already does. A member has **no**
 access to the *arr-driven Managed pipeline at all, and no Settings access.
@@ -1739,6 +1739,19 @@ something Sonarr/Radarr is actively tracking) is a materially bigger deal
 than a member managing their own manual grabs, and this leaves room for
 "possible future additions" (the second half of the request) to have a
 natural home in the member tier without touching admin-only surface.
+
+**A member can still reach your provider's API key, and the role boundary
+cannot prevent it.** Not through Settings — every credential-bearing endpoint
+refuses them — but through a file download link. TorBox authorizes a CDN
+download with `token=<api key>` embedded in the URL itself (stripping it gets
+a flat `400 missing field 'token'` from the CDN), and resolving such a link
+for a Manual download is precisely what the member tier exists to allow. So
+the key travels with the link, to anyone entitled to request one.
+
+Treat a member account as trusted with the provider account behind it. The
+only real fix would be proxying transfers through AcerviNode instead of
+redirecting to the provider, which is a deliberate non-goal — see
+[API](api.md#direct-file-downloads).
 
 This is enforced server-side, not just hidden in the UI (`internal/api`):
 - `downloadByID` — the single choke point every single-download handler

@@ -864,3 +864,33 @@ func TestDo_SuccessFalseEnvelope(t *testing.T) {
 		t.Errorf("Detail = %q", apiErr.Detail)
 	}
 }
+
+// TestSearchBudget_StaysUnderTheRequestDeadline proves TorBox is asked to
+// give up before we do. Without the headroom both sides race to the same
+// limit and ours usually wins, replacing TorBox's own explanation ("Could
+// not download full metadata for the torrent within the alloted timeout")
+// with a bare "context deadline exceeded" — measured live, where a cold
+// hash took TorBox ~33s against our 30s default, making this the ordinary
+// path for any torrent TorBox hasn't seen rather than an edge case.
+func TestSearchBudget_StaysUnderTheRequestDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		want    int
+	}{
+		{"default 30s leaves headroom", 30 * time.Second, 25},
+		{"generous timeout scales with it", 90 * time.Second, 85},
+		{"exactly the headroom defers to TorBox", 5 * time.Second, 0},
+		{"tighter than the headroom defers to TorBox", 2 * time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewClient("k", WithRequestTimeout(tc.timeout))
+			if got := c.searchBudget(); got != tc.want {
+				t.Errorf("searchBudget() = %d, want %d", got, tc.want)
+			}
+			if got := c.searchBudget(); got > 0 && time.Duration(got)*time.Second >= tc.timeout {
+				t.Errorf("searchBudget() = %ds, must stay under the %s request deadline", got, tc.timeout)
+			}
+		})
+	}
+}

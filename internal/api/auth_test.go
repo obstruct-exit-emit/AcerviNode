@@ -597,3 +597,98 @@ func TestHandleListDownloads_AdminSeesRequestedFilter(t *testing.T) {
 		t.Errorf("results = %+v, want exactly the one arr row", got)
 	}
 }
+
+// TestSetUserPassword_KeepsTheCallersOwnSession proves changing your own
+// password doesn't log you out of the browser you changed it in.
+//
+// The handler passed "" as revokeUser's except-token, so it revoked every
+// session for the account including the caller's own — directly contradicting
+// its own comment, and the same shape as the self-demote session bug. Caught
+// live during burn-in: the request immediately after a self password change
+// came back 401.
+func TestSetUserPassword_KeepsTheCallersOwnSession(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+
+	token := srv.sessions.create("member1", RoleMember)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/member1/password",
+		strings.NewReader(`{"password":"a-new-password-123"}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := srv.sessions.lookup(token); !ok {
+		t.Error("the caller's own session was revoked by their own password change")
+	}
+}
+
+// TestSetUserPassword_RevokesTheTargetsOtherSessions is the other half: an
+// admin resetting someone else's password must end that account's sessions,
+// since whoever holds them no longer knows the password.
+func TestSetUserPassword_RevokesTheTargetsOtherSessions(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+
+	victim := srv.sessions.create("member1", RoleMember)
+	admin := srv.sessions.create("admin1", RoleAdmin)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/member1/password",
+		strings.NewReader(`{"password":"reset-by-an-admin-123"}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: admin})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := srv.sessions.lookup(victim); ok {
+		t.Error("the target's session survived an admin resetting their password")
+	}
+	if _, ok := srv.sessions.lookup(admin); !ok {
+		t.Error("the admin's own session was revoked by resetting someone else's password")
+	}
+}
+
+// TestAddUser_RejectsAnUnrecognisedRole proves a bogus role is refused
+// rather than silently downgraded. config.AddUser maps anything that isn't
+// exactly "admin" to "member" — the right fail-safe for storage, but as an
+// API answer it meant `"role":"Admin"` created a member account and returned
+// 200. PUT .../role already refused the same input; this brings POST /users
+// into line. Found during burn-in.
+func TestAddUser_RejectsAnUnrecognisedRole(t *testing.T) {
+	for _, role := range []string{"superuser", "Admin", "ADMIN", "administrator", "root"} {
+		t.Run(role, func(t *testing.T) {
+			srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+			token := srv.sessions.create("admin1", RoleAdmin)
+			body := `{"username":"newbie","password":"long-enough-123","role":"` + role + `"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/users", strings.NewReader(body))
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("role %q: status = %d, want 400 (got %s)", role, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestAddUser_AcceptsValidAndOmittedRoles guards the other side: the two
+// real roles still work, and omitting role entirely still means member.
+func TestAddUser_AcceptsValidAndOmittedRoles(t *testing.T) {
+	for _, body := range []string{
+		`{"username":"a","password":"long-enough-123","role":"admin"}`,
+		`{"username":"b","password":"long-enough-123","role":"member"}`,
+		`{"username":"c","password":"long-enough-123"}`,
+	} {
+		srv, _ := newTestServer(t, nil, nil, &fakeSettings{})
+		token := srv.sessions.create("admin1", RoleAdmin)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/users", strings.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code == http.StatusBadRequest {
+			t.Errorf("body %s rejected: %s", body, rec.Body.String())
+		}
+	}
+}

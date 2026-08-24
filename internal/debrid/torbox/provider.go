@@ -149,7 +149,9 @@ func (p *Provider) CheckCached(ctx context.Context, hashes []string) (map[string
 // TorrentInfo satisfies debrid.TorrentInfoProvider — previews a torrent's
 // metadata by hash, before ever adding it.
 func (p *Provider) TorrentInfo(ctx context.Context, hash string) (debrid.TorrentInfo, error) {
-	result, err := p.client.TorrentInfo(ctx, hash, 0)
+	// Bounded so TorBox answers with its own error before our deadline
+	// cuts it off — see Client.searchBudget.
+	result, err := p.client.TorrentInfo(ctx, hash, p.client.searchBudget())
 	if err != nil {
 		return debrid.TorrentInfo{}, fmt.Errorf("torbox: torrent info: %w", err)
 	}

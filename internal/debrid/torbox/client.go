@@ -121,6 +121,26 @@ func WithRequestTimeout(d time.Duration) Option {
 	return func(c *Client) { c.requestTimeout = d }
 }
 
+// searchBudget is how long TorBox itself should be allowed to spend on a
+// call that does real work before answering (currently only torrentinfo,
+// which searches the BitTorrent network for metadata).
+//
+// Deliberately a few seconds *under* our own request deadline. Both sides
+// otherwise race to the same limit and ours usually wins, which replaces
+// TorBox's own explanation of what went wrong with a bare "context deadline
+// exceeded". Measured against the real API: a cold hash takes TorBox ~33s to
+// give up on, comfortably past the 30s default here, so this is the ordinary
+// path for any torrent TorBox hasn't seen before — not an edge case.
+func (c *Client) searchBudget() int {
+	const headroom = 5 * time.Second
+	if c.requestTimeout <= headroom {
+		// Too tight to reserve headroom from; let TorBox use its own
+		// default rather than asking for something absurd.
+		return 0
+	}
+	return int((c.requestTimeout - headroom).Seconds())
+}
+
 func (c *Client) url(path string) string {
 	return c.baseURL + "/" + apiVersion + "/api" + path
 }

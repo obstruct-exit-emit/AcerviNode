@@ -382,6 +382,17 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
 		return
 	}
+	// An unrecognised role is rejected rather than quietly downgraded.
+	// config.AddUser treats anything that isn't exactly "admin" as "member",
+	// which is the right fail-safe for storage but a poor answer to a
+	// caller: "Admin" or "administrator" would create a member account and
+	// report success, leaving someone to wonder why their new admin can't
+	// reach anything. PUT .../role already refuses the same input, so this
+	// only brings the two into line. An omitted role still means member.
+	if req.Role != "" && req.Role != RoleAdmin && req.Role != RoleMember {
+		http.Error(w, "role must be "+RoleAdmin+" or "+RoleMember, http.StatusBadRequest)
+		return
+	}
 	hash, err := hashPassword(req.Password)
 	if err != nil {
 		http.Error(w, "hashing password: "+err.Error(), http.StatusInternalServerError)
@@ -443,9 +454,17 @@ func (s *Server) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// End the account's other sessions; the browser making the change (which
-	// may be the same account) keeps its own.
-	s.sessions.revokeUser(username, "")
+	// End the account's *other* sessions, keeping the one making the change.
+	// Passing the caller's own token is correct in both directions: changing
+	// your own password preserves the browser you did it from, while an admin
+	// changing someone else's holds a token belonging to a different account,
+	// which matches none of the target's sessions — so those are all revoked,
+	// which is the point.
+	//
+	// This used to pass "", revoking everything including the caller's own
+	// session, so changing your own password silently logged you out of the
+	// browser you changed it in. Same shape as the self-demote session bug.
+	s.sessions.revokeUser(username, currentToken(r))
 	slog.Info("api: user password changed", "username", username)
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -481,10 +500,12 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 	// The account's sessions were issued under the old role; end all of
 	// them, including the caller's own if they targeted their own account —
 	// a session's role is cached at login and never re-derived from config,
-	// so excepting the current token here (as handleSetUserPassword and
-	// handleMakeDefaultUser correctly do, where the cached role doesn't go
-	// stale) would let a demoted admin keep using their already-open
-	// session's stale admin role indefinitely.
+	// so excepting the current token here would let a demoted admin keep
+	// using their already-open session's stale admin role indefinitely.
+	// handleSetUserPassword is the one place that *does* except it, because
+	// a password change leaves the role alone and there is nothing stale to
+	// carry. handleMakeDefaultUser revokes everything for the same reason
+	// this does: it promotes to admin, so the cached role would be stale.
 	s.sessions.revokeUser(username, "")
 	slog.Info("api: user role changed", "username", username, "role", req.Role)
 	writeJSON(w, map[string]any{"users": s.settings.ListUsers()})

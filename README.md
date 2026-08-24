@@ -197,6 +197,13 @@ pointing Sonarr at AcerviNode as either a qBittorrent or a SABnzbd client:
   certificate generated on first need, or point it at a real cert/key pair. The
   plain-HTTP listener keeps running unchanged either way. A TLS reverse proxy
   in front is still perfectly reasonable.
+- **Know what a `member` account grants.** Members are refused every endpoint
+  that could reveal a provider credential — but a provider download link
+  carries the API key inside the URL (TorBox authorizes its CDN that way, and
+  the link is useless without it), and resolving those links is exactly what
+  the member tier is for. So a member account is effectively trusted with the
+  provider account behind it. See
+  [Direct file downloads](docs/api.md#direct-file-downloads).
 
 ## Development
 

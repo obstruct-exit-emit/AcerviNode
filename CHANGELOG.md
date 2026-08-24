@@ -312,6 +312,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Changing your own password logged you out of the browser you changed it
+  in.** `handleSetUserPassword` passed `""` as `revokeUser`'s except-token,
+  revoking every session for the account including the caller's own — the
+  direct opposite of what its own comment said it did, and the same shape as
+  the self-demote session bug. Now excepts the caller's token, which is
+  correct in both directions: your own session survives, while an admin
+  resetting someone else's holds a token matching none of the target's
+  sessions, so those are still all revoked. Caught during burn-in, when the
+  request right after a self password change came back `401`.
+
+- **`POST /api/v1/settings/users` accepted any role string and silently
+  downgraded it.** `config.AddUser` maps anything that isn't exactly `admin`
+  to `member` — the right fail-safe for storage, but as an API answer it
+  meant `"role":"Admin"` created a member account and returned `200`.
+  `PUT .../role` already refused the same input; the two now agree. An
+  omitted role still means `member`. No privilege escalation either way: the
+  normalization always failed safe.
+
+- **A cold torrent metadata preview died with our timeout instead of
+  TorBox's explanation.** `torrentinfo` searches the BitTorrent network, and
+  a hash TorBox hasn't seen takes it ~33s to give up on — past the 30s
+  default request deadline, so the first preview of any uncached torrent
+  returned `context deadline exceeded`. TorBox is now asked to give up a few
+  seconds before we do, so the caller gets its real reason ("Could not
+  download full metadata for the torrent within the alloted timeout").
+  Verified live: 26.6s and a useful message, against 30s and an opaque one.
+
+### Security
+
+- **Documented that a `member` account can reach the provider API key.** Not
+  through Settings — every credential-bearing endpoint refuses them — but a
+  provider download link carries `token=<api key>` in the URL, and resolving
+  those links is exactly what the member tier exists to allow. Confirmed the
+  token is load-bearing rather than incidental: stripping it gets a flat
+  `400 missing field 'token'` from TorBox's CDN, so AcerviNode cannot remove
+  it while still handing back a working link. Now stated plainly in the API
+  docs, the roles section and the README, since it changes what creating a
+  member account means. Closing it properly would require proxying transfers
+  through AcerviNode, a deliberate non-goal.
+
 - **A refresh pass could flag another provider's downloads as vanished.**
   The importer listed tracked rows by *kind* alone, so polling AllDebrid
   handed it every TorBox torrent row too — absent from AllDebrid's listing by

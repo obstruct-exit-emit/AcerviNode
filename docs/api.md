@@ -356,6 +356,27 @@ local disk, so the UI doesn't offer a redundant manual grab for it (see
 care either way — it works for any download's id, this is purely a web UI
 choice about which buttons to show.
 
+**The returned URL contains your provider's API key**, and there is no way
+around it. TorBox authorizes a CDN download with a `token=<api key>` query
+parameter on the URL itself — verified by stripping it, which gets a flat
+`400 missing field 'token'` from the CDN. AcerviNode hands back what the
+provider gave it, so the key travels with the link.
+
+That has a consequence worth being deliberate about: these endpoints sit
+under ordinary authentication, not admin, because browsing and grabbing a
+Manual download's files on demand is exactly what a `member` account is for.
+A member is refused everywhere else that could reveal a provider credential
+(`GET /api/v1/settings/providers` returns `403` for them and never echoes a
+key even for an admin) — but a file link is a credential in disguise, and
+handing one over hands over the provider account behind it.
+
+So: **giving someone a member account effectively gives them your provider
+API key**, as soon as there is any download whose files they can list. Treat
+member accounts as trusted with the provider account, or don't create them.
+Closing this properly would mean AcerviNode proxying the transfer itself
+rather than redirecting to the provider, which is a deliberate non-goal here
+— see the paragraph above about not sitting in the middle of the transfer.
+
 Two auth models meet at this boundary, deliberately: the `link` call itself
 needs AcerviNode's own `Authorization: Bearer <api_key>` like every other
 endpoint here, but the URL it returns is the provider's own — a plain
