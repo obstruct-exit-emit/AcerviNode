@@ -68,6 +68,17 @@ type ProviderKindStatus struct {
 	// kind. Per provider, not per kind: one provider being limited does not
 	// stall another.
 	RateLimitedUntil *time.Time `json:"rate_limited_until,omitempty"`
+	// ListingAnomalousSince is set while this provider/kind's listing is
+	// being disbelieved by the mass-vanish guard — successful, but empty
+	// enough that acting on it would flag every tracked download as gone.
+	// Present only while that holds.
+	//
+	// Worth monitoring on: it is the one state where everything else here
+	// looks healthy (lists succeeding, no rate limit) while nothing is
+	// actually reconciling. Cleared either by the listing recovering or,
+	// after a grace period, by the guard concluding the listing was right
+	// all along — see database.massVanishMaxDuration.
+	ListingAnomalousSince *time.Time `json:"listing_anomalous_since,omitempty"`
 }
 
 // KindStatus is one kind's (torrent/usenet/webdl) own health signals within

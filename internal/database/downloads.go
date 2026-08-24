@@ -331,6 +331,44 @@ func (db *DB) GetSourceFile(ctx context.Context, id string) (filename string, da
 	return name.String, data, nil
 }
 
+// ListDownloadsByProvider is ListDownloads scoped to one provider, for the
+// per-provider polling loops.
+//
+// The scoping is not an optimisation, it is a correctness requirement. A
+// refresh pass compares tracked rows against one provider's listing, so
+// handing it rows belonging to a *different* provider makes every one of
+// them look absent — and missing-detection then flags them "no longer found
+// in the provider's account" when the provider that actually holds them was
+// never asked.
+//
+// Found by probing the real two-provider setup rather than by inspection:
+// with five AllDebrid rows and two TorBox rows tracked, polling AllDebrid
+// flagged both TorBox rows within three ticks. The mass-vanish guard hid
+// this only while the wrongly-missing fraction happened to exceed its
+// threshold; below that, nothing stopped it. Identity here is the
+// (provider, provider_download_id) pair, exactly as
+// GetDownloadByProviderID already treats it — which also removes any chance
+// of two providers' id spaces colliding into a false match.
+func (db *DB) ListDownloadsByProvider(ctx context.Context, provider string, kind Kind) ([]*Download, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+downloadColumns+` FROM downloads WHERE provider = ? AND kind = ? ORDER BY added_at DESC`,
+		provider, string(kind))
+	if err != nil {
+		return nil, fmt.Errorf("list downloads by provider: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Download
+	for rows.Next() {
+		d, err := scanDownload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // ListDownloads returns every download of the given kind, most recently added first.
 func (db *DB) ListDownloads(ctx context.Context, kind Kind) ([]*Download, error) {
 	rows, err := db.QueryContext(ctx, `SELECT `+downloadColumns+` FROM downloads WHERE kind = ? ORDER BY added_at DESC`, string(kind))
@@ -747,6 +785,103 @@ const (
 	massVanishFraction   = 0.5
 )
 
+// massVanishMaxDuration bounds how long the mass-vanish guard will keep
+// distrusting a listing before concluding the listing is simply telling the
+// truth.
+//
+// Without a bound the guard cannot ever conclude anything. It exists to
+// discount a listing that came back successful-but-empty because something
+// was wrong on the provider's side — but "the account really is empty now"
+// produces byte-for-byte the same listing, and that is a completely ordinary
+// thing for a user to cause (deleting everything from the provider's own
+// site, or from a second AcerviNode pointed at the same account). Observed
+// live doing exactly that: a genuinely emptied account left three rows
+// frozen indefinitely — never progressing, never flagged missing, never
+// cleaned up — while this warning fired 6,409 times over ten hours.
+//
+// Thirty minutes is deliberately far longer than any plausible transient:
+// at the default ten-second poll it means ~180 consecutive successful
+// listings all agreeing the account is empty. And releasing the guard is not
+// itself the destructive step — missingDetectionThreshold still requires
+// three further consecutive misses per row after that, so a listing that
+// recovers in the meantime costs nothing.
+const massVanishMaxDuration = 30 * time.Minute
+
+// massVanishLogInterval throttles the guard's warning. It used to log on
+// every pass, which on a jammed instance meant 73% of the entire log was one
+// repeated line — drowning the very signal it was trying to raise.
+const massVanishLogInterval = 5 * time.Minute
+
+// massVanishEntry is one scope's suspicion history — see massVanishDecision.
+type massVanishEntry struct {
+	// since is when this scope's listing first looked anomalous. Zero once
+	// a healthy listing clears it.
+	since time.Time
+	// lastLog throttles the warning to massVanishLogInterval.
+	lastLog time.Time
+	// released records that this scope already crossed massVanishMaxDuration
+	// and was handed back to normal missing-detection, so the transition is
+	// announced once rather than on every subsequent pass.
+	released bool
+}
+
+// massVanishDecision converts "this pass looks anomalous" into "distrust it",
+// applying massVanishMaxDuration so a permanently-empty account eventually
+// reconciles instead of freezing forever.
+//
+// Returns distrust (skip missing-detection this pass), since (when the
+// anomaly started, zero if none), and logNow (whether the caller should emit
+// its throttled warning).
+func (db *DB) massVanishDecision(scope string, suspect bool, now time.Time) (distrust bool, since time.Time, logNow bool) {
+	db.massVanishMu.Lock()
+	defer db.massVanishMu.Unlock()
+
+	if !suspect {
+		// A healthy listing clears the history outright: the next anomaly
+		// is a new one and gets its own full grace period, rather than
+		// inheriting a stale clock from something that already recovered.
+		delete(db.massVanish, scope)
+		return false, time.Time{}, false
+	}
+
+	e := db.massVanish[scope]
+	if e == nil {
+		e = &massVanishEntry{since: now}
+		db.massVanish[scope] = e
+	}
+
+	if now.Sub(e.since) > massVanishMaxDuration {
+		// Long past any plausible glitch — believe the provider. Announced
+		// once, on the transition, because it changes what the next pass
+		// will actually do to rows.
+		if !e.released {
+			e.released = true
+			return false, e.since, true
+		}
+		return false, e.since, false
+	}
+
+	if e.lastLog.IsZero() || now.Sub(e.lastLog) >= massVanishLogInterval {
+		e.lastLog = now
+		return true, e.since, true
+	}
+	return true, e.since, false
+}
+
+// MassVanishSince reports when scope's listing first looked anomalous, and
+// whether it currently does at all — surfaced through GET /api/v1/status so
+// a jammed instance is visible to an operator rather than only to whoever is
+// reading the logs.
+func (db *DB) MassVanishSince(scope string) (time.Time, bool) {
+	db.massVanishMu.Lock()
+	defer db.massVanishMu.Unlock()
+	e := db.massVanish[scope]
+	if e == nil {
+		return time.Time{}, false
+	}
+	return e.since, true
+}
+
 // isSuspectedMassVanish reports whether the fraction of tracked
 // AddedViaManual rows absent from byID is high enough that the listing
 // itself is more likely anomalous than every one of them having genuinely
@@ -755,7 +890,7 @@ const (
 // Scoped to AddedViaManual only, mirroring handleMissingFromProvider itself
 // — a Managed row is never a candidate for missing-detection in the first
 // place, so it shouldn't factor into whether this pass looks suspicious.
-func isSuspectedMassVanish(rows []*Download, byID map[string]debrid.DownloadStatus) bool {
+func isSuspectedMassVanish(rows []*Download, byID map[string]debrid.DownloadStatus, provider string) bool {
 	var manualTotal, manualMissing int
 	for _, d := range rows {
 		// StateError is excluded from both halves of the fraction, exactly
@@ -771,6 +906,14 @@ func isSuspectedMassVanish(rows []*Download, byID map[string]debrid.DownloadStat
 		// statuses_returned=1, where 3 of those 4 were long-dead rows from
 		// a rotated API key.
 		if d.AddedVia != AddedViaManual || d.State == StateError {
+			continue
+		}
+		// Same scoping as the refresh loop itself: another provider's rows
+		// are absent from this listing by construction, so counting them
+		// would inflate the "missing" fraction with rows that were never
+		// this listing's to report and could trip the guard on a provider
+		// that is answering perfectly.
+		if provider != "" && d.Provider != provider {
 			continue
 		}
 		manualTotal++
@@ -942,7 +1085,34 @@ type RefreshOptions struct {
 	// marked "no longer found in the provider's account" while still
 	// sitting on the account.
 	DetectMissing bool
+
+	// Provider and Kind identify which batch this pass covers.
+	//
+	// Provider is load-bearing for correctness, not bookkeeping: a pass
+	// compares tracked rows against one provider's listing, so any row
+	// belonging to a different provider is absent by construction and must
+	// not be judged by it. When set, such rows are skipped outright. Callers
+	// are expected to pass only that provider's rows anyway (see
+	// ListDownloadsByProvider) — this is the backstop that makes forgetting
+	// harmless rather than destructive, since the failure mode is flagging
+	// live downloads as gone.
+	//
+	// Together they also key the mass-vanish guard's grace period, so one
+	// provider's empty listing can't reset or extend another's clock.
+	Provider string
+	Kind     Kind
 }
+
+// MassVanishScope keys the mass-vanish guard's grace period for one
+// provider/kind pair — see massVanishDecision and MassVanishSince. Exported
+// so callers reading the state back key it identically to how a refresh pass
+// wrote it, rather than each rebuilding the string.
+func MassVanishScope(provider string, kind Kind) string {
+	return provider + "/" + string(kind)
+}
+
+// scope keys the mass-vanish guard — see massVanishDecision.
+func (o RefreshOptions) scope() string { return MassVanishScope(o.Provider, o.Kind) }
 
 func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuses []debrid.DownloadStatus, fetchedAt time.Time, opts RefreshOptions) {
 	byID := make(map[string]debrid.DownloadStatus, len(statuses))
@@ -960,13 +1130,33 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 	// Cheap short-circuit: with detection off there is nothing for the
 	// guard to protect, and computing it would only produce a misleading
 	// warning about a pass that was never going to act on it.
-	suspectMassVanish := opts.DetectMissing && isSuspectedMassVanish(rows, byID)
-	if suspectMassVanish {
-		slog.Warn("database: suspected mass-vanish from provider listing, skipping missing-download detection this pass",
-			"tracked_rows", len(rows), "statuses_returned", len(statuses))
+	// Time-bounded rather than indefinite: an account that is genuinely
+	// empty produces exactly the listing this guard was built to distrust,
+	// so without a bound it can never conclude anything and the rows freeze
+	// permanently — see massVanishMaxDuration.
+	suspect := opts.DetectMissing && isSuspectedMassVanish(rows, byID, opts.Provider)
+	suspectMassVanish, since, logNow := db.massVanishDecision(opts.scope(), suspect, fetchedAt)
+	if logNow {
+		if suspectMassVanish {
+			slog.Warn("database: suspected mass-vanish from provider listing, skipping missing-download detection this pass",
+				"scope", opts.scope(), "tracked_rows", len(rows), "statuses_returned", len(statuses),
+				"anomalous_since", since, "gives_up_after", massVanishMaxDuration)
+		} else {
+			slog.Warn("database: provider listing has looked anomalous for longer than the mass-vanish grace period, trusting it from now on",
+				"scope", opts.scope(), "tracked_rows", len(rows), "statuses_returned", len(statuses),
+				"anomalous_since", since, "grace_period", massVanishMaxDuration)
+		}
 	}
 
 	for _, d := range rows {
+		// A row from another provider is absent from this listing by
+		// construction, never because it vanished — judging it here is how
+		// a healthy download on provider A gets flagged gone by provider
+		// B's poll. Also stops two providers' id spaces colliding into a
+		// false match below.
+		if opts.Provider != "" && d.Provider != opts.Provider {
+			continue
+		}
 		st, ok := byID[d.ProviderDownloadID]
 		if !ok {
 			if opts.DetectMissing && !suspectMassVanish {

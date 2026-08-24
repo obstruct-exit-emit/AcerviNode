@@ -312,6 +312,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A refresh pass could flag another provider's downloads as vanished.**
+  The importer listed tracked rows by *kind* alone, so polling AllDebrid
+  handed it every TorBox torrent row too — absent from AllDebrid's listing by
+  construction, and flagged `no longer found in the provider's account`
+  within three ticks. Healthy downloads, on an account that was never asked
+  about them. Both compat shims already grouped by provider; the importer's
+  bulk pass was the one caller that didn't.
+
+  The mass-vanish guard masked this whenever the wrongly-missing fraction
+  exceeded its 50% threshold, which is how it survived the multi-provider
+  work — it only bites *below* that line, e.g. five AllDebrid rows against
+  two TorBox rows, where 28% sails under the guard and the TorBox rows get
+  flagged. Found by probing the real two-provider instance while
+  investigating the freeze above, not by inspection.
+
+  Fixed in two places deliberately: `ListDownloadsByProvider` scopes what the
+  importer reads, and `RefreshFromProvider` skips rows whose provider doesn't
+  match `RefreshOptions.Provider` regardless — the failure mode is flagging
+  live downloads as gone, so a future caller forgetting to scope should be
+  harmless rather than destructive. Identity is now consistently the
+  `(provider, provider_download_id)` pair, which also rules out two
+  providers' id spaces colliding into a false match. The mass-vanish fraction
+  is scoped the same way, so another provider's rows can't trip the guard on
+  a provider that is answering perfectly.
+
+- **The mass-vanish circuit breaker could never conclude, freezing downloads
+  forever.** The breaker exists so a provider listing that comes back
+  successful-but-empty can't flag every tracked download as gone. The gap:
+  an account the user genuinely emptied produces byte-for-byte that same
+  listing, and there was no time bound — so the breaker distrusted it
+  indefinitely and the rows froze. Never progressing, never flagged missing,
+  never cleaned up.
+
+  Found live, not by inspection. A real instance whose TorBox account had
+  been emptied from elsewhere (an entirely ordinary thing to do — the
+  provider's own site, or a second AcerviNode on the same account) had three
+  rows stuck indefinitely, two showing 0% for over eight hours, while the
+  guard's warning fired **6,409 times in ten hours — 73% of every line in
+  the log**, drowning the signal it existed to raise. Worth noting the same
+  shape of freeze is already recorded in the guard's own code comment as
+  having been fixed once before, via a different route in.
+
+  `massVanishDecision` now tracks how long each `(provider, kind)` scope has
+  been failing the guard and, after `massVanishMaxDuration` (30 minutes),
+  hands the listing back to normal missing-detection. At the default
+  10-second poll that's ~180 consecutive listings all agreeing the account is
+  empty. Releasing isn't itself the destructive step:
+  `missingDetectionThreshold` still requires three further consecutive misses
+  per row, so a listing that recovers in the meantime costs nothing.
+
+  Tracked per scope rather than globally — one provider's empty listing says
+  nothing about another's, and a shared clock would let a healthy provider
+  keep resetting a jammed one's. A healthy listing clears the history
+  outright rather than pausing it, so the next anomaly gets its own full
+  grace period instead of inheriting a stale clock.
+
+  The warning is now throttled to one per scope per 5 minutes, with the
+  hand-back announced exactly once on the transition — a warning repeating
+  every tick forever is a quieter signal, not a louder one.
+
+  New `listing_anomalous_since` per provider/kind on `GET /api/v1/status`.
+  This is the one failure state nothing else revealed: lists succeeding, no
+  rate limit, everything looking healthy, and nothing actually reconciling.
+
 - **A fresh clone couldn't build.** `web/dist/.gitkeep` has been negated in
   `.gitignore` since the frontend landed, and both `development.md` and
   `installation.md` tell you a committed `.gitkeep` is what keeps `go build`

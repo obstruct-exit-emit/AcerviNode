@@ -941,6 +941,10 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 			t := ps.RateLimitedUntil
 			entry.RateLimitedUntil = &t
 		}
+		if !ps.ListingAnomalousSince.IsZero() {
+			t := ps.ListingAnomalousSince
+			entry.ListingAnomalousSince = &t
+		}
 		providerStatuses = append(providerStatuses, entry)
 	}
 

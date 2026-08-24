@@ -1954,13 +1954,13 @@ func TestIsSuspectedMassVanish_IgnoresAlreadyErroredRows(t *testing.T) {
 	// key plus one healthy download that the listing does return.
 	rows := []*Download{errored("dead-1"), errored("dead-2"), errored("dead-3"), healthy("alive")}
 	byID := map[string]debrid.DownloadStatus{"alive": {ID: "alive"}}
-	if isSuspectedMassVanish(rows, byID) {
+	if isSuspectedMassVanish(rows, byID, "") {
 		t.Error("mass-vanish suspected when the only non-errored row was present — the guard would stay jammed forever")
 	}
 
 	// A genuine mass-vanish must still trip: healthy rows, listing empty.
 	live := []*Download{healthy("a"), healthy("b"), healthy("c")}
-	if !isSuspectedMassVanish(live, map[string]debrid.DownloadStatus{}) {
+	if !isSuspectedMassVanish(live, map[string]debrid.DownloadStatus{}, "") {
 		t.Error("mass-vanish not suspected when every tracked row vanished at once")
 	}
 }
@@ -1990,5 +1990,129 @@ func TestDeleteDownload_ForgetsRefreshState(t *testing.T) {
 	}
 	if _, ok := db.LiveStatus(d.ID); ok {
 		t.Error("LiveStatus() still cached after the download was deleted — refreshState leaks")
+	}
+}
+
+// TestRefreshFromProvider_MassVanish_ReleasesAfterGracePeriod proves the
+// circuit breaker eventually concludes. An account the user genuinely
+// emptied produces exactly the listing the breaker distrusts, so without a
+// time bound the rows freeze forever — observed live, where a real emptied
+// account left rows stuck indefinitely while the guard's warning fired 6,409
+// times. Past massVanishMaxDuration the listing is believed and normal
+// missing-detection resumes. See massVanishDecision.
+func TestRefreshFromProvider_MassVanish_ReleasesAfterGracePeriod(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	downloads := seedManualDownloads(t, db, 4)
+	start := time.Now()
+
+	// Inside the grace period the breaker holds, however many passes run.
+	for i := 0; i < missingDetectionThreshold+2; i++ {
+		db.RefreshFromProvider(ctx, downloads, nil, start.Add(time.Duration(i)*time.Second),
+			RefreshOptions{DetectMissing: true, Provider: "torbox", Kind: Kind("torrent")})
+	}
+	for _, d := range downloads {
+		if d.State == StateError {
+			t.Fatalf("download %s flagged error inside the grace period", d.ID)
+		}
+	}
+
+	// Past it, the listing is believed — but each row still needs
+	// missingDetectionThreshold consecutive misses, which is the second
+	// safety layer releasing the guard deliberately does not bypass.
+	after := start.Add(massVanishMaxDuration + time.Minute)
+	for i := 0; i < missingDetectionThreshold; i++ {
+		db.RefreshFromProvider(ctx, downloads, nil, after.Add(time.Duration(i)*time.Second),
+			RefreshOptions{DetectMissing: true, Provider: "torbox", Kind: Kind("torrent")})
+	}
+
+	for _, d := range downloads {
+		if d.State != StateError {
+			t.Errorf("download %s state = %q, want error once the grace period lapsed", d.ID, d.State)
+		}
+		if d.ErrorMessage != missingDownloadErrorMessage {
+			t.Errorf("download %s ErrorMessage = %q, want %q", d.ID, d.ErrorMessage, missingDownloadErrorMessage)
+		}
+	}
+}
+
+// TestMassVanishDecision_HealthyListingResetsTheClock proves a listing that
+// recovers clears the history outright, so a later anomaly gets its own full
+// grace period rather than inheriting a stale clock from one that already
+// resolved.
+func TestMassVanishDecision_HealthyListingResetsTheClock(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Now()
+
+	if distrust, _, _ := db.massVanishDecision("torbox/torrent", true, start); !distrust {
+		t.Fatal("first anomalous pass should be distrusted")
+	}
+	// Recovered.
+	if distrust, _, _ := db.massVanishDecision("torbox/torrent", false, start.Add(time.Minute)); distrust {
+		t.Fatal("a healthy listing must not be distrusted")
+	}
+	if _, ok := db.MassVanishSince("torbox/torrent"); ok {
+		t.Error("MassVanishSince should report nothing after a healthy pass")
+	}
+
+	// A new anomaly well past the original start still gets distrusted: its
+	// clock began now, not back at the first one.
+	late := start.Add(massVanishMaxDuration + time.Hour)
+	if distrust, since, _ := db.massVanishDecision("torbox/torrent", true, late); !distrust {
+		t.Error("a fresh anomaly must get its own grace period, not inherit the old clock")
+	} else if !since.Equal(late) {
+		t.Errorf("since = %v, want the new anomaly's own start %v", since, late)
+	}
+}
+
+// TestMassVanishDecision_ThrottlesLogging proves the guard's warning is rate
+// limited. It used to log on every pass, which on a jammed instance made one
+// repeated line 73% of the entire log — drowning the signal it was raising.
+func TestMassVanishDecision_ThrottlesLogging(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Now()
+
+	if _, _, logNow := db.massVanishDecision("torbox/torrent", true, start); !logNow {
+		t.Error("the first anomalous pass should log")
+	}
+	if _, _, logNow := db.massVanishDecision("torbox/torrent", true, start.Add(time.Second)); logNow {
+		t.Error("an immediately following pass must not log again")
+	}
+	if _, _, logNow := db.massVanishDecision("torbox/torrent", true, start.Add(massVanishLogInterval)); !logNow {
+		t.Error("a pass a full interval later should log again")
+	}
+
+	// The hand-back is announced exactly once, however many passes follow.
+	past := start.Add(massVanishMaxDuration + time.Minute)
+	if distrust, _, logNow := db.massVanishDecision("torbox/torrent", true, past); distrust || !logNow {
+		t.Errorf("crossing the grace period: distrust = %v, logNow = %v; want false, true", distrust, logNow)
+	}
+	if _, _, logNow := db.massVanishDecision("torbox/torrent", true, past.Add(time.Second)); logNow {
+		t.Error("the hand-back must be announced once, not on every later pass")
+	}
+}
+
+// TestMassVanishDecision_ScopesAreIndependent proves one provider's empty
+// listing can't reset or extend another's clock. Sharing state across scopes
+// would let a healthy provider keep a jammed one alive indefinitely, which
+// is the same freeze this whole change exists to remove.
+func TestMassVanishDecision_ScopesAreIndependent(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Now()
+
+	db.massVanishDecision("torbox/torrent", true, start)
+	// A different scope reporting healthy must not clear torbox/torrent's.
+	db.massVanishDecision("alldebrid/torrent", false, start.Add(time.Second))
+
+	since, ok := db.MassVanishSince("torbox/torrent")
+	if !ok {
+		t.Fatal("torbox/torrent's anomaly was cleared by an unrelated scope")
+	}
+	if !since.Equal(start) {
+		t.Errorf("since = %v, want %v", since, start)
+	}
+	if _, ok := db.MassVanishSince("alldebrid/torrent"); ok {
+		t.Error("a healthy scope should record nothing")
 	}
 }

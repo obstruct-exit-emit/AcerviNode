@@ -948,7 +948,45 @@ and it self-heals with no special-case code. A row already `error` for some
 other reason (e.g. a genuine provider-reported failure) is left alone by this
 path entirely, so it never overwrites a more specific existing reason.
 
-**Mass-vanish circuit breaker.** The debounce above only protects against
+#### A refresh pass judges only its own provider's rows
+
+Missing-detection asks "was this row absent from the listing?", which is only
+a meaningful question about rows the polled provider actually holds. A row
+belonging to a *different* provider is absent by construction, every single
+time.
+
+The importer used to list rows by kind alone, so polling AllDebrid handed it
+every TorBox torrent row as well — and each was duly flagged
+`no longer found in the provider's account` within three ticks. Live
+downloads, on an account that was never asked about them. Both compat shims
+already grouped by provider before refreshing; the importer's bulk pass was
+the one caller that didn't.
+
+The mass-vanish guard hid this whenever the wrongly-missing fraction happened
+to exceed its 50% threshold, which is why it survived the multi-provider work:
+it only bites on an instance sitting *below* that line — say five AllDebrid
+rows and two TorBox rows, where 28% sails under the guard and the two TorBox
+rows get flagged.
+
+Fixed in two places on purpose:
+
+- `ListDownloadsByProvider` scopes what the importer reads, so the right rows
+  are passed in the first place.
+- `RefreshFromProvider` skips any row whose provider doesn't match
+  `RefreshOptions.Provider` regardless, as a backstop. The failure mode here
+  is flagging live downloads as gone, so forgetting to scope a future caller
+  should be harmless rather than destructive. It also removes any chance of
+  two providers' id spaces colliding into a false match — identity is the
+  `(provider, provider_download_id)` pair, exactly as
+  `GetDownloadByProviderID` already treats it.
+
+The same scoping applies to the mass-vanish fraction itself, which would
+otherwise count another provider's rows as missing and trip the guard on a
+provider answering perfectly.
+
+#### Mass-vanish circuit breaker
+
+The debounce above only protects against
 one item briefly disappearing from an otherwise-normal listing — it does
 nothing to distinguish a genuine mass-delete from a provider listing that
 came back successful but anomalously empty or truncated (a partial
@@ -968,6 +1006,53 @@ detection is suppressed. `massVanishMinTracked` exists so a small account
 (one or two Manual downloads) isn't permanently exempt from real
 vanish-detection just because a small absolute count happens to look like a
 large fraction.
+
+**The breaker is time-bounded, because otherwise it can never conclude.**
+Distrusting the listing is the right first response, but it cannot be the
+permanent one: an account the user genuinely emptied produces byte-for-byte
+the same listing this guard was built to disbelieve. Deleting everything from
+the provider's own site, or from a second AcerviNode pointed at the same
+account, is a completely ordinary thing to do — and the guard's response was
+to freeze every tracked row forever. Never progressing, never flagged
+missing, never cleaned up.
+
+Found live rather than by inspection, on a real instance whose TorBox account
+had been emptied from elsewhere: three rows stuck indefinitely, two of them
+showing 0% for over eight hours, while this warning fired **6,409 times in
+ten hours — 73% of every line in the log**, drowning the signal it existed to
+raise. Note the shape of that failure is the same one the guard's own code
+comment already records fixing once before, when rows already in `error`
+counted toward the fraction and jammed it permanently. Same freeze, different
+route in.
+
+So `massVanishDecision` tracks how long each `(provider, kind)` scope has
+been failing the guard, and after `massVanishMaxDuration` (30 minutes) it
+hands the listing back to normal missing-detection. At the default 10-second
+poll that is ~180 consecutive successful listings all agreeing the account is
+empty. Releasing is not itself the destructive step either —
+`missingDetectionThreshold` still requires three further consecutive misses
+per row afterwards, so a listing that recovers in the meantime costs nothing.
+
+Three details the implementation depends on:
+
+- **Per scope, not global.** One provider's empty listing says nothing about
+  another's, and a shared clock would let a healthy provider keep resetting a
+  jammed one's — or a jammed one drag a healthy one down.
+- **A healthy listing clears the history outright**, rather than merely
+  pausing it. The next anomaly is a *new* anomaly and gets its own full grace
+  period, instead of inheriting a stale clock from one that already resolved.
+- **The warning is throttled** to one per scope per `massVanishLogInterval`
+  (5 minutes), with the hand-back announced exactly once on the transition.
+  A warning that repeats every tick forever is not a louder signal, it is a
+  quieter one.
+
+The state is in-memory only and resets on restart, deliberately: the question
+is "has this listing looked wrong for long enough to stop being a suspected
+glitch", and a freshly-started process has no grounds to claim it has been
+watching. It is surfaced per provider/kind as `listing_anomalous_since` on
+[`GET /api/v1/status`](api.md), which is the one state where everything else
+looks healthy — lists succeeding, no rate limit — while nothing is actually
+reconciling.
 
 ### Re-add for a discovered download
 

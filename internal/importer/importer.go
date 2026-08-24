@@ -840,14 +840,23 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name st
 	im.clearRateLimitHit(pk)
 	trusted := im.recordListSuccess(pk, fetchedAt)
 
-	rows, err := im.db.ListDownloads(ctx, kind)
+	// Scoped to this provider, not just this kind. A refresh compares
+	// tracked rows against one provider's listing, so including another
+	// provider's rows makes them all look absent and missing-detection
+	// flags them as vanished from an account that was never asked about
+	// them — see database.ListDownloadsByProvider.
+	rows, err := im.db.ListDownloadsByProvider(ctx, name, kind)
 	if err != nil {
-		slog.Error("importer: list downloads failed", "kind", kind, "error", err)
+		slog.Error("importer: list downloads failed", "provider", name, "kind", kind, "error", err)
 		return
 	}
 	// Only this pass ever concludes a download has vanished, and only once
 	// the provider has proven steady — see database.RefreshOptions.
-	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt, database.RefreshOptions{DetectMissing: trusted})
+	im.db.RefreshFromProvider(ctx, rows, statuses, fetchedAt, database.RefreshOptions{
+		DetectMissing: trusted,
+		Provider:      name,
+		Kind:          kind,
+	})
 	im.discoverManual(ctx, kind, p.Name(), rows, statuses, freshInstall)
 }
 
@@ -983,6 +992,12 @@ type ProviderKindStatus struct {
 	Kind                 string
 	LastSuccessfulListAt time.Time
 	RateLimitedUntil     time.Time
+	// ListingAnomalousSince is when this provider/kind's listing started
+	// failing the mass-vanish guard, if it currently is. A listing can be
+	// succeeding — LastSuccessfulListAt moving, no rate limit — while still
+	// being disbelieved, which previously showed up nowhere except a
+	// repeated log line.
+	ListingAnomalousSince time.Time
 }
 
 // ProviderStatuses reports every provider/kind pair the importer actually
@@ -1004,11 +1019,13 @@ func (im *Importer) ProviderStatuses() []ProviderKindStatus {
 		}
 		im.rateLimitMu.Unlock()
 
+		anomalousSince, _ := im.db.MassVanishSince(database.MassVanishScope(name, kind))
 		out = append(out, ProviderKindStatus{
-			Provider:             name,
-			Kind:                 string(kind),
-			LastSuccessfulListAt: listAt,
-			RateLimitedUntil:     until,
+			Provider:              name,
+			Kind:                  string(kind),
+			LastSuccessfulListAt:  listAt,
+			RateLimitedUntil:      until,
+			ListingAnomalousSince: anomalousSince,
 		})
 	})
 	return out

@@ -63,6 +63,16 @@ type DB struct {
 	refreshMu    sync.Mutex
 	refreshState map[string]refreshCacheEntry
 
+	// massVanishMu/massVanish track how long each (provider, kind) scope has
+	// been failing the mass-vanish guard — see massVanishDecision, which is
+	// the only thing that reads or writes this map. In-memory only: the
+	// question it answers is "has this listing looked wrong for long enough
+	// to stop being a suspected glitch", and a restart legitimately resets
+	// that, since a fresh process has no grounds to claim it has been
+	// watching. Keyed by RefreshOptions.Scope.
+	massVanishMu sync.Mutex
+	massVanish   map[string]*massVanishEntry
+
 	// fetchProgress backs SetFetchProgress/FetchProgress/ClearFetchProgress
 	// — see fetchProgressStore's own doc comment (fetch_progress.go).
 	fetchProgress fetchProgressStore
@@ -177,7 +187,7 @@ func Open(dsn string) (*DB, error) {
 		return nil, fmt.Errorf("set synchronous=NORMAL: %w", err)
 	}
 
-	db := &DB{DB: sqlDB, refreshState: map[string]refreshCacheEntry{}}
+	db := &DB{DB: sqlDB, refreshState: map[string]refreshCacheEntry{}, massVanish: map[string]*massVanishEntry{}}
 	if err := db.migrate(context.Background()); err != nil {
 		sqlDB.Close()
 		return nil, err
