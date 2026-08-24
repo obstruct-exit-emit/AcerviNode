@@ -383,6 +383,8 @@ export interface GeneralSettings {
   // cleanup_error_after_days automatically removes a download that's sat
   // in error for this many days — 0 (the default) disables it entirely.
   cleanup_error_after_days: number
+  backup_interval_hours: number
+  backup_keep: number
 }
 
 export function getGeneralSettings(apiKey: string): Promise<GeneralSettings> {
@@ -419,6 +421,8 @@ export interface GeneralUpdateInput {
   exclude_file_regex: string
   stuck_download_timeout_minutes: number
   cleanup_error_after_days: number
+  backup_interval_hours: number
+  backup_keep: number
 }
 
 // updateGeneralSettings applies everything except port/data_dir/tls_*
@@ -542,6 +546,23 @@ export interface KindStatus {
   last_successful_list_at?: string
   rate_limited_until?: string
   error_count: number
+}
+
+// BackupInfo is one database snapshot. Names and sizes only — a snapshot
+// contains every login account and session in the instance, so the API
+// never serves its contents.
+export interface BackupInfo {
+  name: string
+  size_bytes: number
+  taken_at: string
+}
+
+export function getBackups(apiKey: string): Promise<BackupInfo[]> {
+  return request('/api/v1/settings/backups', apiKey)
+}
+
+export function runBackup(apiKey: string): Promise<{ name: string }> {
+  return request('/api/v1/settings/backups', apiKey, { method: 'POST' })
 }
 
 export interface StatusInfo {

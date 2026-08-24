@@ -178,6 +178,54 @@ matching whatever UID/GID your Docker containers' own `PUID`/`PGID` are set
 to. AcerviNode doesn't need anything special for this — plain systemd
 identity, same as any other service.
 
+## Backups and restore
+
+AcerviNode keeps everything it knows in one SQLite file — configuration,
+download history, categories, login accounts and sessions. It snapshots that
+file to `<data_dir>/backups` every `backup_interval_hours` (24 by default),
+keeping the newest `backup_keep` (7 by default). Under the packaged systemd
+unit that resolves to `/var/lib/acervinode/backups`, which the unit's
+`ReadWritePaths` already covers.
+
+Snapshots are taken with SQLite's `VACUUM INTO`, so they are consistent
+against a running database — no need to stop the service to take one — and
+each is a self-contained, already-compacted file with no `-wal`/`-shm`
+sidecars to keep alongside it.
+
+Take one on demand from **Settings → Backup**, or:
+
+```bash
+curl -X POST http://localhost:7846/api/v1/settings/backups   -H "Authorization: Bearer $ACERVINODE_API_KEY"
+```
+
+**Restoring is deliberately manual.** There is no restore endpoint: putting a
+different database under a running process is not something to trigger from a
+web button by accident, and the correct sequence involves stopping the service
+anyway.
+
+```bash
+sudo systemctl stop acervinode
+# Keep the current file rather than overwriting it outright.
+sudo mv /var/lib/acervinode/acervinode.db /var/lib/acervinode/acervinode.db.bak
+sudo cp /var/lib/acervinode/backups/acervinode-20260824-001259.db         /var/lib/acervinode/acervinode.db
+sudo chown acervinode:acervinode /var/lib/acervinode/acervinode.db
+sudo systemctl start acervinode
+```
+
+Two things worth knowing before you do:
+
+- **The snapshot carries its own accounts and sessions.** Restoring an older
+  one restores the logins as they were then — a user added since will be gone,
+  and a password changed since reverts. Treat a snapshot as the credential
+  material it is when copying it off the box.
+- **`config.yaml` is a separate file** and is not part of the snapshot. A
+  restore brings back the database, not `/etc/acervinode/config.yaml`; back
+  that up alongside it if you want the pair.
+
+Copy snapshots somewhere off the machine if they are meant to survive losing
+it — the API lists names and sizes but deliberately never serves a snapshot's
+contents, precisely because of what it holds.
+
 ## Windows note
 
 The backend is plain Go and builds fine on Windows for local development — there's

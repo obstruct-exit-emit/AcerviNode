@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"path/filepath"
 )
 
 // ProviderConfig holds the settings for a single debrid provider, keyed by
@@ -56,6 +57,22 @@ type Config struct {
 	// than rejected: this is persisted, and the provider it names may
 	// simply have been removed since.
 	DefaultProvider string `yaml:"default_provider"`
+
+	// BackupIntervalHours is how often to snapshot the database. 0 disables
+	// scheduled backups; a manual one is always available. Everything
+	// AcerviNode knows lives in one SQLite file — configuration, download
+	// history, categories, login accounts — so this is the difference
+	// between a bad day and starting over.
+	BackupIntervalHours int `yaml:"backup_interval_hours"`
+	// BackupKeep is how many snapshots to retain; older ones are pruned
+	// after each successful backup. 0 or less keeps everything, so a
+	// mistyped value can never delete the lot.
+	BackupKeep int `yaml:"backup_keep"`
+	// BackupDir is where snapshots are written. Empty means
+	// <data_dir>/backups, which keeps them beside the database they came
+	// from — set it to another disk if you want them somewhere that
+	// survives losing this one.
+	BackupDir string `yaml:"backup_dir,omitempty"`
 
 	// DownloadDir is where completed files land when the *arr app that added
 	// a download didn't supply its own save_path (see internal/importer).
@@ -257,6 +274,12 @@ func defaults() *Config {
 		MaxFetchFileSizeBytes:         0,
 		StuckDownloadTimeoutMinutes:   0,
 		CleanupErrorAfterDays:         0,
+		// On by default, unlike the other retention knobs above. Those
+		// remove things, so defaulting them off is the safe choice; this
+		// one only ever adds a copy, and the case for it is strongest
+		// precisely for someone who never went looking for the setting.
+		BackupIntervalHours: 24,
+		BackupKeep:          7,
 	}
 }
 
@@ -499,6 +522,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("cleanup_error_after_days must not be negative")
 	}
 	return nil
+}
+
+// ResolvedBackupDir is where snapshots go: BackupDir when set, otherwise
+// <data_dir>/backups so a default install keeps them beside the database.
+func (c *Config) ResolvedBackupDir() string {
+	if c.BackupDir != "" {
+		return c.BackupDir
+	}
+	return filepath.Join(c.DataDir, "backups")
 }
 
 // ParseDirMode parses a download_dir_mode string (e.g. "0777", "777",

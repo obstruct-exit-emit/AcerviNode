@@ -15,6 +15,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"os"
+	"path/filepath"
 )
 
 //go:embed migrations/*.sql
@@ -94,6 +96,38 @@ type LiveStatus struct {
 	// for the same reason as the rest of this struct: it's the provider's
 	// state, changeable from outside AcerviNode at any time.
 	Airlocked bool
+}
+
+// BackupTo writes a consistent snapshot of the database to path.
+//
+// Uses SQLite's own VACUUM INTO rather than copying the file. A plain copy
+// of a live database is not safe: with WAL enabled the committed state is
+// split across the main file and the -wal, so a copy taken mid-write can be
+// torn or simply miss recent commits. VACUUM INTO writes a single
+// self-contained file from one consistent view, and compacts it on the way
+// out, so the result is a smaller file that opens cleanly on its own.
+//
+// path must not already exist — SQLite refuses to overwrite, which is a
+// useful guard rather than something to work around: a backup that silently
+// replaced a good file with a failed write would be worse than no backup.
+//
+// Runs on the same single connection as everything else (see Open's
+// SetMaxOpenConns(1)), so it briefly blocks other queries. That is a real
+// cost, but a proportionate one — this database holds configuration and
+// download history, not bulk data, and a snapshot takes milliseconds.
+func (db *DB) BackupTo(ctx context.Context, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create backup dir: %w", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("backup %s already exists", path)
+	}
+	// Parameterised rather than interpolated: a path is user-supplied
+	// configuration, and VACUUM INTO takes it as a value.
+	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("backup database to %s: %w", path, err)
+	}
+	return nil
 }
 
 // Open opens (creating if necessary) the SQLite database at dsn and applies

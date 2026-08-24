@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Scheduled database backups.** Everything AcerviNode knows lives in one
+  SQLite file — configuration, download history, categories, login accounts
+  and sessions — and until now nothing copied it anywhere. It now snapshots
+  itself to `<data_dir>/backups` every `backup_interval_hours` (default 24),
+  keeping the newest `backup_keep` (default 7). This is the one retention
+  setting here that defaults to **on**: every other one removes something, so
+  doing nothing is the safe default, whereas doing nothing here is the only
+  case that has a cost.
+
+  Snapshots use SQLite's `VACUUM INTO`, so they are consistent against the
+  live database without stopping the service, and each is a self-contained,
+  already-compacted file with no `-wal`/`-shm` sidecars. Pruning happens only
+  after a *successful* backup, never before one — trimming first would mean a
+  failed backup had also thrown away a good one — and a `backup_keep` of `0`
+  retains everything rather than deleting the lot. Only files AcerviNode
+  wrote (`acervinode-<timestamp>.db`) are ever pruned, so a snapshot renamed
+  to keep it is left alone.
+
+  Nothing is backed up at startup, deliberately: a restart loop would
+  otherwise fill the directory with snapshots of a database nobody had a
+  chance to change, pushing the useful older ones out of the retention
+  window.
+
+  New `GET`/`POST /api/v1/settings/backups` (admin only) list snapshots and
+  take one on demand, plus a **Settings → Backup** tab. The API returns names
+  and sizes only and never a snapshot's contents — one holds every login
+  account and session, which would be a far larger disclosure than any other
+  endpoint here makes. Restoring is manual by the same reasoning; see
+  [Backups and restore](docs/installation.md#backups-and-restore).
+
 - **`GET /api/v1/status` now reports per-provider detail**, alongside the
   existing per-kind aggregate. The aggregate answers "is this kind working
   at all" but cannot answer "which provider is struggling": with two

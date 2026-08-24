@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -98,4 +99,55 @@ func openTestDB(t *testing.T) *DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// TestBackupTo_WritesAnOpenableSnapshot proves the snapshot is a real,
+// self-contained database rather than a copy of a file that happens to be
+// mid-write. A plain copy is unsafe here: with WAL enabled the committed
+// state is split across the main file and the -wal.
+func TestBackupTo_WritesAnOpenableSnapshot(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	d := newTestDownload(KindTorrent)
+	d.Name = "Snapshot Me"
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "snap.db")
+	if err := db.BackupTo(ctx, path); err != nil {
+		t.Fatalf("BackupTo() error = %v", err)
+	}
+
+	// Open the snapshot on its own and read the row back out of it.
+	restored, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(snapshot) error = %v", err)
+	}
+	t.Cleanup(func() { restored.Close() })
+
+	got, err := restored.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() on the snapshot error = %v", err)
+	}
+	if got == nil || got.Name != "Snapshot Me" {
+		t.Errorf("snapshot row = %+v, want the download that was inserted", got)
+	}
+}
+
+// Refusing to overwrite is a guard, not a limitation: a backup that
+// silently replaced a good file with a failed write would be worse than no
+// backup at all.
+func TestBackupTo_RefusesToOverwrite(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	path := filepath.Join(t.TempDir(), "snap.db")
+	if err := db.BackupTo(ctx, path); err != nil {
+		t.Fatalf("first BackupTo() error = %v", err)
+	}
+	if err := db.BackupTo(ctx, path); err == nil {
+		t.Error("second BackupTo() to the same path succeeded, want it refused")
+	}
 }

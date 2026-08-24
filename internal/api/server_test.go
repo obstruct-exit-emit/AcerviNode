@@ -173,6 +173,9 @@ type fakeSettings struct {
 	addedProviders   [][3]string
 	removedProviders []string
 	addProviderErr   error
+	backupRuns       int
+	backupErr        error
+	backups          []BackupInfo
 	configured       bool
 	setCalls         []string
 	setErr           error
@@ -356,6 +359,16 @@ func (f *fakeSettings) SetProviderAPIKey(_ context.Context, _, apiKey string) er
 func (f *fakeSettings) TestProviderConnection(_ context.Context, _ string) (int64, error) {
 	return f.testLatencyMs, f.testErr
 }
+
+func (f *fakeSettings) RunBackupNow(context.Context) (string, error) {
+	if f.backupErr != nil {
+		return "", f.backupErr
+	}
+	f.backupRuns++
+	return "/backups/acervinode-20260823-120000.db", nil
+}
+
+func (f *fakeSettings) Backups() ([]BackupInfo, error) { return f.backups, nil }
 
 func (f *fakeSettings) ProviderTypes() []string { return []string{testProviderName, "othertype"} }
 

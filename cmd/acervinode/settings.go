@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/acervinode/acervinode/internal/api"
+	"github.com/acervinode/acervinode/internal/backup"
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -44,6 +45,7 @@ type liveSettings struct {
 	registry       *debrid.Registry
 	levelVar       *slog.LevelVar
 	imp            *importer.Importer
+	backups        *backup.Runner
 	qbt            *qbittorrent.Server
 	sab            *sabnzbd.Server
 	restartTrigger func()
@@ -381,6 +383,8 @@ func (s *liveSettings) General() api.GeneralInfo {
 		ExcludeFileRegex:              s.cfg.ExcludeFileRegex,
 		StuckDownloadTimeoutMinutes:   s.cfg.StuckDownloadTimeoutMinutes,
 		CleanupErrorAfterDays:         s.cfg.CleanupErrorAfterDays,
+		BackupIntervalHours:           s.cfg.BackupIntervalHours,
+		BackupKeep:                    s.cfg.BackupKeep,
 	}
 }
 
@@ -441,6 +445,8 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.ExcludeFileRegex = update.ExcludeFileRegex
 	candidate.StuckDownloadTimeoutMinutes = update.StuckDownloadTimeoutMinutes
 	candidate.CleanupErrorAfterDays = update.CleanupErrorAfterDays
+	candidate.BackupIntervalHours = update.BackupIntervalHours
+	candidate.BackupKeep = update.BackupKeep
 	if err := candidate.Validate(); err != nil {
 		return false, err
 	}
@@ -474,6 +480,11 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 		s.imp.SetFileFilters(candidate.MinFetchFileSizeBytes, candidate.MaxFetchFileSizeBytes, compileOptionalRegex(candidate.IncludeFileRegex), compileOptionalRegex(candidate.ExcludeFileRegex))
 		s.imp.SetStuckDownloadTimeout(time.Duration(candidate.StuckDownloadTimeoutMinutes) * time.Minute)
 		s.imp.SetCleanupErrorAfterDays(candidate.CleanupErrorAfterDays)
+	}
+	// Retunes the schedule live, so a changed interval takes effect without
+	// waiting out the old one.
+	if s.backups != nil {
+		s.backups.SetConfig(time.Duration(candidate.BackupIntervalHours)*time.Hour, candidate.BackupKeep)
 	}
 	// Unlike every other field above, a changed provider request timeout
 	// can't just be pushed into an existing live object — it's baked into
@@ -746,6 +757,48 @@ func (s *liveSettings) AccountStatus(ctx context.Context, provider string) (debr
 		return w.Account(ctx)
 	}
 	return debrid.AccountStatus{}, debrid.ErrNoProvider
+}
+
+// SetBackupRunner wires in the backup scheduler once run() has built it —
+// same late-binding as SetImporter, since liveSettings is constructed first.
+func (s *liveSettings) SetBackupRunner(r *backup.Runner) {
+	s.mu.Lock()
+	s.backups = r
+	s.mu.Unlock()
+}
+
+// RunBackupNow takes a snapshot immediately and returns the file written.
+func (s *liveSettings) RunBackupNow(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	r := s.backups
+	s.mu.Unlock()
+	if r == nil {
+		return "", fmt.Errorf("backups are not running")
+	}
+	return r.RunOnce(ctx)
+}
+
+// Backups lists the snapshots currently on disk, newest first.
+func (s *liveSettings) Backups() ([]api.BackupInfo, error) {
+	s.mu.Lock()
+	r := s.backups
+	s.mu.Unlock()
+	if r == nil {
+		return nil, nil
+	}
+	snaps, err := r.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.BackupInfo, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, api.BackupInfo{
+			Name:      sn.Name,
+			SizeBytes: sn.SizeBytes,
+			TakenAt:   sn.TakenAt,
+		})
+	}
+	return out, nil
 }
 
 // ProviderTypes lists the provider implementations this build can

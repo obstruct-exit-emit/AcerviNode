@@ -3,7 +3,9 @@ import {
   getCategories,
   getGeneralSettings,
   addProvider,
+  getBackups,
   getProviderSettings,
+  runBackup,
   removeProvider,
   getStatus,
   getProviderAccount,
@@ -20,6 +22,7 @@ import {
   type Categories,
   type GeneralSettings,
   type GeneralUpdateInput,
+  type BackupInfo,
   type ProviderSetting,
   type StatusInfo,
   type ProviderAccount,
@@ -54,10 +57,11 @@ import { SecuritySettings } from './SecuritySettings'
 // fetch-to-disk pipeline regardless of which provider a download came from.
 const settingsGroups = [
   { name: 'General', blurb: "This instance's API key, network, and logging." },
-  { name: 'Provider', blurb: 'The TorBox account AcerviNode resolves every download through, and how often it polls it.' },
+  { name: 'Provider', blurb: 'The debrid accounts AcerviNode resolves downloads through, and how often it polls them.' },
   { name: 'Import', blurb: 'How a completed download gets fetched to local disk: retries, concurrency, and timeouts.' },
   { name: 'Filtering', blurb: 'Skip specific files, by size or name pattern, when fetching a download to local disk.' },
   { name: 'Cleanup', blurb: 'Automatically remove a finished, errored, or stuck download after a while.' },
+  { name: 'Backup', blurb: "Snapshots of AcerviNode's database — its configuration, history, categories and accounts." },
   { name: 'Categories', blurb: 'Pre-register categories for Sonarr/Radarr, and optionally redirect their downloads to a specific directory.' },
   { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
   { name: 'Security', blurb: 'Login accounts on top of the API key, and their roles.' },
@@ -202,6 +206,8 @@ export function Settings({ apiKey }: Props) {
   const [addingAccountFor, setAddingAccountFor] = useState<string | null>(null)
   const [newAccountName, setNewAccountName] = useState('')
   const [addProviderStatus, setAddProviderStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
+  const [backups, setBackups] = useState<BackupInfo[]>([])
+  const [backupStatus, setBackupStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
   // Keyed by provider: each account is its own live call and its own
   // panel, inside that provider's card.
   const [accounts, setAccounts] = useState<Record<string, ProviderAccount>>({})
@@ -232,7 +238,7 @@ export function Settings({ apiKey }: Props) {
     // would fetch nothing.
     let providerList: ProviderSetting[] = []
     try {
-      const [providerSettings, generalSettings, cats, statusInfo] = await Promise.all([
+      const [providerSettings, generalSettings, cats, statusInfo, backupList] = await Promise.all([
         getProviderSettings(apiKey),
         getGeneralSettings(apiKey),
         getCategories(apiKey),
@@ -240,8 +246,10 @@ export function Settings({ apiKey }: Props) {
         // getStatus's own doc comment), unlike getProviderAccount below, so
         // it's safe to bundle here with everything else.
         getStatus(apiKey),
+        getBackups(apiKey),
       ])
       setSettings(providerSettings)
+      setBackups(backupList)
       providerList = providerSettings
       setGeneral(generalSettings)
       setForm({
@@ -269,6 +277,8 @@ export function Settings({ apiKey }: Props) {
         exclude_file_regex: generalSettings.exclude_file_regex,
         stuck_download_timeout_minutes: generalSettings.stuck_download_timeout_minutes,
         cleanup_error_after_days: generalSettings.cleanup_error_after_days,
+        backup_interval_hours: generalSettings.backup_interval_hours,
+        backup_keep: generalSettings.backup_keep,
       })
       setCategories(cats)
       setHealth(statusInfo)
@@ -433,6 +443,17 @@ export function Settings({ apiKey }: Props) {
       }))
     } catch (err) {
       setTestStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
+  async function handleRunBackup() {
+    setBackupStatus({ kind: 'saving' })
+    try {
+      await runBackup(apiKey)
+      setBackupStatus({ kind: 'idle' })
+      setBackups(await getBackups(apiKey))
+    } catch (err) {
+      setBackupStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
   }
 
@@ -1110,6 +1131,65 @@ export function Settings({ apiKey }: Props) {
               {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
               {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}
             </form>
+          )}
+        </section>
+      )}
+
+      {group === 'Backup' && (
+        <section className="settings-card">
+          <h2>Database backups</h2>
+          <p className="settings-help">
+            Everything AcerviNode knows lives in one SQLite file — its configuration, download history,
+            categories and login accounts. Snapshots are written with SQLite's own consistent-snapshot support,
+            so they're safe to take while it's running and open cleanly on their own. Restoring is deliberately
+            manual: stop AcerviNode, put the file in place of <code>acervinode.db</code>, start it again.
+          </p>
+          {form && (
+            <form className="general-form" onSubmit={handleGeneralSubmit}>
+              <label>
+                Backup every (hours, 0 disables)
+                <input
+                  type="number"
+                  min={0}
+                  value={form.backup_interval_hours}
+                  onChange={(e) => setForm({ ...form, backup_interval_hours: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Keep this many (0 keeps all)
+                <input
+                  type="number"
+                  min={0}
+                  value={form.backup_keep}
+                  onChange={(e) => setForm({ ...form, backup_keep: Number(e.target.value) })}
+                />
+              </label>
+              <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+              </button>
+            </form>
+          )}
+
+          <div className="provider-actions">
+            <button type="button" className="test-connection-btn" onClick={handleRunBackup} disabled={backupStatus.kind === 'saving'}>
+              {backupStatus.kind === 'saving' ? 'Backing up…' : 'Back up now'}
+            </button>
+          </div>
+          {backupStatus.kind === 'error' && <p className="settings-error">{backupStatus.message}</p>}
+
+          {backups.length === 0 ? (
+            <p className="settings-help">No snapshots yet.</p>
+          ) : (
+            <dl className="detail-meta">
+              {backups.map((b) => (
+                <Fragment key={b.name}>
+                  <dt>{new Date(b.taken_at).toLocaleString()}</dt>
+                  <dd>
+                    {formatBytes(b.size_bytes)} · <code>{b.name}</code>
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
           )}
         </section>
       )}

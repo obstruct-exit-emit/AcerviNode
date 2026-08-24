@@ -123,6 +123,8 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
           exclude_file_regex: g.exclude_file_regex,
           stuck_download_timeout_minutes: g.stuck_download_timeout_minutes,
           cleanup_error_after_days: g.cleanup_error_after_days,
+          backup_interval_hours: g.backup_interval_hours,
+          backup_keep: g.backup_keep,
         })
       })
       .then(() => restartServer(''))

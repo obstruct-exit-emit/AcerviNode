@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/acervinode/acervinode/internal/api"
+	"github.com/acervinode/acervinode/internal/backup"
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -105,6 +106,17 @@ func run(ctx context.Context) error {
 	imp := importer.New(db, registry, cfg.DownloadDir, importInterval, cfg.ImportMaxRetries)
 	settings.SetImporter(imp)
 	go imp.Run(ctx)
+
+	// Database snapshots. Everything AcerviNode knows lives in one SQLite
+	// file, so this is the difference between a bad day and starting over.
+	backupRunner := backup.New(
+		db,
+		cfg.ResolvedBackupDir(),
+		time.Duration(cfg.BackupIntervalHours)*time.Hour,
+		cfg.BackupKeep,
+	)
+	settings.SetBackupRunner(backupRunner)
+	go backupRunner.Run(ctx)
 
 	// errCh has room for both servers below — either one failing is fatal,
 	// but neither should be able to block on sending its error if the other

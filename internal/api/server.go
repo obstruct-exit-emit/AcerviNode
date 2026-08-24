@@ -22,6 +22,13 @@ type ProviderStatus struct {
 	WebDLCapable   bool   `json:"webdl_capable"`
 }
 
+// BackupInfo is one database snapshot, for GET /api/v1/settings/backups.
+type BackupInfo struct {
+	Name      string    `json:"name"`
+	SizeBytes int64     `json:"size_bytes"`
+	TakenAt   time.Time `json:"taken_at"`
+}
+
 // StatusInfo is internal/importer's own health snapshot for
 // GET /api/v1/status — meant for an external monitor (Uptime Kuma,
 // Healthchecks.io, ...) to poll and alert on, distinct from both
@@ -216,6 +223,10 @@ type GeneralInfo struct {
 	// config.Config.StuckDownloadTimeoutMinutes's own doc comment.
 	StuckDownloadTimeoutMinutes int `json:"stuck_download_timeout_minutes"`
 	CleanupErrorAfterDays       int `json:"cleanup_error_after_days"`
+	// BackupIntervalHours/BackupKeep mirror config's own fields — see
+	// internal/backup.
+	BackupIntervalHours int `json:"backup_interval_hours"`
+	BackupKeep          int `json:"backup_keep"`
 }
 
 // GeneralUpdate is a candidate change to AcerviNode's general configuration
@@ -247,6 +258,8 @@ type GeneralUpdate struct {
 	ExcludeFileRegex              string `json:"exclude_file_regex"`
 	StuckDownloadTimeoutMinutes   int    `json:"stuck_download_timeout_minutes"`
 	CleanupErrorAfterDays         int    `json:"cleanup_error_after_days"`
+	BackupIntervalHours           int    `json:"backup_interval_hours"`
+	BackupKeep                    int    `json:"backup_keep"`
 }
 
 // Settings lets the API read and change configuration live, without a
@@ -284,6 +297,11 @@ type Settings interface {
 	AddProvider(ctx context.Context, name, providerType, apiKey string) error
 	// RemoveProvider deletes a provider entry live and persists it.
 	RemoveProvider(ctx context.Context, name string) error
+	// RunBackupNow takes a database snapshot immediately, returning the
+	// file written.
+	RunBackupNow(ctx context.Context) (string, error)
+	// Backups lists the snapshots currently on disk, newest first.
+	Backups() ([]BackupInfo, error)
 	// APIKey returns AcerviNode's own current API key — the live source of
 	// truth every authenticated route (native API and both compat shims)
 	// checks against, so a regenerated key takes effect everywhere at once.
@@ -502,6 +520,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/providers", s.requireAdmin(s.handleGetProviderSettings))
 	// "default" is registered ahead of {name} so it can never be read as a
 	// provider by that name.
+	s.mux.HandleFunc("GET /api/v1/settings/backups", s.requireAdmin(s.handleGetBackups))
+	s.mux.HandleFunc("POST /api/v1/settings/backups", s.requireAdmin(s.handleRunBackup))
 	s.mux.HandleFunc("POST /api/v1/settings/providers", s.requireAdmin(s.handleAddProvider))
 	s.mux.HandleFunc("GET /api/v1/settings/provider-types", s.requireAdmin(s.handleGetProviderTypes))
 	s.mux.HandleFunc("DELETE /api/v1/settings/providers/{name}", s.requireAdmin(s.handleRemoveProvider))
