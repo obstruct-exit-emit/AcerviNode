@@ -17,6 +17,7 @@ import (
 	"github.com/acervinode/acervinode/internal/api"
 	"github.com/acervinode/acervinode/internal/config"
 	"github.com/acervinode/acervinode/internal/database"
+	"github.com/acervinode/acervinode/internal/debrid"
 	"github.com/acervinode/acervinode/internal/importer"
 )
 
@@ -1317,5 +1318,111 @@ func TestSetProviderAPIKey_KeepsTheEntrysType(t *testing.T) {
 	}
 	if got := reloaded.Providers["torbox-work"].ResolvedType("torbox-work"); got != "torbox" {
 		t.Errorf("after reload ResolvedType() = %q, want %q", got, "torbox")
+	}
+}
+
+// TestLiveSettings_ProviderLifecycle covers add → configure → default →
+// remove for a provider entry, which had no test at all despite being the
+// surface the whole multi-account feature runs on. The Type-dropping bug in
+// SetProviderAPIKey lived here unnoticed precisely because nothing exercised
+// this path.
+func TestLiveSettings_ProviderLifecycle(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	// A second account on a service already registered under its own name.
+	if err := s.AddProvider(ctx, "torbox-work", "torbox", "work-key"); err != nil {
+		t.Fatalf("AddProvider() error = %v", err)
+	}
+	if !s.ProviderConfigured("torbox-work") {
+		t.Error("ProviderConfigured(torbox-work) = false right after adding it with a key")
+	}
+	if got := s.ProviderType("torbox-work"); got != "torbox" {
+		t.Errorf("ProviderType() = %q, want torbox", got)
+	}
+	// It must be routable for every kind the underlying service supports,
+	// not merely present in config.
+	if registry.Torrent("torbox-work") == nil || registry.Usenet("torbox-work") == nil {
+		t.Error("torbox-work was not registered for the kinds torbox supports")
+	}
+
+	// Adding the same name twice is a conflict, not a silent overwrite —
+	// overwriting would discard the existing account's credentials.
+	if err := s.AddProvider(ctx, "torbox-work", "torbox", "other-key"); err == nil {
+		t.Error("AddProvider() with an existing name = nil error, want a conflict")
+	}
+	// An unknown type is refused rather than registered as a dead entry.
+	if err := s.AddProvider(ctx, "nonsense", "not-a-real-service", "k"); err == nil {
+		t.Error("AddProvider() with an unknown type = nil error, want a refusal")
+	}
+
+	if err := s.SetDefaultProvider("torbox-work"); err != nil {
+		t.Fatalf("SetDefaultProvider() error = %v", err)
+	}
+	if got := s.DefaultProvider(); got != "torbox-work" {
+		t.Errorf("DefaultProvider() = %q, want torbox-work", got)
+	}
+
+	// Everything so far has to survive a reload, since that is what a
+	// restart actually does.
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if got := reloaded.Providers["torbox-work"].ResolvedType("torbox-work"); got != "torbox" {
+		t.Errorf("after reload ResolvedType() = %q, want torbox", got)
+	}
+	if reloaded.DefaultProvider != "torbox-work" {
+		t.Errorf("after reload DefaultProvider = %q, want torbox-work", reloaded.DefaultProvider)
+	}
+
+	if err := s.RemoveProvider(ctx, "torbox-work"); err != nil {
+		t.Fatalf("RemoveProvider() error = %v", err)
+	}
+	if registry.Torrent("torbox-work") != nil {
+		t.Error("torbox-work still registered after RemoveProvider()")
+	}
+	if _, still := cfg.Providers["torbox-work"]; still {
+		t.Error("torbox-work still in config after RemoveProvider()")
+	}
+	// Removing the default must leave something usable behind rather than
+	// pointing at a name that no longer exists.
+	if got := registry.DefaultNameFor(debrid.KindTorrent); got == "torbox-work" || got == "" {
+		t.Errorf("DefaultNameFor(torrent) = %q after removing the default, want a surviving provider", got)
+	}
+}
+
+// TestLiveSettings_ClearingAKeyLeavesTheProviderRegistered pins the
+// documented behaviour of an empty api_key: it clears credentials without
+// unregistering, so the provider can be configured again with no restart.
+func TestLiveSettings_ClearingAKeyLeavesTheProviderRegistered(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderAPIKey(ctx, "torbox", "a-real-key"); err != nil {
+		t.Fatalf("SetProviderAPIKey() error = %v", err)
+	}
+	if !s.ProviderConfigured("torbox") {
+		t.Fatal("ProviderConfigured() = false after setting a key")
+	}
+
+	if err := s.SetProviderAPIKey(ctx, "torbox", ""); err != nil {
+		t.Fatalf("SetProviderAPIKey(\"\") error = %v", err)
+	}
+	if s.ProviderConfigured("torbox") {
+		t.Error("ProviderConfigured() = true after clearing the key")
+	}
+	if registry.Torrent("torbox") == nil {
+		t.Error("clearing the key unregistered the provider; it should stay registered so it can be reconfigured live")
 	}
 }

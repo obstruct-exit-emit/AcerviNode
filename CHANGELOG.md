@@ -34,6 +34,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   enforces the API key rather than bypassing it. `internal/qbittorrent`
   68% → 73%, `internal/sabnzbd` 68% → 77%.
 
+- **Covered the provider lifecycle** — add, configure, set-default, remove
+  — which had no test at all despite being the surface the whole
+  multi-account feature runs on. That absence is why the Type-dropping bug
+  above survived: nothing exercised the path. Also pins that adding a
+  duplicate name conflicts rather than silently overwriting an existing
+  account's credentials, that an unknown type is refused rather than
+  registered as a dead entry, that removing the default leaves a usable one
+  behind, and that clearing a key leaves the provider registered so it can
+  be reconfigured without a restart. `cmd/acervinode` 67% → 73%.
+
 
 ### Added
 
