@@ -743,7 +743,7 @@ export function Settings({ apiKey }: Props) {
             return (
               <section className="settings-card" key={p.name}>
                 <div
-                  className="settings-card-toggle"
+                  className={`settings-card-toggle${expanded ? '' : ' settings-card-toggle-collapsed'}`}
                   onClick={toggle}
                   role="button"
                   tabIndex={0}
@@ -754,14 +754,24 @@ export function Settings({ apiKey }: Props) {
                     }
                   }}
                 >
-                  <h2>{providerLabel(p.name)}</h2>
+                  {/* Name and its status stack in one column so the status
+                      reads as belonging to the provider rather than floating
+                      between it and the capability chips. Kept tight enough
+                      that the collapsed row is the same height it was — see
+                      .settings-card-toggle-collapsed, which reclaims the
+                      bottom margin that only earns its place when expanded. */}
+                  <span className="provider-headline">
+                    <h2>{providerLabel(p.name)}</h2>
+                    <span className="provider-status">
+                      {p.default && showDefaultControls && <span className="cap cap-default">Default</span>}
+                      {p.configured ? (
+                        <span className="cap">Configured</span>
+                      ) : (
+                        <span className="cap cap-unset">Not configured</span>
+                      )}
+                    </span>
+                  </span>
                   <span className="settings-card-summary">
-                    {p.default && showDefaultControls && <span className="badge badge-ready_for_import">Default</span>}
-                    {p.configured ? (
-                      <span className="badge badge-ready_for_import">Configured</span>
-                    ) : (
-                      <span className="badge badge-queued">Not configured</span>
-                    )}
                     {/* Which kinds this provider can actually handle. Shown
                         including the ones it can't, struck through, because
                         an absent chip is ambiguous — "no usenet" and "this

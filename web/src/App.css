@@ -122,8 +122,35 @@
   margin-bottom: 10px;
 }
 
+/* Collapsed there is nothing underneath for this to separate from, and the
+   card's own padding already provides the gap. Reclaiming it is what pays
+   for the status line moving under the name without the bar growing. */
+.settings-card-toggle-collapsed {
+  margin-bottom: 0;
+}
+
 .settings-card-toggle h2 {
   margin: 0 8px 0 0;
+}
+
+/* Name over status, in one column. Line heights are deliberately tight:
+   the two stacked lines plus the reclaimed margin above come to within a
+   few pixels of the single row they replace. */
+.provider-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: 8px;
+}
+
+.provider-headline h2 {
+  margin: 0;
+  line-height: 1.1;
+}
+
+.provider-status {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .settings-card-summary {
@@ -652,6 +679,21 @@ table.downloads tbody tr:hover {
   border: 1px solid var(--border);
   color: var(--text-muted);
   white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* The default provider earns a little more weight than the other chips
+   without becoming a coloured pill again — it is the one status here that
+   changes where a download actually goes. */
+.cap-default {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+/* Still needs to read as "act on me", unlike the neutral chips around it. */
+.cap-unset {
+  color: var(--state-fetching);
+  border-color: var(--state-fetching);
 }
 
 /* A kind the provider has no service for. Struck rather than hidden, so
