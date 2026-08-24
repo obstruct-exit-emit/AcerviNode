@@ -265,9 +265,10 @@ type GeneralUpdate struct {
 // Settings lets the API read and change configuration live, without a
 // restart — see internal/debrid's Dynamic*Provider types, which is what
 // makes an in-place provider swap possible, and settings.go for the HTTP
-// surface built on this interface. Provider methods are narrowly scoped to
-// TorBox, the only provider that exists today; generalize when a second one
-// is added (see docs/providers.md).
+// surface built on this interface. Provider methods all take the provider
+// entry by name — nothing here is scoped to a concrete implementation, which
+// is what lets several accounts, on the same service or different ones, be
+// configured at once (see docs/providers.md).
 type Settings interface {
 	// ProviderConfigured reports whether the named provider currently holds
 	// credentials. False for a provider that isn't registered at all.

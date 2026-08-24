@@ -95,7 +95,7 @@ configured yet) start working against real TorBox calls right away. See
 ## Adding a second provider
 
 Multi-provider support has shipped, so TorBox isn't the only option. AllDebrid
-works the same way: **Settings → Providers** has a card for every provider this
+works the same way: **Settings → Provider** has a card for every provider this
 build supports, whether or not it's configured yet — paste a key and hit Test.
 
 Two things worth knowing:

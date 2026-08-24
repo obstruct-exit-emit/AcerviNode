@@ -51,10 +51,12 @@ import { SecuritySettings } from './SecuritySettings'
 // identity, HTTPS. Provider's own "Polling & timeout" section (import
 // interval, fast poll interval, provider request timeout) deliberately
 // stays put rather than merging into Import — those are specifically about
-// how often/how patiently AcerviNode talks to *this* provider, which would
-// need to be per-provider if Phase 4 (multi-provider) ever unblocks, unlike
-// Import's retry/concurrency/fetch-timeout fields, which apply to the
-// fetch-to-disk pipeline regardless of which provider a download came from.
+// how often/how patiently AcerviNode talks to a provider, unlike Import's
+// retry/concurrency/fetch-timeout fields, which apply to the fetch-to-disk
+// pipeline regardless of which provider a download came from. These are
+// still instance-wide rather than per-provider even now that Phase 4 has
+// shipped and several accounts can be configured at once — worth revisiting
+// if one provider ever needs a materially different polling cadence.
 const settingsGroups = [
   { name: 'General', blurb: "This instance's API key, network, and logging." },
   { name: 'Provider', blurb: 'The debrid accounts AcerviNode resolves downloads through, and how often it polls them.' },

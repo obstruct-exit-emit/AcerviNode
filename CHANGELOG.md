@@ -312,6 +312,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A fresh clone couldn't build.** `web/dist/.gitkeep` has been negated in
+  `.gitignore` since the frontend landed, and both `development.md` and
+  `installation.md` tell you a committed `.gitkeep` is what keeps `go build`
+  working before `npm run build` has ever run. It was never actually tracked,
+  so it didn't. Verified against a real clone: without it `web/dist` doesn't
+  exist and `go build ./...` fails outright with `pattern all:dist: no
+  matching files found`, because `go:embed` needs the directory to exist even
+  when empty. Found while auditing the docs for claims that aren't true —
+  this one was a repo bug wearing a documentation bug's clothes.
+
+  `npm run build` then deletes it again on every frontend build (Vite empties
+  `dist`), which is presumably how it went missing in the first place, so the
+  build script now recreates it afterwards rather than leaving the invariant
+  to be re-broken silently.
+
+- **Second documentation pass: verified the claims, not just the coverage.**
+  The first pass checked that things were *documented*; this one checked that
+  what they say is *true*, by running the assertions against the code and the
+  live instance.
+
+  - **`max_concurrent_downloads` was documented as "clamped up to 1 rather
+    than rejected".** It is rejected — `config.Validate` refuses anything
+    below 1, and `UpdateGeneral` validates its candidate before saving.
+    Confirmed live: `PUT` with `0` returns HTTP 400 and leaves the value
+    alone. Corrected, and noted that `backup_interval_hours`/`backup_keep`
+    are the only two settings with no range validation at all (a negative
+    disables/retains, matching `0`).
+  - **`GET /api/v1/settings/providers` returns a `type` field** the documented
+    shape omitted — the name/type split is what the two-accounts-per-service
+    UI runs on, so leaving it out of the response shape hid the mechanism.
+  - **`/api/v1/health`, `/api/v1/version` and `/api/v1/providers` had prose
+    descriptions but no response shapes.** All three now show their actual
+    JSON, including that a non-release build reports `0.0.0-dev`.
+  - Stale code comments corrected where they were provably false: the
+    `api.Settings` interface was still described as "narrowly scoped to
+    TorBox, the only provider that exists today" directly above a fully
+    generic, name-taking interface, and `Settings.tsx` still deferred a
+    decision to "if Phase 4 (multi-provider) ever unblocks". It shipped.
+  - One web-UI tab reference was wrong (`Settings → Providers`; the tab is
+    `Provider`).
+
+  Verified accurate and left alone, so the next audit can skip them: all 18
+  config defaults, every `Validate` rule, the tombstone grace periods (5
+  minutes confirmed / 30 days unconfirmed), session TTL and cookie
+  attributes, PBKDF2 parameters (SHA-256, 600,000 iterations), the five
+  download states, every qBittorrent route and SABnzbd mode, the release
+  tarball layout the install steps depend on, the exact set of
+  unauthenticated endpoints, and the `ListCache` design notes.
+
 - **Documentation audit: filled in what shipped undocumented, corrected what
   had gone stale.** The multi-provider refactor, AllDebrid and backups all
   landed without the docs catching up. Checked mechanically against the code
