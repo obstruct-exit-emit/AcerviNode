@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Tests
+
+- **Covered the backup scheduler loop**, which had no tests at all — every
+  existing one called `RunOnce` directly, leaving the one path that actually
+  runs unattended for months unexercised. Now covers firing on the interval,
+  deliberately *not* firing at startup, a zero interval meaning "never" rather
+  than "immediately", `SetConfig` retuning a running loop in both directions,
+  and clean shutdown on context cancel. Backup coverage 76% → 87%.
+
+- **Covered every `Dynamic*Provider` delegation for the unconfigured case.**
+  This is the seam the whole application routes through, and "no provider
+  configured" is an ordinary state — a fresh install before anyone pastes a
+  key, or an entry whose key was cleared. All 27 methods across the three
+  wrappers must answer `ErrNoProvider` rather than dereference a nil
+  provider, since a panic there takes down the process serving both compat
+  shims and the web UI. Only two of them (`AddMagnet`, `Status`) had a test.
+  `internal/debrid` coverage 61% → 86%.
+
+
 ### Added
 
 - **Scheduled database backups.** Everything AcerviNode knows lives in one

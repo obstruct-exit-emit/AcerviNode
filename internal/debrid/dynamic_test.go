@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 var (
@@ -272,5 +273,135 @@ func TestDynamicTorrentProvider_TorrentInfo(t *testing.T) {
 	}
 	if info.Name != "Preview.Me" || info.SizeBytes != 999 {
 		t.Errorf("info = %+v", info)
+	}
+}
+
+// TestDynamicProviders_EveryCallErrorsCleanlyBeforeSet walks every method on
+// all three wrappers with no inner provider set.
+//
+// This is the seam the whole application routes through, and "no provider
+// configured yet" is a completely ordinary state — it is what a fresh
+// install is before anyone pastes a key, and what an entry becomes when its
+// key is cleared. Every one of these has to answer ErrNoProvider rather than
+// dereference a nil provider, because a panic here takes down the process
+// serving both compat shims and the web UI.
+//
+// Written after coverage showed most of these delegations had no test at all
+// — the two that did (AddMagnet, Status) were the two that happened to get
+// one, not the two that mattered most.
+func TestDynamicProviders_EveryCallErrorsCleanlyBeforeSet(t *testing.T) {
+	ctx := context.Background()
+
+	check := func(t *testing.T, name string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrNoProvider) {
+			t.Errorf("%s error = %v, want ErrNoProvider", name, err)
+		}
+	}
+
+	t.Run("torrent", func(t *testing.T) {
+		d := NewDynamicTorrentProvider("p")
+		_, err := d.AddMagnet(ctx, "magnet:?xt=x", AddOptions{})
+		check(t, "AddMagnet", err)
+		_, err = d.AddTorrentFile(ctx, "f.torrent", []byte("x"), AddOptions{})
+		check(t, "AddTorrentFile", err)
+		_, err = d.Status(ctx, "id")
+		check(t, "Status", err)
+		_, err = d.List(ctx)
+		check(t, "List", err)
+		_, _, err = d.ListCached(ctx)
+		check(t, "ListCached", err)
+		_, _, err = d.ListFresh(ctx)
+		check(t, "ListFresh", err)
+		_, err = d.Files(ctx, "id")
+		check(t, "Files", err)
+		_, err = d.RequestDownloadLink(ctx, "id", "0")
+		check(t, "RequestDownloadLink", err)
+		_, err = d.RequestZipDownloadLink(ctx, "id")
+		check(t, "RequestZipDownloadLink", err)
+		check(t, "Delete", d.Delete(ctx, "id", true))
+		_, err = d.CheckCached(ctx, []string{"abc"})
+		check(t, "CheckCached", err)
+		_, err = d.Account(ctx)
+		check(t, "Account", err)
+		_, err = d.TorrentInfo(ctx, "abc")
+		check(t, "TorrentInfo", err)
+		// Must not panic on an unconfigured wrapper either.
+		d.SetListCacheTTL(time.Second)
+	})
+
+	t.Run("usenet", func(t *testing.T) {
+		d := NewDynamicUsenetProvider("p")
+		_, err := d.AddNZBFile(ctx, "f.nzb", []byte("x"), AddOptions{})
+		check(t, "AddNZBFile", err)
+		_, err = d.AddNZBURL(ctx, "http://x/f.nzb", AddOptions{})
+		check(t, "AddNZBURL", err)
+		_, err = d.Status(ctx, "id")
+		check(t, "Status", err)
+		_, err = d.List(ctx)
+		check(t, "List", err)
+		_, _, err = d.ListCached(ctx)
+		check(t, "ListCached", err)
+		_, _, err = d.ListFresh(ctx)
+		check(t, "ListFresh", err)
+		_, err = d.Files(ctx, "id")
+		check(t, "Files", err)
+		_, err = d.RequestDownloadLink(ctx, "id", "0")
+		check(t, "RequestDownloadLink", err)
+		_, err = d.RequestZipDownloadLink(ctx, "id")
+		check(t, "RequestZipDownloadLink", err)
+		check(t, "Delete", d.Delete(ctx, "id", true))
+		_, err = d.CheckCached(ctx, []string{"abc"})
+		check(t, "CheckCached", err)
+		_, err = d.Account(ctx)
+		check(t, "Account", err)
+		d.SetListCacheTTL(time.Second)
+	})
+
+	t.Run("webdl", func(t *testing.T) {
+		d := NewDynamicWebDownloadProvider("p")
+		_, err := d.AddLink(ctx, "https://host/f", AddOptions{})
+		check(t, "AddLink", err)
+		_, err = d.Status(ctx, "id")
+		check(t, "Status", err)
+		_, err = d.List(ctx)
+		check(t, "List", err)
+		_, _, err = d.ListCached(ctx)
+		check(t, "ListCached", err)
+		_, _, err = d.ListFresh(ctx)
+		check(t, "ListFresh", err)
+		_, err = d.Files(ctx, "id")
+		check(t, "Files", err)
+		_, err = d.RequestDownloadLink(ctx, "id", "0")
+		check(t, "RequestDownloadLink", err)
+		_, err = d.RequestZipDownloadLink(ctx, "id")
+		check(t, "RequestZipDownloadLink", err)
+		check(t, "Delete", d.Delete(ctx, "id", true))
+		_, err = d.CheckCached(ctx, []string{"abc"})
+		check(t, "CheckCached", err)
+		_, err = d.Account(ctx)
+		check(t, "Account", err)
+		d.SetListCacheTTL(time.Second)
+	})
+}
+
+// TestDynamicProviders_ClearingAKeyReturnsToErrNoProvider proves Set(nil)
+// genuinely unconfigures a wrapper rather than leaving the previous provider
+// in place. This is what an empty api_key does through the settings API, and
+// silently keeping the old credentials would be the worst possible reading
+// of "clear this provider".
+func TestDynamicProviders_ClearingAKeyReturnsToErrNoProvider(t *testing.T) {
+	d := NewDynamicTorrentProvider("p")
+	d.Set(&stubTorrentProvider{name: "p"})
+	if !d.Configured() {
+		t.Fatal("Configured() = false after Set(), want true")
+	}
+
+	d.Set(nil)
+	if d.Configured() {
+		t.Error("Configured() = true after Set(nil), want false")
+	}
+	if _, err := d.List(context.Background()); !errors.Is(err, ErrNoProvider) {
+		t.Errorf("List() error = %v after Set(nil), want ErrNoProvider", err)
 	}
 }
