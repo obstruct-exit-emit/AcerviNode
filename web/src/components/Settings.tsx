@@ -754,14 +754,15 @@ export function Settings({ apiKey }: Props) {
                     }
                   }}
                 >
-                  {/* Name and its status stack in one column so the status
-                      reads as belonging to the provider rather than floating
-                      between it and the capability chips. Kept tight enough
-                      that the collapsed row is the same height it was — see
-                      .settings-card-toggle-collapsed, which reclaims the
+                  {/* Name on its own line, then everything that describes
+                      the provider on one row beneath it: what it is on the
+                      left, what it can do on the right. Still two lines
+                      total, so the collapsed row is no taller than it was —
+                      see .settings-card-toggle-collapsed, which reclaims the
                       bottom margin that only earns its place when expanded. */}
                   <span className="provider-headline">
                     <h2>{providerLabel(p.name)}</h2>
+                    <span className="provider-meta">
                     <span className="provider-status">
                       {p.default && showDefaultControls && <span className="cap cap-default">Default</span>}
                       {p.configured ? (
@@ -770,8 +771,6 @@ export function Settings({ apiKey }: Props) {
                         <span className="cap cap-unset">Not configured</span>
                       )}
                     </span>
-                  </span>
-                  <span className="settings-card-summary">
                     {/* Which kinds this provider can actually handle. Shown
                         including the ones it can't, struck through, because
                         an absent chip is ambiguous — "no usenet" and "this
@@ -798,6 +797,7 @@ export function Settings({ apiKey }: Props) {
                           {label}
                         </span>
                       ))}
+                    </span>
                     </span>
                   </span>
                   <span className={`settings-card-chevron${expanded ? ' settings-card-chevron-open' : ''}`}>▸</span>

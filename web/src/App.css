@@ -139,13 +139,25 @@
 .provider-headline {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   margin-right: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .provider-headline h2 {
   margin: 0;
   line-height: 1.1;
+}
+
+/* Status and capabilities share one row under the name, so "Configured"
+   lines up with the capability chips instead of sitting on a line of its
+   own. Wraps rather than overflowing on a narrow window. */
+.provider-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .provider-status {
