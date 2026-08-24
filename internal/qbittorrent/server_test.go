@@ -962,3 +962,92 @@ func TestRefreshFromProvider_NeverFlagsDownloadsAsVanished(t *testing.T) {
 		t.Errorf("download was flagged %q by a shim refresh, want it untouched", got.State)
 	}
 }
+
+// postTorrentFile uploads a .torrent the way an *arr app does when its
+// indexer hands over a file rather than a magnet — a multipart POST with the
+// file under "torrents".
+func postTorrentFile(t *testing.T, client *http.Client, targetURL, fieldName string, data []byte, fields map[string]string) *http.Response {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for k, v := range fields {
+		if err := writer.WriteField(k, v); err != nil {
+			t.Fatalf("write field %s: %v", k, err)
+		}
+	}
+	part, err := writer.CreateFormFile(fieldName, "release.torrent")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, targetURL, body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+// TestHandleAdd_AcceptsATorrentFileUpload covers the .torrent upload path,
+// which had no test at all despite being a primary *arr flow — plenty of
+// indexers hand over a file rather than a magnet, and Sonarr/Radarr upload
+// it under the "torrents" field. Verified against the real deployment first,
+// then pinned here.
+func TestHandleAdd_AcceptsATorrentFileUpload(t *testing.T) {
+	ts, client := newTestServer(t)
+
+	loginResp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"}, "password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	loginResp.Body.Close()
+
+	resp := postTorrentFile(t, client, ts.URL+"/api/v2/torrents/add", "torrents",
+		[]byte("d8:announce4:test4:infod4:name7:releaseee"), map[string]string{"category": "tv-sonarr"})
+	if b := readBody(t, resp); resp.StatusCode != http.StatusOK || b != "Ok." {
+		t.Fatalf("add status=%d body=%q, want 200 Ok.", resp.StatusCode, b)
+	}
+
+	items := getTorrentInfo(t, client, ts.URL)
+	if len(items) != 1 {
+		t.Fatalf("info after file upload = %d items, want 1", len(items))
+	}
+	if items[0].Category != "tv-sonarr" {
+		t.Errorf("category = %q, want tv-sonarr — the category must survive a file add too", items[0].Category)
+	}
+}
+
+// TestHandleAdd_RejectsAnEmptyUploadWithoutAMagnet pins that an add carrying
+// neither a link nor a usable file fails cleanly rather than creating an
+// empty row or panicking on a nil file header.
+func TestHandleAdd_RejectsAnEmptyUploadWithoutAMagnet(t *testing.T) {
+	ts, client := newTestServer(t)
+
+	loginResp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"}, "password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	loginResp.Body.Close()
+
+	resp := postMultipart(t, client, ts.URL+"/api/v2/torrents/add", map[string]string{"category": "tv-sonarr"})
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("status = 200 for an add with neither urls nor a file, want a failure")
+	}
+	if items := getTorrentInfo(t, client, ts.URL); len(items) != 0 {
+		t.Errorf("info = %d items after a rejected add, want 0", len(items))
+	}
+}

@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shims and the web UI. Only two of them (`AddMagnet`, `Status`) had a test.
   `internal/debrid` coverage 61% → 86%.
 
+- **Covered both compat shims' file-upload paths**, which had no tests at
+  all despite being primary \*arr flows — plenty of indexers hand over a
+  `.torrent` or `.nzb` rather than a link, and Sonarr/Radarr upload the file
+  rather than passing a URL. Both were verified against the real deployment
+  first (a genuine archive.org `.torrent` through the qBittorrent shim, an
+  NZB upload through `mode=addfile`) and then pinned. Also covers an add
+  carrying neither link nor usable file, and that the upload branch still
+  enforces the API key rather than bypassing it. `internal/qbittorrent`
+  68% → 73%, `internal/sabnzbd` 68% → 77%.
+
 
 ### Added
 

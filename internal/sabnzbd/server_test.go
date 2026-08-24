@@ -1,8 +1,10 @@
 package sabnzbd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -752,4 +754,88 @@ func testRegistryNamed(name string, p *fakeProvider) *debrid.Registry {
 	}
 	r.Register(name, nil, d, nil)
 	return r
+}
+
+// TestHandleAddFile_AcceptsAnNZBUpload covers mode=addfile, which had no
+// test at all despite being how Sonarr/Radarr add most usenet releases —
+// the indexer hands over an .nzb and the *arr uploads it rather than passing
+// a URL. Verified against the real deployment first, then pinned here.
+func TestHandleAddFile_AcceptsAnNZBUpload(t *testing.T) {
+	ts := newTestServer(t)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("mode", "addfile"); err != nil {
+		t.Fatalf("write mode: %v", err)
+	}
+	if err := writer.WriteField("apikey", testAPIKey); err != nil {
+		t.Fatalf("write apikey: %v", err)
+	}
+	if err := writer.WriteField("cat", "tv-sonarr"); err != nil {
+		t.Fatalf("write cat: %v", err)
+	}
+	part, err := writer.CreateFormFile("name", "Some.Release.nzb")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(`<?xml version="1.0"?><nzb><file subject="x"></file></nzb>`)); err != nil {
+		t.Fatalf("write nzb: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	resp, err := http.Post(ts.URL+"/api", writer.FormDataContentType(), body)
+	if err != nil {
+		t.Fatalf("addfile error = %v", err)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	resp.Body.Close()
+
+	if result["status"] != true {
+		t.Fatalf("addfile result = %+v, want status:true", result)
+	}
+	ids, _ := result["nzo_ids"].([]any)
+	if len(ids) != 1 {
+		t.Fatalf("addfile nzo_ids = %+v, want exactly one id", result["nzo_ids"])
+	}
+
+	// The upload has to land in the queue like any other add, with its
+	// category preserved — an add that reports success but tracks nothing
+	// would leave the *arr waiting forever.
+	queue := getQueue(t, ts.URL)
+	if len(queue.Queue.Slots) != 1 {
+		t.Fatalf("queue = %d slots after an NZB upload, want 1", len(queue.Queue.Slots))
+	}
+	if cat := queue.Queue.Slots[0].Cat; cat != "tv-sonarr" {
+		t.Errorf("category = %q, want tv-sonarr", cat)
+	}
+}
+
+// TestHandleAddFile_WrongAPIKeyIsRejected pins that the upload path enforces
+// the API key like every other mode, rather than the multipart branch
+// bypassing the check.
+func TestHandleAddFile_WrongAPIKeyIsRejected(t *testing.T) {
+	ts := newTestServer(t)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("mode", "addfile")
+	writer.WriteField("apikey", "definitely-not-the-key")
+	part, _ := writer.CreateFormFile("name", "x.nzb")
+	part.Write([]byte("<nzb/>"))
+	writer.Close()
+
+	resp, err := http.Post(ts.URL+"/api", writer.FormDataContentType(), body)
+	if err != nil {
+		t.Fatalf("addfile error = %v", err)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	resp.Body.Close()
+
+	if result["status"] != false {
+		t.Errorf("result = %+v, want status:false for a wrong API key", result)
+	}
 }
