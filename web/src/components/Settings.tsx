@@ -442,7 +442,18 @@ export function Settings({ apiKey }: Props) {
 
   // Clearing a key switches a provider off without editing config.yaml. It
   // stays listed, so it can be set up again later.
+  // Confirms, like every other destructive action here. It sat between
+  // "Test connection" and "Reset provider" at the same visual weight while
+  // being the only one that fired on the first click — and AcerviNode never
+  // shows a provider key back, so a mis-click on an account whose key isn't
+  // saved elsewhere loses it for good.
   async function handleClearProviderKey(provider: string) {
+    if (
+      !confirm(
+        `Clear ${providerLabel(provider)}'s API key? AcerviNode can't show it back, so you'll need the key itself to set it up again. Its capability settings and any downloads tracked against it are kept.`,
+      )
+    )
+      return
     setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
     try {
       await setProviderApiKey(apiKey, provider, '')
