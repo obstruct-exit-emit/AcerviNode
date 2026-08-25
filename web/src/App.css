@@ -441,8 +441,15 @@
 /* A button that reads as a link: for actions that belong on the page but
    shouldn't compete with the real buttons near them. Still a <button>, so it
    keeps keyboard focus and activation — looking like a link is a visual
-   choice, not a semantic one. */
-.link-button {
+   choice, not a semantic one.
+
+   Listed twice on purpose. `.settings-card button` above styles every button
+   inside a card and, at one class plus one element, outranks a lone class —
+   so the bare selector alone left this looking exactly like the buttons it
+   was meant to step back from. The scoped selector outranks it; the bare one
+   keeps this usable outside a settings card. */
+.link-button,
+.settings-card .link-button {
   background: none;
   border: none;
   padding: 0;
@@ -454,7 +461,8 @@
   text-align: left;
 }
 
-.link-button:hover {
+.link-button:hover,
+.settings-card .link-button:hover {
   text-decoration: underline;
 }
 
