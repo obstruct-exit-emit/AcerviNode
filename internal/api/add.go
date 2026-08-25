@@ -712,55 +712,6 @@ type torrentInfoFileResponse struct {
 // previews a torrent's metadata (name, size, file list, seeders/peers)
 // straight from the BitTorrent network, by hash alone, before ever adding
 // it.
-// torrentInfoFor previews a torrent's metadata, asking any configured
-// provider that can answer rather than only the default.
-//
-// Unlike an add or a cached-status check, this is not a question about an
-// account: a magnet's name, size and file list are properties of the torrent
-// itself, so any provider that offers the lookup gives the same answer.
-// Restricting it to the default meant the "+ Add" preview simply stopped
-// working when the default happened to be a provider without the feature —
-// AllDebrid has no equivalent of TorBox's torrentinfo — even with a provider
-// that could answer configured right beside it. Observed exactly that:
-// identical request, different answer, purely from which provider was
-// default.
-//
-// The default is still tried first, so the common case makes one call.
-func (s *Server) torrentInfoFor(ctx context.Context, hash string) (debrid.TorrentInfo, error) {
-	var firstErr error
-	try := func(p *debrid.DynamicTorrentProvider) (debrid.TorrentInfo, bool) {
-		if p == nil || !p.Configured() {
-			return debrid.TorrentInfo{}, false
-		}
-		info, err := p.TorrentInfo(ctx, hash)
-		if err == nil {
-			return info, true
-		}
-		// "This provider can't do previews" is not an answer about the
-		// torrent, so keep looking. Any other failure is a real answer from
-		// a provider that did try, and is what the caller should hear.
-		if !errors.Is(err, debrid.ErrTorrentInfoUnsupported) {
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		return debrid.TorrentInfo{}, false
-	}
-
-	if info, ok := try(s.defaultTorrent()); ok {
-		return info, nil
-	}
-	for _, name := range s.registry.TorrentNames() {
-		if info, ok := try(s.registry.Torrent(name)); ok {
-			return info, nil
-		}
-	}
-	if firstErr != nil {
-		return debrid.TorrentInfo{}, firstErr
-	}
-	return debrid.TorrentInfo{}, fmt.Errorf("no configured provider supports torrent info previews")
-}
-
 func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 	if s.defaultTorrent() == nil {
 		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
@@ -774,8 +725,36 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hash, or magnet with a valid btih hash, is required", http.StatusBadRequest)
 		return
 	}
-	info, err := s.torrentInfoFor(r.Context(), hash)
+	// Asks exactly one provider, and never quietly a different one.
+	//
+	// A metadata lookup looks like it should be shareable — a magnet's name
+	// and files are properties of the torrent, not of an account — but the
+	// *query* still goes to a specific service, which then knows a hash you
+	// were about to hand to someone else. Unlike the add fallbacks, which
+	// prevent a download from failing and surface as a download visibly
+	// filed under whoever took it, this only saves a preview panel, and
+	// crossing providers for it would be invisible. Not a trade worth
+	// making silently.
+	//
+	// A caller who does want another provider's lookup can name one, which
+	// makes it a decision rather than a side effect.
+	provider := s.defaultTorrent()
+	if named := strings.TrimSpace(r.URL.Query().Get("provider")); named != "" {
+		provider = s.registry.Torrent(named)
+		if provider == nil {
+			writeJSON(w, torrentInfoResponse{Available: false, Error: fmt.Sprintf("no torrent-capable provider named %q is configured", named)})
+			return
+		}
+	}
+	info, err := provider.TorrentInfo(r.Context(), hash)
 	if err != nil {
+		if errors.Is(err, debrid.ErrTorrentInfoUnsupported) {
+			writeJSON(w, torrentInfoResponse{
+				Available: false,
+				Error:     fmt.Sprintf("%s doesn't offer metadata previews — name another provider with ?provider= to ask one that does", provider.Name()),
+			})
+			return
+		}
 		writeJSON(w, torrentInfoResponse{Available: false, Error: err.Error()})
 		return
 	}

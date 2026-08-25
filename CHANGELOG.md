@@ -452,6 +452,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The torrent metadata preview asks only the provider it was aimed at.**
+  It briefly fell back to any provider that supported the lookup, so with
+  AllDebrid as default a preview was answered by TorBox. The reasoning was
+  that a magnet's metadata belongs to the torrent rather than an account —
+  true of the data, but the *query* still goes to a specific service, which
+  then knows a hash you were about to hand to someone else, with nothing
+  visible to say so.
+
+  That makes it a different trade from the add fallbacks, which are kept: those
+  prevent a download from failing outright and surface as a download visibly
+  filed under whoever took it, where this only saved a preview panel and
+  crossed providers invisibly. Reverted.
+
+  `?provider=<name>` now selects a specific provider explicitly, and the
+  "no preview feature" message points at it — so the capability stays
+  reachable as a decision rather than a side effect.
+
 - **`GET /api/v1/status` returned `"providers": null` instead of `[]`** when
   nothing was being polled — every kind switched off, or the importer not yet
   attached during startup. The field is documented as an array, and a monitor

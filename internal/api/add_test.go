@@ -214,45 +214,87 @@ func TestAddWebDownload_SingleProviderDoesNotLoop(t *testing.T) {
 	}
 }
 
-// TestTorrentInfo_FallsBackToAProviderThatSupportsIt proves the metadata
-// preview isn't hostage to which provider happens to be default.
+// TestTorrentInfo_NeverSilentlyAsksAnotherProvider pins that a metadata
+// preview stays with the provider it was aimed at.
 //
-// A magnet's name, size and file list are properties of the torrent, not of
-// an account, so any provider offering the lookup answers the same. Asking
-// only the default meant the "+ Add" preview stopped working whenever the
-// default was a provider without the feature — AllDebrid has no equivalent
-// of TorBox's torrentinfo — with a capable provider configured beside it.
-// Observed live: identical request, different answer, purely from which
-// provider was default.
-func TestTorrentInfo_FallsBackToAProviderThatSupportsIt(t *testing.T) {
+// It briefly fell back to any provider that supported the lookup, on the
+// reasoning that a magnet's metadata belongs to the torrent rather than an
+// account. True of the data, but the query still goes somewhere specific —
+// so a hash intended for one provider ended up disclosed to another, with
+// nothing visible to say so. The add fallbacks are a different trade: they
+// prevent a download from failing and surface as a download filed under
+// whoever took it.
+func TestTorrentInfo_NeverSilentlyAsksAnotherProvider(t *testing.T) {
 	noPreview := &fakeProvider{providerName: "alldebrid", torrentInfoErr: debrid.ErrTorrentInfoUnsupported}
-	hasPreview := &fakeProvider{providerName: "torbox", torrentInfoResp: debrid.TorrentInfo{Name: "Some Release", SizeBytes: 42}}
+	hasPreview := &fakeProvider{providerName: "torbox", torrentInfoResp: debrid.TorrentInfo{Name: "Some Release"}}
+	srv := twoTorrentServer(t, noPreview, hasPreview)
 
+	rec := getInfo(t, srv, "/api/v1/downloads/torrent/info?hash=abc")
+	var got map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &got)
+
+	if got["available"] != false {
+		t.Errorf("available = %v, want false — the default can't preview and no other provider should be asked", got["available"])
+	}
+	if hasPreview.torrentInfoHash != "" {
+		t.Error("the other provider was queried; a hash aimed at one provider must not reach another")
+	}
+	if msg, _ := got["error"].(string); !strings.Contains(msg, "provider=") {
+		t.Errorf("error = %q, want it to point at the explicit ?provider= escape hatch", msg)
+	}
+}
+
+// TestTorrentInfo_ExplicitProviderIsHonoured keeps the capability reachable
+// as a deliberate act rather than a side effect.
+func TestTorrentInfo_ExplicitProviderIsHonoured(t *testing.T) {
+	noPreview := &fakeProvider{providerName: "alldebrid", torrentInfoErr: debrid.ErrTorrentInfoUnsupported}
+	hasPreview := &fakeProvider{providerName: "torbox", torrentInfoResp: debrid.TorrentInfo{Name: "Some Release"}}
+	srv := twoTorrentServer(t, noPreview, hasPreview)
+
+	rec := getInfo(t, srv, "/api/v1/downloads/torrent/info?hash=abc&provider=torbox")
+	var got map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got["available"] != true {
+		t.Fatalf("available = %v, want true when torbox is named explicitly: %s", got["available"], rec.Body.String())
+	}
+	if got["name"] != "Some Release" {
+		t.Errorf("name = %v, want the named provider's answer", got["name"])
+	}
+}
+
+// TestTorrentInfo_UnknownExplicitProviderIsRefused keeps a typo visible.
+func TestTorrentInfo_UnknownExplicitProviderIsRefused(t *testing.T) {
+	srv := twoTorrentServer(t, &fakeProvider{providerName: "alldebrid"}, &fakeProvider{providerName: "torbox"})
+	rec := getInfo(t, srv, "/api/v1/downloads/torrent/info?hash=abc&provider=ghost")
+	var got map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got["available"] != false {
+		t.Errorf("available = %v, want false for a provider that isn't configured", got["available"])
+	}
+}
+
+func twoTorrentServer(t *testing.T, providers ...*fakeProvider) *Server {
+	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
 		t.Fatalf("database.Open() error = %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
 	registry := debrid.NewRegistry()
-	for _, p := range []*fakeProvider{noPreview, hasPreview} {
+	for _, p := range providers {
 		td := debrid.NewDynamicTorrentProvider(p.providerName)
 		td.Set(p)
 		registry.Register(p.providerName, td, nil, nil)
 	}
-	registry.SetDefault("alldebrid")
-	srv := NewServer("dev", db, registry, &fakeSettings{})
+	registry.SetDefault(providers[0].providerName)
+	return NewServer("dev", db, registry, &fakeSettings{})
+}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads/torrent/info?hash=abc", nil)
+func getInfo(t *testing.T, srv *Server, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-
-	var got map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &got)
-	if got["available"] != true {
-		t.Fatalf("available = %v, want true — the capable provider should have answered: %s", got["available"], rec.Body.String())
-	}
-	if got["name"] != "Some Release" {
-		t.Errorf("name = %v, want the capable provider's answer", got["name"])
-	}
+	return rec
 }
