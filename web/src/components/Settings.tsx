@@ -15,6 +15,7 @@ import {
   restartServer,
   setCategoryPath,
   setProviderApiKey,
+  setProviderKinds,
   setDefaultProvider,
   testProviderConnection,
   updateGeneralSettings,
@@ -403,6 +404,21 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
+  // Toggling a kind unregisters it outright, so an add of that kind stops
+  // routing here and falls through to whichever provider still handles it.
+  // Reloads afterwards rather than flipping local state, since the server
+  // decides the outcome — enabling a kind the service lacks is refused.
+  async function handleKindToggle(provider: string, kind: 'torrent' | 'usenet' | 'webdl', on: boolean) {
+    setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
+    try {
+      await setProviderKinds(apiKey, provider, { [kind]: on })
+      setStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
+      await load()
+    } catch (err) {
+      setStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
   async function handleProviderSubmit(e: FormEvent, provider: string) {
     e.preventDefault()
     const key = (providerKeys[provider] ?? '').trim()
@@ -779,18 +795,25 @@ export function Settings({ apiKey }: Props) {
                     <span className="provider-caps">
                       {(
                         [
-                          ['torrent_capable', 'Torrents'],
-                          ['usenet_capable', 'Usenet'],
-                          ['webdl_capable', 'Web links'],
+                          ['Torrents', p.torrent_capable, p.torrent_enabled],
+                          ['Usenet', p.usenet_capable, p.usenet_enabled],
+                          ['Web links', p.webdl_capable, p.webdl_enabled],
                         ] as const
-                      ).map(([field, label]) => (
+                      ).map(([label, capable, enabled]) => (
                         <span
                           key={label}
-                          className={`cap${p[field] ? '' : ' cap-off'}`}
+                          // Three states, and the last two must not look
+                          // alike: struck means the service can't do it,
+                          // dimmed means you switched it off. Conflating
+                          // them would hide a setting behind what reads as
+                          // a hard limitation.
+                          className={`cap${capable ? (enabled ? '' : ' cap-disabled') : ' cap-off'}`}
                           title={
-                            p[field]
-                              ? `${providerLabel(p.name)} handles ${label.toLowerCase()}`
-                              : `${providerLabel(p.name)} has no ${label.toLowerCase()} service — adds of this kind go to another configured provider`
+                            !capable
+                              ? `${providerLabel(p.name)} has no ${label.toLowerCase()} service`
+                              : enabled
+                                ? `${providerLabel(p.name)} handles ${label.toLowerCase()}`
+                                : `${label} switched off for ${providerLabel(p.name)} — adds of this kind go to another configured provider`
                           }
                         >
                           {label}
@@ -826,6 +849,43 @@ export function Settings({ apiKey }: Props) {
                     </form>
                     {saveState.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
                     {saveState.kind === 'error' && <p className="settings-error">Failed to save: {saveState.message}</p>}
+
+                    {/* Which kinds this provider handles. Everything its
+                        service supports is on by default; turning one off
+                        unregisters it, so adds of that kind route to another
+                        configured provider instead. A kind the service
+                        doesn't have is shown disabled rather than hidden, so
+                        it's clear the option exists and why it can't be
+                        picked. */}
+                    <fieldset className="provider-kinds">
+                      <legend>Handles</legend>
+                      {(
+                        [
+                          ['torrent', 'Torrents', p.torrent_capable, p.torrent_enabled],
+                          ['usenet', 'Usenet', p.usenet_capable, p.usenet_enabled],
+                          ['webdl', 'Web links', p.webdl_capable, p.webdl_enabled],
+                        ] as const
+                      ).map(([kind, label, capable, enabled]) => (
+                        <label
+                          key={kind}
+                          className={capable ? undefined : 'provider-kind-unsupported'}
+                          title={
+                            capable
+                              ? `Turn ${label.toLowerCase()} off to stop routing them to ${providerLabel(p.name)}`
+                              : `${providerLabel(p.name)} has no ${label.toLowerCase()} service`
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            disabled={!capable || saveState.kind === 'saving'}
+                            onChange={(e) => handleKindToggle(p.name, kind, e.target.checked)}
+                          />
+                          <span className="provider-kind-label">{label}</span>
+                          {!capable && <span className="provider-kind-note">not supported</span>}
+                        </label>
+                      ))}
+                    </fieldset>
 
                     {p.configured && (
                       <>

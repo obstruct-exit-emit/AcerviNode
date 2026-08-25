@@ -30,6 +30,38 @@ type ProviderConfig struct {
 	// provider's name and its implementation were the same string, so there
 	// could only ever be one account per service.
 	Type string `yaml:"type,omitempty"`
+
+	// DisabledKinds turns off kinds this provider would otherwise handle:
+	// "torrent", "usenet", "webdl". A disabled kind registers no wrapper at
+	// all, so the provider simply never appears for it — routing, polling
+	// and the add endpoints all reuse the same "not registered for this
+	// kind" path that a provider with no such service already takes.
+	//
+	// Stored as the *disabled* set rather than the enabled one so absent
+	// means everything supported is on. That keeps every existing config
+	// working untouched and avoids the ambiguity of an empty enabled list,
+	// which would have to mean "all" rather than the "none" it reads as.
+	//
+	// Worth it because capability is not always something you want just
+	// because the service offers it: two accounts on one service can split
+	// kinds between them to keep their rate limits apart, and a kind you
+	// never use is polling you never needed.
+	DisabledKinds []string `yaml:"disabled_kinds,omitempty"`
+}
+
+// ProviderKinds is every kind a provider entry can be enabled for.
+var ProviderKinds = []string{"torrent", "usenet", "webdl"}
+
+// KindEnabled reports whether this entry should be registered for kind.
+// True for anything not explicitly disabled, so a config that has never
+// heard of DisabledKinds behaves exactly as before.
+func (p ProviderConfig) KindEnabled(kind string) bool {
+	for _, d := range p.DisabledKinds {
+		if strings.EqualFold(strings.TrimSpace(d), kind) {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolvedType is the provider implementation this entry uses — Type when

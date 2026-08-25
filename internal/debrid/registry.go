@@ -69,6 +69,47 @@ func (r *Registry) Register(name string, t *DynamicTorrentProvider, u *DynamicUs
 	}
 }
 
+// SetKinds replaces exactly which kinds a registered provider serves,
+// removing the wrapper for any kind passed as nil.
+//
+// Distinct from Register, which only ever adds: passing nil there means
+// "leave this kind alone", which is what startup wants when a provider
+// simply has no such service. Turning a kind *off* at runtime needs the
+// opposite, and doing it by Unregister-then-Register would briefly drop the
+// provider from every kind — including ones still in flight — and lose its
+// position in the ordering.
+//
+// The name keeps its place in order even with every kind removed, so an
+// entry with everything disabled still lists in the settings API and can be
+// switched back on.
+func (r *Registry) SetKinds(name string, t *DynamicTorrentProvider, u *DynamicUsenetProvider, w *DynamicWebDownloadProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, seen := r.indexOf(name); !seen {
+		r.order = append(r.order, name)
+	}
+	setOrDelete(r.torrent, name, t)
+	setOrDelete(r.usenet, name, u)
+	setOrDelete(r.webdl, name, w)
+	if r.fallback == "" {
+		r.fallback = name
+	}
+}
+
+// setOrDelete stores p under name, or removes the entry when p is nil.
+// Generic over the three wrapper types, which share no interface — and
+// deliberately shouldn't, since a nil typed pointer in an interface is not
+// a nil interface and that distinction is what every accessor here relies
+// on.
+func setOrDelete[T any](m map[string]*T, name string, p *T) {
+	if p == nil {
+		delete(m, name)
+		return
+	}
+	m[name] = p
+}
+
 // Unregister removes a provider entirely — for one deleted at runtime
 // through the settings API. Safe to call for a name that isn't registered.
 //

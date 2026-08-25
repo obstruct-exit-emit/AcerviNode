@@ -312,10 +312,17 @@ var knownProviderCapabilities = map[string]providerCapabilities{
 //
 // An empty apiKey still registers: the wrapper *is* the slot a key gets set
 // into later, so it has to exist before one is configured.
-func registerProviderEntry(registry *debrid.Registry, name, typeName, apiKey string, timeout time.Duration) error {
+// registerProviderEntry registers one provider entry for the kinds it both
+// supports and is enabled for. enabledKind reports the latter; pass nil to
+// enable everything supported, which is what a caller with no config in hand
+// means.
+func registerProviderEntry(registry *debrid.Registry, name, typeName, apiKey string, timeout time.Duration, enabledKind func(kind string) bool) error {
 	construct, known := knownProviders[typeName]
 	if !known {
 		return fmt.Errorf("unknown provider type %q", typeName)
+	}
+	if enabledKind == nil {
+		enabledKind = func(string) bool { return true }
 	}
 
 	var tp debrid.TorrentProvider
@@ -330,19 +337,22 @@ func registerProviderEntry(registry *debrid.Registry, name, typeName, apiKey str
 	var u *debrid.DynamicUsenetProvider
 	var w *debrid.DynamicWebDownloadProvider
 	caps := knownProviderCapabilities[typeName]
-	if caps.torrent {
+	if caps.torrent && enabledKind("torrent") {
 		t = debrid.NewDynamicTorrentProvider(name)
 		t.Set(tp)
 	}
-	if caps.usenet {
+	if caps.usenet && enabledKind("usenet") {
 		u = debrid.NewDynamicUsenetProvider(name)
 		u.Set(up)
 	}
-	if caps.webdl {
+	if caps.webdl && enabledKind("webdl") {
 		w = debrid.NewDynamicWebDownloadProvider(name)
 		w.Set(wp)
 	}
-	registry.Register(name, t, u, w)
+	// SetKinds rather than Register: this is also the path a live toggle
+	// takes, where a kind switched off has to actually be removed rather
+	// than left in place.
+	registry.SetKinds(name, t, u, w)
 	return nil
 }
 
@@ -474,11 +484,16 @@ func setupProviders(cfg *config.Config, configPath string) (*debrid.Registry, *l
 	for _, name := range providerEntryNames(cfg) {
 		typeName := name
 		apiKey := ""
+		// An entry with no config at all is a known provider nobody has
+		// touched yet: every kind it supports is enabled, since disabling
+		// is something you opt into.
+		enabled := func(string) bool { return true }
 		if pc, ok := cfg.Providers[name]; ok {
 			typeName = pc.ResolvedType(name)
 			apiKey = pc.APIKey
+			enabled = pc.KindEnabled
 		}
-		if err := registerProviderEntry(registry, name, typeName, apiKey, timeout); err != nil {
+		if err := registerProviderEntry(registry, name, typeName, apiKey, timeout, enabled); err != nil {
 			slog.Warn("ignoring provider entry", "provider", name, "type", typeName, "error", err)
 		}
 	}

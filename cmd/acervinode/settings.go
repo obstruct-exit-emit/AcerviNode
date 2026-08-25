@@ -832,6 +832,94 @@ func (s *liveSettings) ProviderType(name string) string {
 	return name
 }
 
+// ProviderSupportedKinds reports which kinds this entry's *service* can do,
+// independent of whether they are switched on — see
+// knownProviderCapabilities, which is the static truth about a provider
+// type. The registry only holds the kinds that are both supported and
+// enabled, so it cannot answer this on its own.
+func (s *liveSettings) ProviderSupportedKinds(name string) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	caps := knownProviderCapabilities[s.cfg.Providers[name].ResolvedType(name)]
+	return map[string]bool{
+		"torrent": caps.torrent,
+		"usenet":  caps.usenet,
+		"webdl":   caps.webdl,
+	}
+}
+
+// SetProviderKinds switches kinds on or off for one provider, live and
+// persisted. Only the kinds present in enabled are changed.
+//
+// Refuses to enable a kind the service doesn't have, rather than accepting
+// it and quietly doing nothing: the caller asked for something that cannot
+// happen, and reporting success would leave them believing usenet is on for
+// a provider that has never had a usenet service.
+func (s *liveSettings) SetProviderKinds(_ context.Context, name string, enabled map[string]bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.cfg.Providers[name]
+	if !exists && !s.registryHasEntry(name) {
+		return fmt.Errorf("unknown provider %s", name)
+	}
+	resolved := entry.ResolvedType(name)
+	caps := knownProviderCapabilities[resolved]
+	supported := map[string]bool{"torrent": caps.torrent, "usenet": caps.usenet, "webdl": caps.webdl}
+
+	// Start from what is currently on, so an omitted kind is left alone.
+	want := map[string]bool{}
+	for _, kind := range config.ProviderKinds {
+		want[kind] = supported[kind] && entry.KindEnabled(kind)
+	}
+	for kind, on := range enabled {
+		if _, known := supported[kind]; !known {
+			return fmt.Errorf("unknown kind %q", kind)
+		}
+		if on && !supported[kind] {
+			return fmt.Errorf("%s has no %s service, so it can't be enabled", name, kind)
+		}
+		want[kind] = on
+	}
+
+	var disabled []string
+	for _, kind := range config.ProviderKinds {
+		if supported[kind] && !want[kind] {
+			disabled = append(disabled, kind)
+		}
+	}
+
+	timeout := time.Duration(s.cfg.ProviderRequestTimeoutSeconds) * time.Second
+	if err := registerProviderEntry(s.registry, name, resolved, entry.APIKey, timeout, func(kind string) bool {
+		return want[kind]
+	}); err != nil {
+		return err
+	}
+
+	if s.cfg.Providers == nil {
+		s.cfg.Providers = map[string]config.ProviderConfig{}
+	}
+	entry.DisabledKinds = disabled
+	s.cfg.Providers[name] = entry
+	if err := s.cfg.Save(s.configPath); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	slog.Info("api: provider kinds changed", "provider", name, "disabled", disabled)
+	return nil
+}
+
+// registryHasEntry reports whether the registry knows this name at all.
+// Callers hold s.mu.
+func (s *liveSettings) registryHasEntry(name string) bool {
+	for _, n := range s.registry.Names() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // AddProvider registers a new provider entry live and persists it.
 //
 // name is the entry, providerType is the implementation. They are separate
@@ -861,7 +949,8 @@ func (s *liveSettings) AddProvider(_ context.Context, name, providerType, apiKey
 	}
 
 	timeout := time.Duration(s.cfg.ProviderRequestTimeoutSeconds) * time.Second
-	if err := registerProviderEntry(s.registry, name, resolved, apiKey, timeout); err != nil {
+	// A brand-new entry starts with every supported kind enabled.
+	if err := registerProviderEntry(s.registry, name, resolved, apiKey, timeout, nil); err != nil {
 		return err
 	}
 

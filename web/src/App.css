@@ -688,6 +688,62 @@ table.downloads tbody tr:hover {
   white-space: normal;
 }
 
+/* Kind toggles inside the expanded panel. Checkboxes rather than clickable
+   header chips: the header row is itself a click-to-expand control, so a
+   control inside it would have to fight that, and a checkbox says
+   "switchable" without needing to be discovered. */
+.provider-kinds {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px 12px;
+  margin: 14px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.provider-kinds legend {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
+.provider-kinds label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.provider-kinds input {
+  cursor: pointer;
+}
+
+/* A kind the service doesn't have. Shown, not hidden, so it's clear the
+   option exists and why it can't be picked. */
+.provider-kind-unsupported {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.provider-kind-unsupported input {
+  cursor: default;
+}
+
+/* Struck the same way the header chip is, so the two places that report an
+   unsupported kind agree. Only the kind name is struck — the "not
+   supported" note beside it has to stay readable, and it carries the reason
+   for anyone not reading the strike. */
+.provider-kind-unsupported .provider-kind-label {
+  text-decoration: line-through;
+}
+
+.provider-kind-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .provider-caps {
   display: inline-flex;
   gap: 6px;
@@ -723,6 +779,14 @@ table.downloads tbody tr:hover {
 .cap-off {
   opacity: 0.45;
   text-decoration: line-through;
+}
+
+/* Supported, but switched off here. Faded rather than struck: the strike is
+   reserved for what the service genuinely cannot do, and a setting you can
+   flip back should not look like a hard limitation. */
+.cap-disabled {
+  opacity: 0.4;
+  border-style: dashed;
 }
 
 .badge {

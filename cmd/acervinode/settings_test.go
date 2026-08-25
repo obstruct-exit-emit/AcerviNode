@@ -1426,3 +1426,106 @@ func TestLiveSettings_ClearingAKeyLeavesTheProviderRegistered(t *testing.T) {
 		t.Error("clearing the key unregistered the provider; it should stay registered so it can be reconfigured live")
 	}
 }
+
+// TestSetProviderKinds_DisablesAKindLiveAndPersists proves switching a kind
+// off actually unregisters it — routing, polling and the add endpoints all
+// key off the registry, so a kind that stays registered would keep receiving
+// downloads however the config reads.
+func TestSetProviderKinds_DisablesAKindLiveAndPersists(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if registry.Usenet("torbox") == nil {
+		t.Fatal("torbox starts without usenet; every supported kind should be on by default")
+	}
+
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"usenet": false}); err != nil {
+		t.Fatalf("SetProviderKinds() error = %v", err)
+	}
+	if registry.Usenet("torbox") != nil {
+		t.Error("usenet still registered after being switched off")
+	}
+	// Untouched kinds stay exactly as they were.
+	if registry.Torrent("torbox") == nil || registry.WebDL("torbox") == nil {
+		t.Error("switching usenet off disturbed the other kinds")
+	}
+	// The entry itself must survive, or it could never be switched back on.
+	if !s.registryHasEntry("torbox") {
+		t.Error("provider disappeared from the registry entirely")
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if reloaded.Providers["torbox"].KindEnabled("usenet") {
+		t.Error("usenet came back enabled after a reload; the change didn't persist")
+	}
+	if !reloaded.Providers["torbox"].KindEnabled("torrent") {
+		t.Error("torrent was disabled on disk, but only usenet was switched off")
+	}
+
+	// And back on again.
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"usenet": true}); err != nil {
+		t.Fatalf("re-enabling error = %v", err)
+	}
+	if registry.Usenet("torbox") == nil {
+		t.Error("usenet not registered again after being switched back on")
+	}
+}
+
+// TestSetProviderKinds_RefusesAKindTheServiceLacks pins that enabling usenet
+// on AllDebrid fails loudly. Accepting it and doing nothing would leave the
+// operator believing usenet was on for a provider that has never had a
+// usenet service.
+func TestSetProviderKinds_RefusesAKindTheServiceLacks(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, s := setupProviders(cfg, configPath)
+
+	err = s.SetProviderKinds(ctx, "alldebrid", map[string]bool{"usenet": true})
+	if err == nil {
+		t.Fatal("SetProviderKinds() enabling usenet on alldebrid = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "usenet") {
+		t.Errorf("error = %q, want it to name the kind that can't be enabled", err)
+	}
+}
+
+// TestSetProviderKinds_DisablingEveryKindKeepsTheEntry proves a provider with
+// everything switched off is still listed and reconfigurable, rather than
+// vanishing from the settings page with no way back.
+func TestSetProviderKinds_DisablingEveryKindKeepsTheEntry(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"torrent": false, "usenet": false, "webdl": false}); err != nil {
+		t.Fatalf("SetProviderKinds() error = %v", err)
+	}
+	if registry.Torrent("torbox") != nil || registry.Usenet("torbox") != nil || registry.WebDL("torbox") != nil {
+		t.Error("a kind survived being switched off")
+	}
+	found := false
+	for _, n := range registry.Names() {
+		if n == "torbox" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("provider dropped out of Names() with every kind off; it could never be switched back on")
+	}
+}

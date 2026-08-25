@@ -284,6 +284,16 @@ type Settings interface {
 	// ProviderConfigured reports whether the named provider currently holds
 	// credentials. False for a provider that isn't registered at all.
 	ProviderConfigured(name string) bool
+	// ProviderSupportedKinds reports which kinds the provider's *service*
+	// can do at all, regardless of whether they are switched on. Distinct
+	// from what the registry holds, which is the intersection of supported
+	// and enabled — the difference is exactly what lets the UI show "this
+	// service has no usenet" differently from "you turned usenet off".
+	ProviderSupportedKinds(name string) map[string]bool
+	// SetProviderKinds switches kinds on or off for one provider, applying
+	// immediately and persisting. A kind the service doesn't support cannot
+	// be switched on.
+	SetProviderKinds(ctx context.Context, name string, enabled map[string]bool) error
 	// SetProviderAPIKey applies a key to the named provider immediately and
 	// persists it. An empty key clears the provider's credentials, leaving
 	// it registered but unconfigured.
@@ -539,6 +549,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/settings/providers/{name}", s.requireAdmin(s.handleRemoveProvider))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/default", s.requireAdmin(s.handleSetDefaultProvider))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}", s.requireAdmin(s.handleSetProviderAPIKey))
+	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}/kinds", s.requireAdmin(s.handleSetProviderKinds))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/{name}/test", s.requireAdmin(s.handleTestProviderConnection))
 	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAdmin(s.handleGetGeneralSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAdmin(s.handleUpdateGeneralSettings))

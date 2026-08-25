@@ -169,6 +169,9 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
+	supportedKinds   map[string]bool
+	setKinds         map[string]map[string]bool
+	setKindsErr      error
 	defaultProvider  string
 	addedProviders   [][3]string
 	removedProviders []string
@@ -373,6 +376,27 @@ func (f *fakeSettings) Backups() ([]BackupInfo, error) { return f.backups, nil }
 func (f *fakeSettings) ProviderTypes() []string { return []string{testProviderName, "othertype"} }
 
 func (f *fakeSettings) ProviderType(name string) string { return name }
+
+// supportedKinds lets a test say a provider's service lacks a kind, which is
+// what separates "can't" from "switched off" in the settings response.
+// Unset means the fake supports everything, matching TorBox.
+func (f *fakeSettings) ProviderSupportedKinds(string) map[string]bool {
+	if f.supportedKinds != nil {
+		return f.supportedKinds
+	}
+	return map[string]bool{"torrent": true, "usenet": true, "webdl": true}
+}
+
+func (f *fakeSettings) SetProviderKinds(_ context.Context, name string, enabled map[string]bool) error {
+	if f.setKindsErr != nil {
+		return f.setKindsErr
+	}
+	if f.setKinds == nil {
+		f.setKinds = map[string]map[string]bool{}
+	}
+	f.setKinds[name] = enabled
+	return nil
+}
 
 func (f *fakeSettings) AddProvider(_ context.Context, name, providerType, apiKey string) error {
 	if f.addProviderErr != nil {

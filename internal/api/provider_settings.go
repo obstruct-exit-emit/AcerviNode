@@ -11,11 +11,18 @@ type providerSettingResponse struct {
 	// first account; different when one service holds several, which is
 	// what lets the UI offer "another TorBox account" from TorBox's own
 	// card without asking which service it is.
-	Type           string `json:"type"`
-	Configured     bool   `json:"configured"`
-	TorrentCapable bool   `json:"torrent_capable"`
-	UsenetCapable  bool   `json:"usenet_capable"`
-	WebDLCapable   bool   `json:"webdl_capable"`
+	Type       string `json:"type"`
+	Configured bool   `json:"configured"`
+	// *Capable is what the provider's service can do at all. *Enabled is
+	// whether it is switched on here. Enabled is always false when the
+	// matching Capable is, and the two are reported separately so a client
+	// can tell "this service has no usenet" from "usenet is turned off".
+	TorrentCapable bool `json:"torrent_capable"`
+	UsenetCapable  bool `json:"usenet_capable"`
+	WebDLCapable   bool `json:"webdl_capable"`
+	TorrentEnabled bool `json:"torrent_enabled"`
+	UsenetEnabled  bool `json:"usenet_enabled"`
+	WebDLEnabled   bool `json:"webdl_enabled"`
 	// Default marks which provider a new download goes to when nothing says
 	// otherwise — see config.Config.DefaultProvider.
 	Default bool `json:"default"`
@@ -35,13 +42,19 @@ func (s *Server) handleGetProviderSettings(w http.ResponseWriter, r *http.Reques
 	defaultName := s.settings.DefaultProvider()
 	out := []providerSettingResponse{}
 	for _, name := range s.registry.Names() {
+		supported := s.settings.ProviderSupportedKinds(name)
 		out = append(out, providerSettingResponse{
 			Name:           name,
 			Type:           s.settings.ProviderType(name),
 			Configured:     s.settings.ProviderConfigured(name),
-			TorrentCapable: s.registry.Torrent(name) != nil,
-			UsenetCapable:  s.registry.Usenet(name) != nil,
-			WebDLCapable:   s.registry.WebDL(name) != nil,
+			TorrentCapable: supported["torrent"],
+			UsenetCapable:  supported["usenet"],
+			WebDLCapable:   supported["webdl"],
+			// Registered for a kind is precisely "supported and switched
+			// on" — the same condition every add and poll already tests.
+			TorrentEnabled: s.registry.Torrent(name) != nil,
+			UsenetEnabled:  s.registry.Usenet(name) != nil,
+			WebDLEnabled:   s.registry.WebDL(name) != nil,
 			Default:        name == defaultName,
 		})
 	}
@@ -95,6 +108,52 @@ func (s *Server) handleTestProviderConnection(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "latency_ms": latencyMs})
+}
+
+type setProviderKindsRequest struct {
+	Torrent *bool `json:"torrent"`
+	Usenet  *bool `json:"usenet"`
+	WebDL   *bool `json:"webdl"`
+}
+
+// handleSetProviderKinds implements
+// PUT /api/v1/settings/providers/{name}/kinds — switches which kinds a
+// provider handles, live and persisted.
+//
+// Fields are pointers so an omitted kind keeps its current setting rather
+// than being read as false: a client that knows about torrents but not
+// web downloads must not silently switch web downloads off.
+//
+// A disabled kind stops being registered at all, which is the same state a
+// provider with no such service is already in — so routing, polling and the
+// add endpoints need no new cases. Adds of that kind fall through to
+// whichever configured provider still handles it.
+func (s *Server) handleSetProviderKinds(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.providerRegistered(name) {
+		http.Error(w, "unknown provider "+name, http.StatusNotFound)
+		return
+	}
+	var req setProviderKindsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	enabled := map[string]bool{}
+	for kind, want := range map[string]*bool{"torrent": req.Torrent, "usenet": req.Usenet, "webdl": req.WebDL} {
+		if want != nil {
+			enabled[kind] = *want
+		}
+	}
+	if len(enabled) == 0 {
+		http.Error(w, "at least one of torrent, usenet or webdl is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.settings.SetProviderKinds(r.Context(), name, enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type setDefaultProviderRequest struct {

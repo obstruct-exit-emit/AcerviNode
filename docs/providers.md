@@ -122,6 +122,17 @@ interface — a nil `*DynamicTorrentProvider` stored in an interface is not a ni
 interface, and every caller has to decide what to do when a provider isn't
 there.
 
+**A kind can also be switched off deliberately.**
+`providers.<name>.disabled_kinds` (Settings → Provider, or
+`PUT /api/v1/settings/providers/{name}/kinds`) stops a provider registering
+for a kind it does support. The mechanism is the same one AllDebrid's missing
+usenet already uses — no wrapper, so no routing, no polling, no appearance in
+the add endpoints — which is why turning a kind off needs no new cases
+anywhere. Everything supported is on unless you say otherwise. Worth having
+because capability isn't always something you want: two accounts on one
+service can split kinds between them to keep their rate limits apart, and a
+kind you never use is polling you never needed.
+
 **Routing resolves per kind, not globally.** `default_provider` names one
 entry, but `DefaultNameFor(kind)` falls through to the first registered entry
 that supports that kind when the default doesn't. Without the fallback, making

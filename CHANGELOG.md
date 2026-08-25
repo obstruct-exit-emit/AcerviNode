@@ -60,6 +60,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Provider capabilities can be switched on and off per provider.**
+  Settings → Provider now has a "Handles" section with a checkbox per kind,
+  and everything a provider's service supports is on by default — disabling
+  is something you opt into, so no existing install changes behaviour.
+
+  A kind switched off registers no wrapper at all, which is the same state a
+  provider with no such service is already in. That means routing, polling
+  and the add endpoints needed no new cases: adds of that kind fall through
+  to whichever provider still handles it, and the kind stops being polled
+  entirely. Verified live — `torbox/usenet` disappears from
+  `GET /api/v1/status`'s polled providers the moment it's switched off, and
+  returns when switched back on.
+
+  Stored as `providers.<name>.disabled_kinds`, i.e. the *disabled* set, so
+  absent means everything supported is on. That needs no migration and
+  avoids the ambiguity of an empty enabled list, which would have to mean
+  "all" rather than the "none" it reads as.
+
+  Enabling a kind the service doesn't have is refused with `400` rather than
+  accepted and ignored — reporting success would leave you believing usenet
+  was on for a provider that has never had a usenet service.
+
+  New `PUT /api/v1/settings/providers/{name}/kinds`, and
+  `GET /api/v1/settings/providers` now reports `*_enabled` alongside
+  `*_capable` so a client can tell "this service has no usenet" from "usenet
+  is turned off". The header chips show all three states: normal, dashed and
+  faded for switched off, struck through for unsupported.
+
+  Useful for splitting kinds between two accounts on one service to keep
+  their rate limits apart, or dropping polling for a kind you never use.
+
 - **Provider cards show which kinds each provider actually handles.**
   Settings → Provider previously showed only status (Default / Configured),
   so nothing on the page explained why a usenet add never reaches AllDebrid

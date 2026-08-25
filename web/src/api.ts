@@ -281,9 +281,16 @@ export interface ProviderSetting {
   // first account, different when one service holds several.
   type: string
   configured: boolean
+  // *_capable is what the provider's service can do at all; *_enabled is
+  // whether it's switched on here. Enabled is always false when capable is,
+  // and they're separate so the UI can distinguish "this service has no
+  // usenet" from "usenet is turned off".
   torrent_capable: boolean
   usenet_capable: boolean
   webdl_capable: boolean
+  torrent_enabled: boolean
+  usenet_enabled: boolean
+  webdl_enabled: boolean
   // default marks which provider a new download goes to when the add
   // doesn't name one.
   default: boolean
@@ -301,6 +308,22 @@ export function setProviderApiKey(apiKey: string, provider: string, providerKey:
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_key: providerKey }),
+  })
+}
+
+// setProviderKinds switches which kinds one provider handles. Only the
+// kinds passed are changed, so a caller can flip one without restating the
+// rest. A kind the provider's service doesn't have is refused rather than
+// silently ignored.
+export function setProviderKinds(
+  apiKey: string,
+  provider: string,
+  kinds: Partial<Record<'torrent' | 'usenet' | 'webdl', boolean>>,
+): Promise<void> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}/kinds`, apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(kinds),
   })
 }
 
