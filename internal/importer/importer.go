@@ -1847,7 +1847,7 @@ func (im *Importer) ensureWritableDir(dir string) error {
 // in its own running total regardless, via its own boundary update after
 // this returns.
 func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.ProviderDownloadID, f debrid.DownloadFile, destDir string, onProgress func(written int64)) error {
-	destPath, err := safeJoin(destDir, f.Path)
+	destPath, err := safeJoin(destDir, trimRedundantTopDir(f.Path, filepath.Base(destDir)))
 	if err != nil {
 		return err
 	}
@@ -1920,6 +1920,35 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("finalize file: %w", err)
 	}
 	return nil
+}
+
+// trimRedundantTopDir drops a leading directory from a provider-supplied
+// file path when it already matches the directory the files are going into.
+//
+// resolveDestDir ends the destination with the download's own name, and some
+// providers report each file with that same folder in front of it — TorBox's
+// file "name" is "Big Buck Bunny/Big Buck Bunny.mp4" while its "short_name"
+// is just the file. Joining the two applied the folder twice, so a release
+// landed at <category>/<name>/<name>/file rather than the <category>/<name>/file
+// real qBittorrent produces. Sonarr scans content_path recursively so imports
+// still worked, but the layout was wrong, differed between providers for the
+// same torrent, and is the kind of thing that quietly breaks a hardlink or a
+// manual tidy-up later.
+//
+// Only the exact duplicate is removed. A torrent whose top-level folder is
+// genuinely different from the download name keeps it, and a flat file list
+// is untouched — so this normalises the doubled case without flattening any
+// structure a release actually has.
+func trimRedundantTopDir(relPath, destName string) string {
+	if destName == "" || relPath == "" {
+		return relPath
+	}
+	cleaned := strings.TrimPrefix(filepath.ToSlash(relPath), "./")
+	first, rest, found := strings.Cut(cleaned, "/")
+	if !found || rest == "" || first != destName {
+		return relPath
+	}
+	return rest
 }
 
 // safeJoin joins destDir with a provider-supplied relative path, rejecting

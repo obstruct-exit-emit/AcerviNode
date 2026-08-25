@@ -452,6 +452,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A release landed one folder deeper than it should.**
+  `resolveDestDir` already ends the destination with the download's own name,
+  and some providers report each file with that same folder in front of it —
+  TorBox's file `name` is `Big Buck Bunny/Big Buck Bunny.mp4` while its
+  `short_name` is just the file. The two stacked, so a release landed at
+  `<category>/<name>/<name>/file` instead of the `<category>/<name>/file`
+  real qBittorrent produces. Sonarr scans `content_path` recursively so
+  imports still worked, which is why this went unnoticed, but the layout was
+  wrong and differed between providers for the same torrent.
+
+  Only the exact duplicate is dropped: a top-level folder that genuinely
+  differs from the download name is kept, deeper structure is preserved, and
+  a flat file list is untouched. Guarded against turning a contained path
+  into an escaping one.
+
 - **An add could fail against a default provider that had no credentials,
   while a configured one sat unused.** A provider stays registered without a
   key on purpose — that is what lets one be pasted in without a restart — so

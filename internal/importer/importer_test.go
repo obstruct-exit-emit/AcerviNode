@@ -3151,3 +3151,39 @@ func TestLogTickError_SilentDuringShutdown(t *testing.T) {
 		t.Errorf("a shutdown failure was logged as an error: %q", buf.String())
 	}
 }
+
+// TestTrimRedundantTopDir covers the doubled-folder case found during
+// burn-in: the destination already ends with the download's name, and some
+// providers report each file with that same folder in front of it, so the
+// two stacked into <name>/<name>/file.
+func TestTrimRedundantTopDir(t *testing.T) {
+	for _, tc := range []struct {
+		name, relPath, destName, want string
+	}{
+		{"strips the duplicated folder", "Big Buck Bunny/Big Buck Bunny.mp4", "Big Buck Bunny", "Big Buck Bunny.mp4"},
+		{"keeps deeper structure below it", "Rel/Season 1/ep.mkv", "Rel", "Season 1/ep.mkv"},
+		{"leaves a flat file alone", "Big Buck Bunny.mp4", "Big Buck Bunny", "Big Buck Bunny.mp4"},
+		{"leaves a genuinely different folder", "Extras/poster.jpg", "Big Buck Bunny", "Extras/poster.jpg"},
+		{"is not fooled by a partial match", "Big Buck Bunny 2/file.mp4", "Big Buck Bunny", "Big Buck Bunny 2/file.mp4"},
+		{"no destination name", "a/b.mp4", "", "a/b.mp4"},
+		{"empty path", "", "Rel", ""},
+		{"folder only, nothing after it", "Rel/", "Rel", "Rel/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := trimRedundantTopDir(tc.relPath, tc.destName); got != tc.want {
+				t.Errorf("trimRedundantTopDir(%q, %q) = %q, want %q", tc.relPath, tc.destName, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTrimRedundantTopDir_CannotEscape guards the interaction with safeJoin:
+// trimming must never turn a contained path into an escaping one.
+func TestTrimRedundantTopDir_CannotEscape(t *testing.T) {
+	for _, relPath := range []string{"../evil.mp4", "Rel/../../evil.mp4", "Rel/../evil.mp4"} {
+		trimmed := trimRedundantTopDir(relPath, "Rel")
+		if _, err := safeJoin(t.TempDir(), trimmed); err == nil && strings.Contains(trimmed, "..") {
+			t.Errorf("trimmed %q to %q, which safeJoin accepted", relPath, trimmed)
+		}
+	}
+}
