@@ -23,6 +23,9 @@ import (
 // (the extra methods are simply unused in those cases), and add-download
 // tests configure addID/addErr/statusResp/statusErr as needed.
 type fakeProvider struct {
+	// unconfigured leaves the wrapper registered but with no inner
+	// provider, i.e. a provider with no credentials yet.
+	unconfigured bool
 	providerName string
 
 	deleteCalled bool

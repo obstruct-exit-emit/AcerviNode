@@ -305,6 +305,13 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 // Web downloads only, since a magnet or NZB isn't tied to a file host.
 func (s *Server) addWebLink(ctx context.Context, providerName, link string, chosenByCaller bool) (string, debrid.ProviderDownloadID, error) {
 	p := s.registry.WebDL(providerName)
+	if p == nil {
+		// Routing checked this a moment ago, so only a concurrent settings
+		// change gets here — switching web downloads off for this provider,
+		// or removing it outright. Narrow, but calling a method on the nil
+		// wrapper would panic the request rather than answer it.
+		return providerName, "", fmt.Errorf("provider %s no longer handles web downloads", providerName)
+	}
 	id, err := p.AddLink(ctx, link, debrid.AddOptions{})
 	if err == nil || chosenByCaller || !errors.Is(err, debrid.ErrHostNotSupported) {
 		return providerName, id, err

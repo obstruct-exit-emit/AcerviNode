@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ import (
 
 // twoWebDLServer registers two web-download providers so a link one refuses
 // can be tried against the other.
-func twoWebDLServer(t *testing.T, first, second *fakeProvider) (*Server, *database.DB) {
+func twoWebDLServer(t *testing.T, providers ...*fakeProvider) (*Server, *database.DB) {
 	t.Helper()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -25,12 +26,16 @@ func twoWebDLServer(t *testing.T, first, second *fakeProvider) (*Server, *databa
 	t.Cleanup(func() { db.Close() })
 
 	registry := debrid.NewRegistry()
-	for _, p := range []*fakeProvider{first, second} {
+	for _, p := range providers {
 		wd := debrid.NewDynamicWebDownloadProvider(p.providerName)
-		wd.Set(p)
+		// A nil fake stands for a registered-but-unconfigured provider,
+		// which the fallback must skip rather than try.
+		if !p.unconfigured {
+			wd.Set(p)
+		}
 		registry.Register(p.providerName, nil, nil, wd)
 	}
-	registry.SetDefault(first.providerName)
+	registry.SetDefault(providers[0].providerName)
 	return NewServer("dev", db, registry, &fakeSettings{}), db
 }
 
@@ -122,5 +127,89 @@ func TestAddWebDownload_NobodySupportsTheHost(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "alldebrid says no") {
 		t.Errorf("body = %q, want the routed provider's own explanation", body)
+	}
+}
+
+// TestAddWebDownload_FallbackRecordsTheProviderThatAccepted is the one that
+// matters most. Identity here is the (provider, provider_download_id) pair,
+// and every later status poll, link request and delete routes back through
+// it — so a row that names the routed provider while the download actually
+// lives on another would be polled against an account that has never heard
+// of it, then eventually flagged "no longer found in the provider's
+// account". Exactly the cross-provider failure the importer already had.
+func TestAddWebDownload_FallbackRecordsTheProviderThatAccepted(t *testing.T) {
+	refuses := &fakeProvider{providerName: "alldebrid", addErr: fmt.Errorf("no: %w", debrid.ErrHostNotSupported)}
+	accepts := &fakeProvider{providerName: "torbox", addID: "wd-42"}
+	srv, db := twoWebDLServer(t, refuses, accepts)
+
+	rec := postWebDL(t, srv, url.Values{"link": {"https://mediafire.com/file/x"}})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+
+	rows, err := db.ListDownloads(context.Background(), database.KindWebDL)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Provider != "torbox" {
+		t.Errorf("row Provider = %q, want torbox — the row must name whoever actually took it", rows[0].Provider)
+	}
+	if rows[0].ProviderDownloadID != "wd-42" {
+		t.Errorf("row ProviderDownloadID = %q, want the id the accepting provider returned", rows[0].ProviderDownloadID)
+	}
+}
+
+// TestAddWebDownload_FallbackSkipsUnconfiguredProviders proves a registered
+// but keyless provider isn't tried. It would fail with ErrNoProvider, which
+// isn't a host error, so treating it as a candidate would abort the search
+// and report "no provider configured" instead of trying the one that works.
+func TestAddWebDownload_FallbackSkipsUnconfiguredProviders(t *testing.T) {
+	refuses := &fakeProvider{providerName: "alldebrid", addErr: fmt.Errorf("no: %w", debrid.ErrHostNotSupported)}
+	keyless := &fakeProvider{providerName: "premiumize", unconfigured: true}
+	accepts := &fakeProvider{providerName: "torbox", addID: "wd-7"}
+	srv, _ := twoWebDLServer(t, refuses, keyless, accepts)
+
+	rec := postWebDL(t, srv, url.Values{"link": {"https://mediafire.com/file/x"}})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 — an unconfigured provider should be skipped, not abort the search: %s", rec.Code, rec.Body.String())
+	}
+	if accepts.addedLink == "" {
+		t.Error("the configured fallback provider was never reached")
+	}
+}
+
+// TestAddWebDownload_FallbackWalksPastSeveralRefusals proves the search
+// continues rather than giving up after one alternative.
+func TestAddWebDownload_FallbackWalksPastSeveralRefusals(t *testing.T) {
+	a := &fakeProvider{providerName: "a", addErr: fmt.Errorf("no: %w", debrid.ErrHostNotSupported)}
+	b := &fakeProvider{providerName: "b", addErr: fmt.Errorf("no: %w", debrid.ErrHostNotSupported)}
+	c := &fakeProvider{providerName: "c", addID: "wd-3"}
+	srv, _ := twoWebDLServer(t, a, b, c)
+
+	rec := postWebDL(t, srv, url.Values{"link": {"https://host/x"}})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if b.addedLink == "" || c.addedLink == "" {
+		t.Error("the search stopped early instead of walking every candidate")
+	}
+}
+
+// TestAddWebDownload_SingleProviderDoesNotLoop guards the degenerate case:
+// with nothing to fall back to, the original refusal is reported once and
+// the provider is not retried.
+func TestAddWebDownload_SingleProviderDoesNotLoop(t *testing.T) {
+	only := &fakeProvider{providerName: "alldebrid", addErr: fmt.Errorf("alldebrid says no: %w", debrid.ErrHostNotSupported)}
+	srv, _ := twoWebDLServer(t, only)
+
+	rec := postWebDL(t, srv, url.Values{"link": {"https://mediafire.com/file/x"}})
+	if rec.Code == http.StatusCreated {
+		t.Fatalf("status = 201, want a failure with only an unsupported provider configured")
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "alldebrid says no") {
+		t.Errorf("body = %q, want the provider's own explanation", body)
 	}
 }
