@@ -213,3 +213,46 @@ func TestAddWebDownload_SingleProviderDoesNotLoop(t *testing.T) {
 		t.Errorf("body = %q, want the provider's own explanation", body)
 	}
 }
+
+// TestTorrentInfo_FallsBackToAProviderThatSupportsIt proves the metadata
+// preview isn't hostage to which provider happens to be default.
+//
+// A magnet's name, size and file list are properties of the torrent, not of
+// an account, so any provider offering the lookup answers the same. Asking
+// only the default meant the "+ Add" preview stopped working whenever the
+// default was a provider without the feature — AllDebrid has no equivalent
+// of TorBox's torrentinfo — with a capable provider configured beside it.
+// Observed live: identical request, different answer, purely from which
+// provider was default.
+func TestTorrentInfo_FallsBackToAProviderThatSupportsIt(t *testing.T) {
+	noPreview := &fakeProvider{providerName: "alldebrid", torrentInfoErr: debrid.ErrTorrentInfoUnsupported}
+	hasPreview := &fakeProvider{providerName: "torbox", torrentInfoResp: debrid.TorrentInfo{Name: "Some Release", SizeBytes: 42}}
+
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	registry := debrid.NewRegistry()
+	for _, p := range []*fakeProvider{noPreview, hasPreview} {
+		td := debrid.NewDynamicTorrentProvider(p.providerName)
+		td.Set(p)
+		registry.Register(p.providerName, td, nil, nil)
+	}
+	registry.SetDefault("alldebrid")
+	srv := NewServer("dev", db, registry, &fakeSettings{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/downloads/torrent/info?hash=abc", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var got map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got["available"] != true {
+		t.Fatalf("available = %v, want true — the capable provider should have answered: %s", got["available"], rec.Body.String())
+	}
+	if got["name"] != "Some Release" {
+		t.Errorf("name = %v, want the capable provider's answer", got["name"])
+	}
+}

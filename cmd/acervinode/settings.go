@@ -330,10 +330,15 @@ func (s *liveSettings) SetDefaultProvider(name string) error {
 	defer s.mu.Unlock()
 
 	s.registry.SetDefault(name)
+	previous := s.cfg.DefaultProvider
 	s.cfg.DefaultProvider = name
 	if err := s.cfg.Save(s.configPath); err != nil {
 		return fmt.Errorf("persist config: %w", err)
 	}
+	// Logged like every other settings mutation. This one decides where new
+	// downloads go, and its absence was noticed the awkward way: a default
+	// that had changed, with nothing in the log to say when or from what.
+	slog.Info("api: default provider changed", "provider", name, "previous", previous)
 	return nil
 }
 

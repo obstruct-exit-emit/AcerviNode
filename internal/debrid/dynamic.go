@@ -39,6 +39,14 @@ var ErrRateLimited = errors.New("debrid: provider rate limit exceeded")
 // file host, so no other kind can produce this.
 var ErrHostNotSupported = errors.New("debrid: provider does not support this file host")
 
+// ErrTorrentInfoUnsupported marks a provider that offers no metadata preview
+// at all, as opposed to one that tried and failed. Callers use it to keep
+// looking: a torrent's name, size and files are properties of the torrent,
+// not of an account, so any provider offering the lookup answers the same —
+// and a provider that simply lacks the feature has said nothing about the
+// torrent.
+var ErrTorrentInfoUnsupported = errors.New("debrid: provider does not support torrent info previews")
+
 // DynamicTorrentProvider implements TorrentProvider by delegating to
 // whichever provider is currently set, so it can be swapped at runtime (see
 // the settings API in internal/api) without restarting the process or
@@ -209,7 +217,7 @@ func (d *DynamicTorrentProvider) TorrentInfo(ctx context.Context, hash string) (
 	}
 	tip, ok := p.(TorrentInfoProvider)
 	if !ok {
-		return TorrentInfo{}, fmt.Errorf("debrid: provider %q does not support torrent info previews", d.name)
+		return TorrentInfo{}, fmt.Errorf("%q: %w", d.name, ErrTorrentInfoUnsupported)
 	}
 	return tip.TorrentInfo(ctx, hash)
 }
