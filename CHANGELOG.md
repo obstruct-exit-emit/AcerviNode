@@ -452,6 +452,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **An add could fail against a default provider that had no credentials,
+  while a configured one sat unused.** A provider stays registered without a
+  key on purpose — that is what lets one be pasted in without a restart — so
+  `DefaultNameFor`, which asks "is this registered for the kind", happily
+  returned a provider that could only fail. Measured before changing it: with
+  an unconfigured default and a configured provider beside it, an add
+  returned `503` and the working provider was never tried.
+
+  Routing now prefers a provider that actually holds credentials. Contained
+  to `resolveAddProvider`: `DefaultNameFor` has fourteen callers and some
+  aren't routing at all — both compat shims use it to *key cached live
+  status* for rows with no provider recorded — so changing it would have
+  quietly re-keyed those lookups.
+
+  `default_provider` is deliberately left where the operator put it, and the
+  compensation is logged rather than silent. When the default is reset or
+  removed, the UI now asks which provider should take over instead of
+  guessing: resetting to re-key a provider and resetting to abandon it look
+  identical from the outside and want opposite handling, so that one
+  ambiguous moment gets a question. Declining is a real choice — adds keep
+  falling through meanwhile.
+
 - **A deployed UI change could stay invisible in the browser.** The frontend
   was served with no cache headers at all, so browsers applied heuristic
   caching to `index.html` — the one file whose contents change at a fixed

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import ChooseDefaultDialog from './ChooseDefaultDialog'
 import {
   getCategories,
   getGeneralSettings,
@@ -184,6 +185,9 @@ export function Settings({ apiKey }: Props) {
   // Expanded per provider, not one flag for the whole tab: each provider is
   // its own card, the same shape the single TorBox card always had.
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({})
+  // Set when the default provider has just been reset or removed, so the
+  // one genuinely ambiguous moment gets a question instead of a guess.
+  const [chooseDefaultFor, setChooseDefaultFor] = useState<{ name: string; reason: 'reset' | 'removed' } | null>(null)
   const [settings, setSettings] = useState<ProviderSetting[] | null>(null)
   // Keyed by provider name: with more than one configured, each card needs
   // its own draft key, save state and test result, or typing into one would
@@ -507,10 +511,12 @@ export function Settings({ apiKey }: Props) {
       return
     setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
     try {
+      const wasDefault = providers.find((p) => p.name === provider)?.default ?? false
       await resetProvider(apiKey, provider)
       setStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
       setTestStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
       await load()
+      if (wasDefault) setChooseDefaultFor({ name: provider, reason: 'reset' })
     } catch (err) {
       setStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
     }
@@ -524,8 +530,10 @@ export function Settings({ apiKey }: Props) {
     )
       return
     try {
+      const wasDefault = providers.find((p) => p.name === provider)?.default ?? false
       await removeProvider(apiKey, provider)
       await load()
+      if (wasDefault) setChooseDefaultFor({ name: provider, reason: 'removed' })
     } catch (err) {
       setAddProviderStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
@@ -792,6 +800,31 @@ export function Settings({ apiKey }: Props) {
 
       {group === 'Provider' && (
         <>
+          {/* Only asked when the default was just vacated and something
+              else could take it — a single-provider instance has no choice
+              to offer, and a fully unconfigured one has nothing usable to
+              point at. */}
+          {chooseDefaultFor &&
+            (() => {
+              const candidates = providers.filter((p) => p.name !== chooseDefaultFor.name && p.configured)
+              if (candidates.length === 0) {
+                setChooseDefaultFor(null)
+                return null
+              }
+              return (
+                <ChooseDefaultDialog
+                  vacated={chooseDefaultFor.name}
+                  reason={chooseDefaultFor.reason}
+                  candidates={candidates}
+                  label={providerLabel}
+                  onKeep={() => setChooseDefaultFor(null)}
+                  onChoose={async (name) => {
+                    setChooseDefaultFor(null)
+                    await handleMakeDefault(name)
+                  }}
+                />
+              )
+            })()}
           {providers.map((p) => {
             const saveState = status[p.name] ?? { kind: 'idle' as const }
             const test = testStatus[p.name] ?? { kind: 'idle' as const }

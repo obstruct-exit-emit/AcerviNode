@@ -55,16 +55,77 @@ func (s *Server) resolveAddedVia(r *http.Request) (database.AddedVia, error) {
 // qBittorrent nor the SABnzbd protocol has a field to carry it — they
 // always use the default.
 func (s *Server) resolveAddProvider(r *http.Request, kind database.Kind) (string, error) {
-	name := r.FormValue("provider")
-	if name == "" {
-		// Per kind, not the bare default: the default provider is one
-		// setting across every kind, and it may not support this one.
-		name = s.registry.DefaultNameFor(debrid.Kind(kind))
+	if name := r.FormValue("provider"); name != "" {
+		if s.providerNamed(name, kind) == nil {
+			return "", fmt.Errorf("no %s-capable provider named %q is configured", kind, name)
+		}
+		return name, nil
 	}
+
+	// Per kind, not the bare default: the default provider is one setting
+	// across every kind, and it may not support this one.
+	name := s.registry.DefaultNameFor(debrid.Kind(kind))
 	if s.providerNamed(name, kind) == nil {
 		return "", fmt.Errorf("no %s-capable provider named %q is configured", kind, name)
 	}
+	if configured := s.configuredProviderFor(name, kind); configured != name {
+		slog.Info("api: default provider has no credentials, adding through another",
+			"kind", kind, "default", name, "used", configured)
+		return configured, nil
+	}
 	return name, nil
+}
+
+// configuredProviderFor returns name if it actually holds credentials, or
+// the first provider for this kind that does.
+//
+// Registration and configuration are separate on purpose: a provider stays
+// registered with no key so one can be pasted in without a restart. That is
+// what makes the default resolvable while being unusable — DefaultNameFor
+// asks "is this registered for the kind", which an empty provider passes,
+// so the search stopped at a provider that could only fail. Measured before
+// changing it: with an unconfigured default and a configured provider beside
+// it, an add returned 503 and the working provider was never tried.
+//
+// Only applies when routing chose the provider. A caller who named one is
+// answered as they asked, including the failure — see resolveAddProvider.
+//
+// The default itself is deliberately left alone rather than repointed. It is
+// a setting the operator made, this is a temporary state they may be halfway
+// through fixing, and the moment a key is set everything resolves back on
+// its own with nothing to undo. The mismatch is surfaced on the provider
+// card instead, where it prompts either re-keying or choosing a new default.
+func (s *Server) configuredProviderFor(name string, kind database.Kind) string {
+	// Asks the registry's own wrappers rather than downloadProvider, which
+	// is deliberately narrow — holding credentials isn't something the add
+	// path needs from a provider, only something routing needs to know
+	// about one.
+	configured := func(n string) bool {
+		switch kind {
+		case database.KindTorrent:
+			p := s.registry.Torrent(n)
+			return p != nil && p.Configured()
+		case database.KindUsenet:
+			p := s.registry.Usenet(n)
+			return p != nil && p.Configured()
+		case database.KindWebDL:
+			p := s.registry.WebDL(n)
+			return p != nil && p.Configured()
+		}
+		return false
+	}
+	if configured(name) {
+		return name
+	}
+	for _, candidate := range s.registry.Names() {
+		if candidate != name && configured(candidate) {
+			return candidate
+		}
+	}
+	// Nothing is configured. Keep the original so the caller gets the same
+	// "no provider configured" answer they always did, naming the provider
+	// they'd expect.
+	return name
 }
 
 // providerNamed resolves one provider's handling of one kind, or nil if

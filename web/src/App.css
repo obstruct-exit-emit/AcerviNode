@@ -466,6 +466,26 @@
   text-decoration: underline;
 }
 
+/* Narrower than the download detail panel it borrows its chrome from: this
+   asks one short question and shouldn't fill the screen to do it. */
+.choose-default-panel {
+  max-width: 460px;
+}
+
+.choose-default-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.choose-default-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
 .provider-actions {
   display: flex;
   flex-wrap: wrap;

@@ -281,6 +281,21 @@ the host, the error is the routed provider's own explanation.
 Torrents and usenet can't hit this: a magnet or an NZB isn't tied to a file
 host.
 
+**An add never routes to a provider with no credentials while a configured
+one is available.** The default is resolvable whether or not it holds a key —
+a provider stays registered with none precisely so one can be pasted in
+without a restart — so routing used to stop at a default that could only
+fail. Measured before changing it: with an unconfigured default and a
+configured provider beside it, an add returned `503` and the working provider
+was never tried.
+
+The default itself is deliberately **not** repointed. It is a setting the
+operator made, this is usually a temporary state they are halfway through
+fixing, and everything resolves back on its own the moment a key is set —
+with nothing to undo. The compensation is logged, and the provider card shows
+the mismatch. Only applies when routing chose the provider; a `provider` you
+named is answered as asked, including its failure.
+
 **`provider` (optional): choose which configured provider gets the
 download.** Names an entry from `GET /api/v1/providers`; omitted, the
 download goes to the configured default (`default_provider` in
