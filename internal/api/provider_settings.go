@@ -156,6 +156,35 @@ func (s *Server) handleSetProviderKinds(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleResetProvider implements
+// POST /api/v1/settings/providers/{name}/reset — puts one provider back to
+// how it looks before anything has been configured: credentials cleared,
+// every kind its service supports switched back on.
+//
+// Distinct from DELETE, and the distinction is the point. For a provider
+// this build knows about, "remove" was always a slight lie: the entry is
+// deleted, but the provider is rebuilt from the known list on the next start
+// and the card reappears empty. Reset says what that actually does. DELETE
+// remains the honest answer for a second account, which really can be
+// removed because nothing recreates it.
+//
+// Deliberately leaves default_provider alone. Which provider new downloads
+// go to is a decision about the instance rather than a property of this
+// provider, and silently moving it would change where downloads land as a
+// side effect of tidying one entry.
+func (s *Server) handleResetProvider(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.providerRegistered(name) {
+		http.Error(w, "unknown provider "+name, http.StatusNotFound)
+		return
+	}
+	if err := s.settings.ResetProvider(r.Context(), name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type setDefaultProviderRequest struct {
 	Provider string `json:"provider"`
 }

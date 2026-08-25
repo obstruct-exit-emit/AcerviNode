@@ -932,6 +932,55 @@ func (s *liveSettings) registryHasEntry(name string) bool {
 	return false
 }
 
+// ResetProvider returns one provider to its unconfigured state: no
+// credentials, every supported kind enabled again. The entry stays, so the
+// provider remains listed and routable once a key is set.
+//
+// Everything is applied through the same paths a normal edit uses —
+// re-registering with all kinds enabled, then persisting — so there is no
+// second way for a provider to reach this state that could drift from the
+// first.
+func (s *liveSettings) ResetProvider(ctx context.Context, name string) error {
+	s.mu.Lock()
+	entry, exists := s.cfg.Providers[name]
+	resolved := entry.ResolvedType(name)
+	registered := s.registryHasEntry(name)
+	s.mu.Unlock()
+
+	if !exists && !registered {
+		return fmt.Errorf("unknown provider %s", name)
+	}
+
+	// Clearing the key already re-registers the provider and persists, and
+	// keeps the entry rather than deleting it — see SetProviderAPIKey.
+	if err := s.SetProviderAPIKey(ctx, name, ""); err != nil {
+		return err
+	}
+
+	// Then hand every kind the service supports back. Passing the supported
+	// set explicitly rather than "everything" so a kind the provider has
+	// never had stays off, which SetProviderKinds would refuse anyway.
+	caps := knownProviderCapabilities[resolved]
+	enabled := map[string]bool{}
+	if caps.torrent {
+		enabled["torrent"] = true
+	}
+	if caps.usenet {
+		enabled["usenet"] = true
+	}
+	if caps.webdl {
+		enabled["webdl"] = true
+	}
+	if len(enabled) == 0 {
+		return nil
+	}
+	if err := s.SetProviderKinds(ctx, name, enabled); err != nil {
+		return err
+	}
+	slog.Info("api: provider reset to its unconfigured state", "provider", name)
+	return nil
+}
+
 // AddProvider registers a new provider entry live and persists it.
 //
 // name is the entry, providerType is the implementation. They are separate

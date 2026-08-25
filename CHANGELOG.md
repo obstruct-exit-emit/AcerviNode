@@ -60,6 +60,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **"Reset provider" replaces "Remove provider" for the providers this build
+  knows about.** Removing one was always a slight lie: the config entry went,
+  but the provider was rebuilt from the known list on the next start and the
+  card reappeared unconfigured. The button now says what actually happens.
+
+  New `POST /api/v1/settings/providers/{name}/reset` clears the credentials
+  and switches every supported kind back on, keeping the entry so the
+  provider stays listed and can be set up again. It deliberately leaves
+  `default_provider` alone — which provider new downloads go to is a decision
+  about the instance, not a property of the one being tidied.
+
+  `DELETE` is still offered, but only where it is truthful: a second account
+  exists solely in config, so removing it really removes it. That card now
+  reads "Remove account".
+
 - **A web download whose file host the routed provider can't handle now
   falls through to one that can.** Kind-level routing picks a provider before
   the add and has no idea which hoster a link points at, so an add could fail

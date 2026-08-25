@@ -1647,3 +1647,115 @@ func TestDefaultProviderWithEveryKindDisabled(t *testing.T) {
 		t.Errorf("DefaultNameFor(usenet) = %q, want empty — no provider handles usenet", got)
 	}
 }
+
+// TestResetProvider_ClearsTheKeyAndRestoresEveryKind proves reset returns a
+// provider to exactly the state a fresh install leaves it in.
+//
+// This is what the UI offers instead of "remove" for a provider this build
+// knows about, where removing was always a slight lie: the entry went, but
+// the provider was rebuilt from the known list on the next start and the
+// card came back empty. Reset does that honestly, and in one step.
+func TestResetProvider_ClearsTheKeyAndRestoresEveryKind(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderAPIKey(ctx, "torbox", "a-real-key"); err != nil {
+		t.Fatalf("SetProviderAPIKey() error = %v", err)
+	}
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"usenet": false, "webdl": false}); err != nil {
+		t.Fatalf("SetProviderKinds() error = %v", err)
+	}
+
+	if err := s.ResetProvider(ctx, "torbox"); err != nil {
+		t.Fatalf("ResetProvider() error = %v", err)
+	}
+
+	if s.ProviderConfigured("torbox") {
+		t.Error("still configured after reset; the key should be gone")
+	}
+	for _, kind := range []string{"torrent", "usenet", "webdl"} {
+		if !cfg.Providers["torbox"].KindEnabled(kind) {
+			t.Errorf("%s still disabled after reset", kind)
+		}
+	}
+	if registry.Torrent("torbox") == nil || registry.Usenet("torbox") == nil || registry.WebDL("torbox") == nil {
+		t.Error("a kind was not re-registered, so the provider can't be used again without a restart")
+	}
+	// The entry has to survive, or the provider drops off the settings page
+	// and there is nowhere to put a key back.
+	if !s.registryHasEntry("torbox") {
+		t.Error("provider left the registry entirely")
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if reloaded.Providers["torbox"].APIKey != "" {
+		t.Error("the key survived on disk")
+	}
+	if len(reloaded.Providers["torbox"].DisabledKinds) != 0 {
+		t.Errorf("disabled kinds survived on disk: %v", reloaded.Providers["torbox"].DisabledKinds)
+	}
+}
+
+// TestResetProvider_LeavesTheDefaultAlone pins that tidying one provider
+// doesn't quietly move where new downloads go. Which provider is default is
+// a decision about the instance, not a property of the provider being reset.
+func TestResetProvider_LeavesTheDefaultAlone(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderAPIKey(ctx, "torbox", "k"); err != nil {
+		t.Fatalf("SetProviderAPIKey() error = %v", err)
+	}
+	if err := s.SetDefaultProvider("torbox"); err != nil {
+		t.Fatalf("SetDefaultProvider() error = %v", err)
+	}
+	if err := s.ResetProvider(ctx, "torbox"); err != nil {
+		t.Fatalf("ResetProvider() error = %v", err)
+	}
+	if got := s.DefaultProvider(); got != "torbox" {
+		t.Errorf("DefaultProvider() = %q after resetting it, want it left alone", got)
+	}
+}
+
+// TestResetProvider_SecondAccountKeepsItsType guards the case reset must not
+// break: a second account's type lives only in its config entry, and losing
+// it would leave an entry that resolves to no known provider at all.
+func TestResetProvider_SecondAccountKeepsItsType(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.Providers = map[string]config.ProviderConfig{
+		"torbox-work": {APIKey: "k", Type: "torbox", DisabledKinds: []string{"usenet"}},
+	}
+	_, s := setupProviders(cfg, configPath)
+
+	if err := s.ResetProvider(ctx, "torbox-work"); err != nil {
+		t.Fatalf("ResetProvider() error = %v", err)
+	}
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if got := reloaded.Providers["torbox-work"].ResolvedType("torbox-work"); got != "torbox" {
+		t.Errorf("ResolvedType() = %q after reset, want torbox", got)
+	}
+	if !reloaded.Providers["torbox-work"].KindEnabled("usenet") {
+		t.Error("usenet still disabled after reset")
+	}
+}

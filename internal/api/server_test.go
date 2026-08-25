@@ -172,6 +172,8 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
+	resetProviders   []string
+	resetErr         error
 	supportedKinds   map[string]bool
 	setKinds         map[string]map[string]bool
 	setKindsErr      error
@@ -388,6 +390,14 @@ func (f *fakeSettings) ProviderSupportedKinds(string) map[string]bool {
 		return f.supportedKinds
 	}
 	return map[string]bool{"torrent": true, "usenet": true, "webdl": true}
+}
+
+func (f *fakeSettings) ResetProvider(_ context.Context, name string) error {
+	if f.resetErr != nil {
+		return f.resetErr
+	}
+	f.resetProviders = append(f.resetProviders, name)
+	return nil
 }
 
 func (f *fakeSettings) SetProviderKinds(_ context.Context, name string, enabled map[string]bool) error {

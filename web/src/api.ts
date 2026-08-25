@@ -327,6 +327,13 @@ export function setProviderKinds(
   })
 }
 
+// resetProvider returns a provider to its unconfigured state: credentials
+// cleared, every supported kind switched back on, the entry itself kept so
+// it stays listed and can be set up again.
+export function resetProvider(apiKey: string, provider: string): Promise<void> {
+  return request(`/api/v1/settings/providers/${encodeURIComponent(provider)}/reset`, apiKey, { method: 'POST' })
+}
+
 // getProviderTypes lists the implementations this build can construct. A
 // provider's name is free text; its type is not — the two differ when one
 // service holds more than one account.

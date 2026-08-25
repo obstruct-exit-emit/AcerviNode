@@ -16,6 +16,7 @@ import {
   setCategoryPath,
   setProviderApiKey,
   setProviderKinds,
+  resetProvider,
   setDefaultProvider,
   testProviderConnection,
   updateGeneralSettings,
@@ -493,6 +494,28 @@ export function Settings({ apiKey }: Props) {
     }
   }
 
+  // Offered instead of removal for a provider this build knows about, where
+  // "remove" was always a slight lie — the entry goes, but the provider is
+  // rebuilt from the known list on the next start and the card comes back
+  // empty. Reset does that honestly and in one step.
+  async function handleResetProvider(provider: string) {
+    if (
+      !confirm(
+        `Reset ${providerLabel(provider)}? Its API key is cleared and every capability switched back on, as if it had never been set up. Downloads already tracked against it are kept.`,
+      )
+    )
+      return
+    setStatus((s) => ({ ...s, [provider]: { kind: 'saving' } }))
+    try {
+      await resetProvider(apiKey, provider)
+      setStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
+      setTestStatus((s) => ({ ...s, [provider]: { kind: 'idle' } }))
+      await load()
+    } catch (err) {
+      setStatus((s) => ({ ...s, [provider]: { kind: 'error', message: err instanceof ApiError ? err.message : String(err) } }))
+    }
+  }
+
   async function handleRemoveProvider(provider: string) {
     if (
       !confirm(
@@ -932,9 +955,20 @@ export function Settings({ apiKey }: Props) {
                           <button type="button" className="test-connection-btn" onClick={() => handleClearProviderKey(p.name)}>
                             Clear key
                           </button>
-                          <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
-                            Remove provider
-                          </button>
+                          {/* A second account exists only in config, so
+                              removing it really removes it. A provider this
+                              build knows about is rebuilt on the next start
+                              whatever we do, so the honest offer there is a
+                              reset. */}
+                          {p.name === p.type ? (
+                            <button type="button" className="test-connection-btn" onClick={() => handleResetProvider(p.name)}>
+                              Reset provider
+                            </button>
+                          ) : (
+                            <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
+                              Remove account
+                            </button>
+                          )}
                         </div>
                         {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}

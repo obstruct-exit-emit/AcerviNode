@@ -290,6 +290,10 @@ type Settings interface {
 	// and enabled — the difference is exactly what lets the UI show "this
 	// service has no usenet" differently from "you turned usenet off".
 	ProviderSupportedKinds(name string) map[string]bool
+	// ResetProvider returns one provider to how it looks before anything is
+	// configured: no credentials, every supported kind enabled. The entry
+	// itself stays, so the provider is still listed and can be set up again.
+	ResetProvider(ctx context.Context, name string) error
 	// SetProviderKinds switches kinds on or off for one provider, applying
 	// immediately and persisting. A kind the service doesn't support cannot
 	// be switched on.
@@ -550,6 +554,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/default", s.requireAdmin(s.handleSetDefaultProvider))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}", s.requireAdmin(s.handleSetProviderAPIKey))
 	s.mux.HandleFunc("PUT /api/v1/settings/providers/{name}/kinds", s.requireAdmin(s.handleSetProviderKinds))
+	s.mux.HandleFunc("POST /api/v1/settings/providers/{name}/reset", s.requireAdmin(s.handleResetProvider))
 	s.mux.HandleFunc("POST /api/v1/settings/providers/{name}/test", s.requireAdmin(s.handleTestProviderConnection))
 	s.mux.HandleFunc("GET /api/v1/settings/general", s.requireAdmin(s.handleGetGeneralSettings))
 	s.mux.HandleFunc("PUT /api/v1/settings/general", s.requireAdmin(s.handleUpdateGeneralSettings))
