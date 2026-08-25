@@ -21,6 +21,30 @@ whenever you actually want a real binary to run or deploy (not just the
 `go run` loop above, which serves the frontend from `web/dist` the same way
 either way).
 
+### How the frontend is served, and why a deploy reaches the browser
+
+`web.Handler` serves the embedded `dist/` with two different caching rules,
+and the split is what makes a deploy actually arrive:
+
+- **`index.html` and client-side routes**: `Cache-Control: no-cache`. It is
+  the only file whose contents change at a fixed URL, and it is what points
+  at the current fingerprinted bundle. `no-cache` still allows a conditional
+  request, so an unchanged index costs a 304 rather than a full download.
+- **`assets/*`**: `max-age=31536000, immutable`. Vite changes their name
+  whenever their contents change, so a cached copy can never be wrong — and
+  without this every navigation re-downloads the whole bundle.
+
+A missing asset is a `404`, not the SPA fallback. Answering
+`/assets/index-OLDHASH.js` with `index.html` hands the browser HTML under a
+JavaScript name: it fails on a MIME mismatch rather than saying the file is
+gone, which is the wrong answer for a stale page and hides the one signal
+telling a client its index is out of date. Paths without a file extension
+still fall back to the app, so deep links and hard refreshes work.
+
+This was found the hard way: served with no cache headers at all, browsers
+applied heuristic caching to `index.html`, and a deployed UI change stayed
+invisible in the browser while being demonstrably live on the server.
+
 Frontend-only iteration (Node 22+):
 
 ```sh
