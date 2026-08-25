@@ -1641,9 +1641,34 @@ usenet download added by file upload rather than URL has no link to hash at
 all, so its own check-cached endpoint only ever accepts a URL, matching the
 "+ Add" form's own `url`/`link` fields exactly.
 
+**A preview asks the default provider and only that one.** It briefly fell
+back to any provider that could answer, so with a preview-less provider as
+default the lookup went to whichever one had the feature. The reasoning —
+that a magnet's name and files belong to the torrent rather than an account —
+is true of the data and beside the point: the *query* still goes to a
+specific service, which then learns a hash you were about to hand to someone
+else, and nothing in the response said so.
+
+That is a different trade from the add fallbacks in
+[Multiple providers](#multiple-providers-debridregistry), which are kept.
+Those stop a download failing outright and surface as a download visibly
+filed under whoever accepted it. This one only saved a preview panel and
+crossed providers invisibly. The general rule this leaves: cross-provider
+behaviour needs to prevent a real failure *and* leave a visible trace.
+
+There is no override to cross deliberately either. One was added and removed
+the same night — nothing called it, and it made the separation a weaker rule
+for the sake of a caller that did not exist. A preview a provider can't give
+is a preview you don't get.
+
 **`torrentinfo` needs no API key at all** — confirmed live and matches
 TorBox's own docs ("Authorization: None required"); AcerviNode sends its key
-anyway for consistency with every other call, harmless either way. A torrent
+anyway for consistency with every other call. Not quite harmless either way,
+though: sending it attributes the lookup to the account, where the endpoint
+would otherwise not know whose it was. That costs nothing now the query only
+ever goes to the provider you are already using, and it is worth knowing
+before anyone reintroduces a cross-provider lookup on the grounds that
+previews are cheap. A torrent
 TorBox can't find enough peers for within its own search window comes back a
 plain HTTP `500` with a real `detail` message (surfaced through the exact
 same `doGet`/`checkSuccess` error path as everything else), not a `200` with
