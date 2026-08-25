@@ -706,12 +706,10 @@ table.downloads tbody tr:hover {
   line-height: 1.4;
 }
 
-/* The default provider earns a little more weight than the other chips
-   without becoming a coloured pill again — it is the one status here that
-   changes where a download actually goes. */
+/* Same outline as every other chip; only the text carries the extra weight.
+   A brighter border made it read as selected rather than merely notable. */
 .cap-default {
   color: var(--text);
-  border-color: var(--text-muted);
 }
 
 /* Still needs to read as "act on me", unlike the neutral chips around it. */
