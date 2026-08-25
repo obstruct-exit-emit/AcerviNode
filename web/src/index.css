@@ -13,6 +13,14 @@
   --state-ready: #1f9d55;
   --state-error: #d64545;
 
+  /* Per-kind hues for the provider chips. Distinct from the state colours
+     above so a capability never reads as a status, and chosen to stay legible
+     on both the light and dark backgrounds — like the state colours, these
+     are deliberately not redefined per theme. */
+  --kind-torrent: #3b82f6;
+  --kind-usenet: #14b8a6;
+  --kind-webdl: #a78bfa;
+
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 

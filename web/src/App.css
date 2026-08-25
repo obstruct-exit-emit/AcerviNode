@@ -752,31 +752,55 @@ table.downloads tbody tr:hover {
 
 /* Capability chips sit alongside the status badges but must not compete
    with them: status is a coloured pill, capability is quiet outlined text. */
+/* Shape is fixed here and never varies: colour is applied only through
+   --cap-tint, so every chip keeps the same size, radius and weight whatever
+   it is saying. The faint background is a mix rather than a solid, so these
+   stay chips rather than turning into the filled badges they replaced. */
 .cap {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 4px;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
+  border: 1px solid var(--cap-tint, var(--border));
+  color: var(--cap-tint, var(--text-muted));
+  background: color-mix(in srgb, var(--cap-tint, transparent) 12%, transparent);
   white-space: nowrap;
   line-height: 1.4;
 }
 
-/* Same outline as every other chip; only the text carries the extra weight.
-   A brighter border made it read as selected rather than merely notable. */
-.cap-default {
-  color: var(--text);
+/* Each kind gets its own hue so they can be scanned across cards at a
+   glance, rather than every chip reading as the same grey. */
+.cap-torrent {
+  --cap-tint: var(--kind-torrent);
 }
 
-/* Still needs to read as "act on me", unlike the neutral chips around it. */
+.cap-usenet {
+  --cap-tint: var(--kind-usenet);
+}
+
+.cap-webdl {
+  --cap-tint: var(--kind-webdl);
+}
+
+/* Configured is a status, not a capability, so it takes a state colour. */
+.cap-configured {
+  --cap-tint: var(--state-ready);
+}
+
+/* The default provider is where downloads actually go, so it takes the
+   accent rather than a state colour — this is a choice, not a condition. */
+.cap-default {
+  --cap-tint: var(--accent);
+}
+
+/* Still needs to read as "act on me", unlike the chips around it. */
 .cap-unset {
-  color: var(--state-fetching);
-  border-color: var(--state-fetching);
+  --cap-tint: var(--state-fetching);
 }
 
 /* A kind the provider has no service for. Struck rather than hidden, so
    "doesn't support this" can't be mistaken for "didn't load". */
 .cap-off {
+  --cap-tint: var(--text-muted);
   opacity: 0.45;
   text-decoration: line-through;
 }
@@ -784,8 +808,12 @@ table.downloads tbody tr:hover {
 /* Supported, but switched off here. Faded rather than struck: the strike is
    reserved for what the service genuinely cannot do, and a setting you can
    flip back should not look like a hard limitation. */
+/* Switched off: drops back to grey so the colour always means "this is
+   live", and keeps the dashed border that distinguishes it from a kind the
+   service genuinely can't do. */
 .cap-disabled {
-  opacity: 0.4;
+  --cap-tint: var(--text-muted);
+  opacity: 0.55;
   border-style: dashed;
 }
 

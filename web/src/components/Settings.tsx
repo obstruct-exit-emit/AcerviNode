@@ -781,7 +781,7 @@ export function Settings({ apiKey }: Props) {
                     <h2>{providerLabel(p.name)}</h2>
                     <span className="provider-status">
                       {p.configured ? (
-                        <span className="cap">Configured</span>
+                        <span className="cap cap-configured">Configured</span>
                       ) : (
                         <span className="cap cap-unset">Not configured</span>
                       )}
@@ -795,19 +795,20 @@ export function Settings({ apiKey }: Props) {
                     <span className="provider-caps">
                       {(
                         [
-                          ['Torrents', p.torrent_capable, p.torrent_enabled],
-                          ['Usenet', p.usenet_capable, p.usenet_enabled],
-                          ['Web links', p.webdl_capable, p.webdl_enabled],
+                          ['Torrents', 'cap-torrent', p.torrent_capable, p.torrent_enabled],
+                          ['Usenet', 'cap-usenet', p.usenet_capable, p.usenet_enabled],
+                          ['Web links', 'cap-webdl', p.webdl_capable, p.webdl_enabled],
                         ] as const
-                      ).map(([label, capable, enabled]) => (
+                      ).map(([label, tint, capable, enabled]) => (
                         <span
                           key={label}
                           // Three states, and the last two must not look
                           // alike: struck means the service can't do it,
                           // dimmed means you switched it off. Conflating
                           // them would hide a setting behind what reads as
-                          // a hard limitation.
-                          className={`cap${capable ? (enabled ? '' : ' cap-disabled') : ' cap-off'}`}
+                          // a hard limitation. Only a live kind keeps its
+                          // colour, so the hue always means "this works".
+                          className={`cap ${capable ? (enabled ? tint : 'cap-disabled') : 'cap-off'}`}
                           title={
                             !capable
                               ? `${providerLabel(p.name)} has no ${label.toLowerCase()} service`
