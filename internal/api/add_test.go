@@ -239,37 +239,8 @@ func TestTorrentInfo_NeverSilentlyAsksAnotherProvider(t *testing.T) {
 	if hasPreview.torrentInfoHash != "" {
 		t.Error("the other provider was queried; a hash aimed at one provider must not reach another")
 	}
-	if msg, _ := got["error"].(string); !strings.Contains(msg, "provider=") {
-		t.Errorf("error = %q, want it to point at the explicit ?provider= escape hatch", msg)
-	}
-}
-
-// TestTorrentInfo_ExplicitProviderIsHonoured keeps the capability reachable
-// as a deliberate act rather than a side effect.
-func TestTorrentInfo_ExplicitProviderIsHonoured(t *testing.T) {
-	noPreview := &fakeProvider{providerName: "alldebrid", torrentInfoErr: debrid.ErrTorrentInfoUnsupported}
-	hasPreview := &fakeProvider{providerName: "torbox", torrentInfoResp: debrid.TorrentInfo{Name: "Some Release"}}
-	srv := twoTorrentServer(t, noPreview, hasPreview)
-
-	rec := getInfo(t, srv, "/api/v1/downloads/torrent/info?hash=abc&provider=torbox")
-	var got map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &got)
-	if got["available"] != true {
-		t.Fatalf("available = %v, want true when torbox is named explicitly: %s", got["available"], rec.Body.String())
-	}
-	if got["name"] != "Some Release" {
-		t.Errorf("name = %v, want the named provider's answer", got["name"])
-	}
-}
-
-// TestTorrentInfo_UnknownExplicitProviderIsRefused keeps a typo visible.
-func TestTorrentInfo_UnknownExplicitProviderIsRefused(t *testing.T) {
-	srv := twoTorrentServer(t, &fakeProvider{providerName: "alldebrid"}, &fakeProvider{providerName: "torbox"})
-	rec := getInfo(t, srv, "/api/v1/downloads/torrent/info?hash=abc&provider=ghost")
-	var got map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &got)
-	if got["available"] != false {
-		t.Errorf("available = %v, want false for a provider that isn't configured", got["available"])
+	if msg, _ := got["error"].(string); !strings.Contains(msg, "alldebrid") {
+		t.Errorf("error = %q, want it to name the provider that can't preview", msg)
 	}
 }
 

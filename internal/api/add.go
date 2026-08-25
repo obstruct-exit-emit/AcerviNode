@@ -725,33 +725,25 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hash, or magnet with a valid btih hash, is required", http.StatusBadRequest)
 		return
 	}
-	// Asks exactly one provider, and never quietly a different one.
+	// The default provider, and only ever that one.
 	//
 	// A metadata lookup looks like it should be shareable — a magnet's name
 	// and files are properties of the torrent, not of an account — but the
 	// *query* still goes to a specific service, which then knows a hash you
 	// were about to hand to someone else. Unlike the add fallbacks, which
 	// prevent a download from failing and surface as a download visibly
-	// filed under whoever took it, this only saves a preview panel, and
-	// crossing providers for it would be invisible. Not a trade worth
-	// making silently.
+	// filed under whoever accepted it, this only saves a preview panel.
 	//
-	// A caller who does want another provider's lookup can name one, which
-	// makes it a decision rather than a side effect.
+	// There is deliberately no way to name a different provider here. A
+	// preview a provider can't give is a preview you don't get; if you want
+	// another provider's lookup, that provider is the one to be using.
 	provider := s.defaultTorrent()
-	if named := strings.TrimSpace(r.URL.Query().Get("provider")); named != "" {
-		provider = s.registry.Torrent(named)
-		if provider == nil {
-			writeJSON(w, torrentInfoResponse{Available: false, Error: fmt.Sprintf("no torrent-capable provider named %q is configured", named)})
-			return
-		}
-	}
 	info, err := provider.TorrentInfo(r.Context(), hash)
 	if err != nil {
 		if errors.Is(err, debrid.ErrTorrentInfoUnsupported) {
 			writeJSON(w, torrentInfoResponse{
 				Available: false,
-				Error:     fmt.Sprintf("%s doesn't offer metadata previews — name another provider with ?provider= to ask one that does", provider.Name()),
+				Error:     fmt.Sprintf("%s doesn't offer metadata previews", provider.Name()),
 			})
 			return
 		}

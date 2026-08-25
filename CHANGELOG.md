@@ -465,9 +465,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   filed under whoever took it, where this only saved a preview panel and
   crossed providers invisibly. Reverted.
 
-  `?provider=<name>` now selects a specific provider explicitly, and the
-  "no preview feature" message points at it — so the capability stays
-  reachable as a decision rather than a side effect.
+  A `?provider=` override was added alongside the revert and then removed:
+  nothing called it — the web UI passes only the magnet, and no \*arr touches
+  this endpoint — so it was speculative surface, and a gated way back to the
+  behaviour just removed. A preview a provider can't give is simply a preview
+  you don't get.
 
 - **`GET /api/v1/status` returned `"providers": null` instead of `[]`** when
   nothing was being polled — every kind switched off, or the importer not yet
