@@ -786,10 +786,13 @@ table.downloads tbody tr:hover {
   --cap-tint: var(--state-ready);
 }
 
-/* The default provider is where downloads actually go, so it takes the
-   accent rather than a state colour — this is a choice, not a condition. */
+/* Deliberately left untinted, unlike the chips around it: the plain border
+   with slightly stronger text. Given the accent it read as a filled button
+   rather than a label, which is the wrong weight for something that is just
+   stating which provider is default. Sets colour directly rather than a
+   tint, so it keeps --cap-tint's default border and no background. */
 .cap-default {
-  --cap-tint: var(--accent);
+  color: var(--text);
 }
 
 /* Still needs to read as "act on me", unlike the chips around it. */
