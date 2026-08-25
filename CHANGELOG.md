@@ -409,6 +409,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Clearing a provider's API key destroyed the rest of its entry.** It
+  deleted the whole `providers.<name>` block, so everything else the entry
+  held went with it. Two consequences, both found by bug-testing the new
+  capability switches rather than by inspection:
+
+  - Disabled kinds came back on. The running process still showed them off,
+    so the UI and `config.yaml` disagreed until a restart resolved it the
+    wrong way.
+  - A **second account was destroyed outright**. Its `type` lives only in
+    that entry, and `providerEntryNames` only revives names that are known
+    provider types — so `torbox-work` simply ceased to exist on the next
+    start, despite the documented promise that a cleared provider "stays
+    registered, so it can be configured again later".
+
+  The key is now emptied in place. Clearing a key means "unconfigure this",
+  which an entry with no key already says; deleting the entry is what
+  `DELETE /api/v1/settings/providers/{name}` is for.
+
 - **Changing a provider's API key erased its type, breaking two-accounts-
   per-service on the next restart.** `SetProviderAPIKey` wrote a fresh
   `config.ProviderConfig` holding only the key, dropping `Type`. A second

@@ -1529,3 +1529,121 @@ func TestSetProviderKinds_DisablingEveryKindKeepsTheEntry(t *testing.T) {
 		t.Error("provider dropped out of Names() with every kind off; it could never be switched back on")
 	}
 }
+
+// TestClearingAKeyKeepsTheEntrysOtherSettings covers what clearing an API
+// key must not destroy.
+//
+// It used to delete the whole config entry, which threw away everything else
+// the entry held. Two consequences, both found by bug-testing the capability
+// switches rather than by inspection: disabled kinds came silently back on
+// after a restart while the running process still showed them off, and a
+// second account — whose type lives only in that entry — vanished entirely,
+// despite the documented promise that a cleared provider "stays registered,
+// so it can be configured again later". Deleting the entry is what
+// RemoveProvider is for.
+func TestClearingAKeyKeepsTheEntrysOtherSettings(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.Providers = map[string]config.ProviderConfig{
+		"torbox-work": {APIKey: "a-key", Type: "torbox", DisabledKinds: []string{"usenet"}},
+	}
+	_, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderAPIKey(ctx, "torbox-work", ""); err != nil {
+		t.Fatalf("SetProviderAPIKey(\"\") error = %v", err)
+	}
+	if s.ProviderConfigured("torbox-work") {
+		t.Error("ProviderConfigured() = true after clearing the key")
+	}
+
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	entry, still := reloaded.Providers["torbox-work"]
+	if !still {
+		t.Fatal("the entry was deleted; a second account would not survive a restart")
+	}
+	if entry.APIKey != "" {
+		t.Errorf("APIKey = %q, want it cleared", entry.APIKey)
+	}
+	if entry.ResolvedType("torbox-work") != "torbox" {
+		t.Errorf("type lost: ResolvedType() = %q, want torbox", entry.ResolvedType("torbox-work"))
+	}
+	if entry.KindEnabled("usenet") {
+		t.Error("usenet came back enabled; the disabled kinds were lost with the entry")
+	}
+}
+
+// TestSetProviderKinds_SurvivesAKeyChange pins the other half: replacing a
+// key must not re-enable kinds that were switched off.
+func TestSetProviderKinds_SurvivesAKeyChange(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"usenet": false}); err != nil {
+		t.Fatalf("SetProviderKinds() error = %v", err)
+	}
+	if err := s.SetProviderAPIKey(ctx, "torbox", "a-replacement-key"); err != nil {
+		t.Fatalf("SetProviderAPIKey() error = %v", err)
+	}
+
+	if registry.Usenet("torbox") != nil {
+		t.Error("usenet re-registered by a key change, after being switched off")
+	}
+	reloaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if reloaded.Providers["torbox"].KindEnabled("usenet") {
+		t.Error("usenet enabled on disk after a key change; the setting didn't survive")
+	}
+}
+
+// TestDefaultProviderWithEveryKindDisabled proves adds still resolve when the
+// default provider can't handle anything. default_provider names one entry,
+// but routing is per kind — a default that handles nothing must fall through
+// rather than leaving adds with nowhere to go.
+func TestDefaultProviderWithEveryKindDisabled(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.Providers = map[string]config.ProviderConfig{
+		"torbox":    {APIKey: "k1"},
+		"alldebrid": {APIKey: "k2"},
+	}
+	registry, s := setupProviders(cfg, configPath)
+
+	if err := s.SetDefaultProvider("torbox"); err != nil {
+		t.Fatalf("SetDefaultProvider() error = %v", err)
+	}
+	if err := s.SetProviderKinds(ctx, "torbox", map[string]bool{"torrent": false, "usenet": false, "webdl": false}); err != nil {
+		t.Fatalf("SetProviderKinds() error = %v", err)
+	}
+
+	// The default still names torbox, but a torrent add must land somewhere
+	// that can actually take it.
+	if got := registry.DefaultNameFor(debrid.KindTorrent); got != "alldebrid" {
+		t.Errorf("DefaultNameFor(torrent) = %q, want alldebrid to pick it up", got)
+	}
+	if registry.DefaultTorrent() == nil {
+		t.Error("DefaultTorrent() = nil; a torrent add would have nowhere to go")
+	}
+	// Usenet has no home at all now, and must say so rather than resolving
+	// to a provider that can't do it.
+	if got := registry.DefaultNameFor(debrid.KindUsenet); got != "" {
+		t.Errorf("DefaultNameFor(usenet) = %q, want empty — no provider handles usenet", got)
+	}
+}

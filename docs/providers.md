@@ -133,6 +133,13 @@ because capability isn't always something you want: two accounts on one
 service can split kinds between them to keep their rate limits apart, and a
 kind you never use is polling you never needed.
 
+Switching a kind off interacts with `default_provider` exactly as a missing
+service does, which was checked live rather than assumed: with AllDebrid as
+the default, a usenet add falls through to TorBox while a torrent add stays
+on AllDebrid. A default whose kinds are *all* switched off still routes
+everything elsewhere, and a kind no configured provider handles fails the add
+with a clear `503` rather than resolving to a provider that can't take it.
+
 **Routing resolves per kind, not globally.** `default_provider` names one
 entry, but `DefaultNameFor(kind)` falls through to the first registered entry
 that supports that kind when the default doesn't. Without the fallback, making

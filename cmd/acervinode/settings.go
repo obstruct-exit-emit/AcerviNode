@@ -243,7 +243,19 @@ func (s *liveSettings) SetProviderAPIKey(_ context.Context, name, apiKey string)
 		s.cfg.Providers = map[string]config.ProviderConfig{}
 	}
 	if apiKey == "" {
-		delete(s.cfg.Providers, name)
+		// Cleared in place, not deleted. Removing the entry threw away
+		// everything else it held: a second account lost its type and so
+		// vanished entirely on the next restart, and any disabled kinds
+		// came silently back on — while the running process still showed
+		// them off, so the UI and config.yaml disagreed until a restart
+		// resolved it the wrong way.
+		//
+		// Clearing a key means "unconfigure this", which is what the entry
+		// with no key now says. Deleting the entry is what
+		// DELETE /api/v1/settings/providers/{name} is for.
+		entry := s.cfg.Providers[name]
+		entry.APIKey = ""
+		s.cfg.Providers[name] = entry
 	} else {
 		// Updated in place rather than replaced, so the entry keeps its
 		// Type. Writing a fresh ProviderConfig here dropped it, which broke
