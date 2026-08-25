@@ -935,19 +935,22 @@ export function Settings({ apiKey }: Props) {
                           <button type="button" className="test-connection-btn" onClick={() => handleRemoveProvider(p.name)}>
                             Remove provider
                           </button>
-                          <button
-                            type="button"
-                            className="test-connection-btn"
-                            onClick={() => {
-                              setAddingAccountFor(p.type)
-                              setNewAccountName(`${p.type}-2`)
-                            }}
-                          >
-                            Add another account
-                          </button>
                         </div>
                         {test.kind === 'ok' && <p className="settings-success">Connected — {test.latencyMs}ms</p>}
                         {test.kind === 'error' && <p className="settings-error">Connection failed: {test.message}</p>}
+                        {/* Deliberately quieter than the buttons above. A
+                            second account is a rare, one-time action, and at
+                            button weight it sat level with "Test connection"
+                            — something pressed often — and pushed the row to
+                            wrap. */}
+                        {addingAccountFor !== p.type && (
+                          <button type="button" className="link-button" onClick={() => {
+                            setAddingAccountFor(p.type)
+                            setNewAccountName(`${p.type}-2`)
+                          }}>
+                            + add another {providerLabel(p.type)} account
+                          </button>
+                        )}
                       </>
                     )}
 

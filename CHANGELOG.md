@@ -354,6 +354,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **"Add another account" is now a quiet link rather than a fifth button.**
+  A second account on one service is a rare, one-time action, and at button
+  weight it sat level with "Test connection" — something pressed often — and
+  pushed the action row to wrap onto a second line. Still a `<button>`, so it
+  keeps keyboard focus and activation; looking like a link is a visual choice
+  rather than a semantic one. The capability itself is unchanged.
+
 - **One provider listing per interval now serves the importer and every
   connected *arr app**, instead of each fetching its own. The compat shims'
   reactive refreshes previously called `provider.List()` on every single
@@ -429,6 +436,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **A clean restart logged three or four `ERROR` lines.** Stopping the
+  service cancels the tick's context and closes the database underneath
+  whatever was mid-flight, so the provider listing failed with "context
+  canceled" and the tick itself with "sql: database is closed". Nothing was
+  wrong, but it made counting errors in the log useless as a health signal —
+  which matters now that `GET /api/v1/status` exists to be monitored.
+
+  Tick-path failures are now reported through `logTickError`, which stays
+  quiet when the tick's context has been cancelled. Keyed on the context
+  rather than the error text, because the errors vary (`context.Canceled`,
+  `database/sql`'s unexported closed-DB error, whatever a provider returns
+  when its request is cut short) while the cause doesn't. The importer's tick
+  context is the long-lived one and never gets a deadline of its own, so a
+  cancelled context there always means shutdown rather than a timeout — a
+  genuine failure on a live tick still logs exactly as before. Verified: a
+  restart now produces zero errors.
 
 - **Clearing a provider's API key destroyed the rest of its entry.** It
   deleted the whole `providers.<name>` block, so everything else the entry

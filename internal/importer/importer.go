@@ -655,7 +655,7 @@ func (im *Importer) Run(ctx context.Context) {
 			ticker.Reset(newInterval)
 		case <-ticker.C:
 			if err := im.Tick(ctx); err != nil {
-				slog.Error("importer: tick failed", "error", err)
+				logTickError(ctx, "importer: tick failed", "error", err)
 			}
 		}
 	}
@@ -701,6 +701,31 @@ func (im *Importer) runFastPoll(ctx context.Context) {
 // download that just reached ready_for_import or StateError this same tick
 // isn't somehow considered for cleanup before its own timestamp has even had
 // a chance to age past the cutoff.
+// logTickError reports a failure from inside a tick, unless the tick's
+// context has been cancelled — in which case the failure is only the process
+// shutting down mid-work, and calling it an error is actively misleading.
+//
+// A clean restart used to emit three or four ERROR lines every time: the
+// provider listing failing with "context canceled", and the tick itself
+// failing with "sql: database is closed" as the connection went away
+// underneath it. Nothing was wrong, but it made "count the errors in the
+// log" useless as a health signal — which matters now that GET
+// /api/v1/status exists to be monitored.
+//
+// Keyed on ctx rather than on the error text because the errors vary
+// (context.Canceled, database/sql's unexported errDBClosed, whatever a
+// provider returns when its request is cut short) while the cause does not.
+// The importer's tick context is the long-lived one and is never given a
+// deadline of its own, so a cancelled context here always means shutdown
+// rather than a timeout.
+func logTickError(ctx context.Context, msg string, args ...any) {
+	if ctx.Err() != nil {
+		slog.Debug(msg+" (ignored, shutting down)", args...)
+		return
+	}
+	slog.Error(msg, args...)
+}
+
 func (im *Importer) Tick(ctx context.Context) error {
 	im.statsMu.Lock()
 	im.tickAt = time.Now()
@@ -757,7 +782,7 @@ func (im *Importer) refreshStatuses(ctx context.Context) {
 	// history to flood in.
 	freshInstall := false
 	if err != nil {
-		slog.Error("importer: check for any existing downloads failed", "error", err)
+		logTickError(ctx, "importer: check for any existing downloads failed", "error", err)
 	} else {
 		freshInstall = !hasAny
 	}
@@ -833,7 +858,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name st
 		// would otherwise log an error every single tick — everything else
 		// is worth surfacing.
 		if !errors.Is(err, debrid.ErrNoProvider) {
-			slog.Error("importer: provider list failed", "kind", kind, "error", err)
+			logTickError(ctx, "importer: provider list failed", "kind", kind, "error", err)
 		}
 		return
 	}
@@ -847,7 +872,7 @@ func (im *Importer) refreshKind(ctx context.Context, kind database.Kind, name st
 	// them — see database.ListDownloadsByProvider.
 	rows, err := im.db.ListDownloadsByProvider(ctx, name, kind)
 	if err != nil {
-		slog.Error("importer: list downloads failed", "provider", name, "kind", kind, "error", err)
+		logTickError(ctx, "importer: list downloads failed", "provider", name, "kind", kind, "error", err)
 		return
 	}
 	// Only this pass ever concludes a download has vanished, and only once
@@ -889,7 +914,7 @@ func (im *Importer) refreshActiveKind(ctx context.Context, kind database.Kind, n
 	}
 	rows, err := im.db.ListActiveManagedDownloads(ctx, kind)
 	if err != nil {
-		slog.Error("importer: list active managed downloads failed", "kind", kind, "error", err)
+		logTickError(ctx, "importer: list active managed downloads failed", "kind", kind, "error", err)
 		return
 	}
 	for _, d := range rows {
@@ -1567,7 +1592,7 @@ func (im *Importer) cleanupOldDownloads(ctx context.Context) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	rows, err := im.db.ListDownloadsEligibleForCleanup(ctx, cutoff)
 	if err != nil {
-		slog.Error("importer: list downloads eligible for cleanup failed", "error", err)
+		logTickError(ctx, "importer: list downloads eligible for cleanup failed", "error", err)
 		return
 	}
 	for _, d := range rows {
@@ -1598,7 +1623,7 @@ func (im *Importer) checkStuckDownloads(ctx context.Context) {
 	cutoff := time.Now().UTC().Add(-timeout)
 	rows, err := im.db.ListStuckDownloads(ctx, cutoff)
 	if err != nil {
-		slog.Error("importer: list stuck downloads failed", "error", err)
+		logTickError(ctx, "importer: list stuck downloads failed", "error", err)
 		return
 	}
 	for _, d := range rows {

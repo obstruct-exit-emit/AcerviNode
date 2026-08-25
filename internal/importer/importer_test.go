@@ -1,15 +1,18 @@
 package importer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -3117,5 +3120,34 @@ func TestRefreshKind_DoesNotDetectMissingUntilProviderIsSteady(t *testing.T) {
 	}
 	if got := missingCount(); got != 1 {
 		t.Errorf("missing_count = %d on the first listing after a failure, want it unchanged at 1", got)
+	}
+}
+
+// TestLogTickError_SilentDuringShutdown proves a failure caused by the
+// process stopping isn't reported as an error.
+//
+// A clean restart used to emit three or four ERROR lines — the provider
+// listing failing with "context canceled", the tick failing with "sql:
+// database is closed" — which made counting errors in the log useless as a
+// health signal, exactly when GET /api/v1/status exists to be monitored.
+func TestLogTickError_SilentDuringShutdown(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// A live tick reports normally.
+	logTickError(context.Background(), "importer: tick failed", "error", errors.New("something real"))
+	if !strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("a live failure was not logged as an error: %q", buf.String())
+	}
+
+	// The same failure while shutting down is not an error.
+	buf.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	logTickError(ctx, "importer: tick failed", "error", context.Canceled)
+	if strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("a shutdown failure was logged as an error: %q", buf.String())
 	}
 }

@@ -438,6 +438,26 @@
    of them, and a narrow card would otherwise run them off the edge. gap
    spaces them in both directions, so a wrapped second row doesn't collide
    with the first the way stacked margins would. */
+/* A button that reads as a link: for actions that belong on the page but
+   shouldn't compete with the real buttons near them. Still a <button>, so it
+   keeps keyboard focus and activation — looking like a link is a visual
+   choice, not a semantic one. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .provider-actions {
   display: flex;
   flex-wrap: wrap;
