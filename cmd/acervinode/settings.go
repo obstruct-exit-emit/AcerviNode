@@ -1089,7 +1089,11 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		kinds[string(kind)] = api.KindStatus{}
 	}
 	if imp == nil {
-		return api.StatusInfo{Kinds: kinds}, nil
+		// Providers non-nil here too: this path is hit before the importer
+		// is attached, and returning null for a documented array would
+		// break a monitor polling during startup just as surely as the
+		// fully-disabled case below.
+		return api.StatusInfo{Kinds: kinds, Providers: []api.ProviderKindStatus{}}, nil
 	}
 
 	for _, kind := range []database.Kind{database.KindTorrent, database.KindUsenet, database.KindWebDL} {
@@ -1103,7 +1107,13 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		kinds[string(kind)] = ks
 	}
 
-	var providerStatuses []api.ProviderKindStatus
+	// Non-nil so the field marshals as [] rather than null when nothing is
+	// being polled — every kind switched off, or no provider configured yet.
+	// StatusInfo.Providers is documented as an array, and a monitor
+	// iterating it shouldn't have to special-case null for a state that is
+	// simply "nothing to report". Same nil-slice trap as the downloads list
+	// hit in Phase 3.
+	providerStatuses := []api.ProviderKindStatus{}
 	for _, ps := range imp.ProviderStatuses() {
 		entry := api.ProviderKindStatus{Provider: ps.Provider, Kind: ps.Kind}
 		if !ps.LastSuccessfulListAt.IsZero() {

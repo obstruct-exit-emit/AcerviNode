@@ -452,6 +452,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`GET /api/v1/status` returned `"providers": null` instead of `[]`** when
+  nothing was being polled — every kind switched off, or the importer not yet
+  attached during startup. The field is documented as an array, and a monitor
+  iterating it crashes on null rather than seeing an empty list; the burn-in
+  script hit exactly that. Both return paths now produce `[]`. Same nil-slice
+  trap the downloads list hit in Phase 3, reached this time through a state
+  the new capability switches made possible from the UI.
+
 - **A release landed one folder deeper than it should.**
   `resolveDestDir` already ends the destination with the download's own name,
   and some providers report each file with that same folder in front of it —

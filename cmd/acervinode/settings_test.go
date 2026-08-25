@@ -1759,3 +1759,38 @@ func TestResetProvider_SecondAccountKeepsItsType(t *testing.T) {
 		t.Error("usenet still disabled after reset")
 	}
 }
+
+// TestStatus_ProvidersIsAlwaysAnArray guards the nil-slice trap: with
+// nothing being polled the field marshalled as null, and a monitor
+// iterating it crashes on that rather than seeing an empty list. Found by
+// switching every kind off on every provider, which is a state the
+// capability switches now make reachable from the UI.
+func TestStatus_ProvidersIsAlwaysAnArray(t *testing.T) {
+	ctx := context.Background()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	_, s := setupProviders(cfg, configPath)
+
+	// No importer attached is the emptiest case of all.
+	status, err := s.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if decoded["providers"] == nil {
+		t.Errorf("providers marshalled as null, want []: %s", encoded)
+	}
+	if _, ok := decoded["providers"].([]any); !ok {
+		t.Errorf("providers = %T, want a JSON array", decoded["providers"])
+	}
+}
