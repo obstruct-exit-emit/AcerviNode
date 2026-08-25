@@ -287,6 +287,66 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 // Web Downloads service supports — see docs/providers.md). Link-only, no
 // file-upload variant: TorBox's own createwebdownload endpoint has none
 // either, unlike the torrent/usenet add endpoints.
+// addWebLink adds link through providerName, falling back to any other
+// configured web-download provider when the chosen one doesn't handle that
+// file host. Returns the provider that actually accepted it.
+//
+// Which hosts a service covers varies a lot, and on AllDebrid varies by
+// plan — a trial account covers five, against TorBox's ~160 — so with
+// several configured, a link one refuses is often one another takes. Before
+// this, such an add simply failed against whichever provider routing picked,
+// with a perfectly capable provider sitting unused beside it.
+//
+// Deliberately narrow. Only debrid.ErrHostNotSupported is retried: any other
+// failure could mean the add partly landed, and re-sending it elsewhere
+// would risk a second copy. An unsupported host is refused outright, so
+// nothing was created and nothing is duplicated by trying again.
+//
+// Web downloads only, since a magnet or NZB isn't tied to a file host.
+func (s *Server) addWebLink(ctx context.Context, providerName, link string, chosenByCaller bool) (string, debrid.ProviderDownloadID, error) {
+	p := s.registry.WebDL(providerName)
+	id, err := p.AddLink(ctx, link, debrid.AddOptions{})
+	if err == nil || chosenByCaller || !errors.Is(err, debrid.ErrHostNotSupported) {
+		return providerName, id, err
+	}
+
+	firstErr := err
+	for _, name := range s.registry.WebDLNames() {
+		if name == providerName {
+			continue
+		}
+		alt := s.registry.WebDL(name)
+		if alt == nil || !alt.Configured() {
+			continue
+		}
+		altID, altErr := alt.AddLink(ctx, link, debrid.AddOptions{})
+		if altErr == nil {
+			slog.Info("api: web download host unsupported by the chosen provider, added through another",
+				"link_host", linkHost(link), "chosen", providerName, "used", name)
+			return name, altID, nil
+		}
+		if !errors.Is(altErr, debrid.ErrHostNotSupported) {
+			// A real failure elsewhere is more informative than the
+			// original "unsupported host", since that provider was willing
+			// to try.
+			return name, "", altErr
+		}
+	}
+	// Nobody handles it. The first provider's message is the clearest
+	// explanation of why.
+	return providerName, "", firstErr
+}
+
+// linkHost is the host part of link, for logging. Best effort: a link that
+// won't parse is not worth failing an add over.
+func linkHost(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
 func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 	if len(s.registry.WebDLNames()) == 0 {
 		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
@@ -314,13 +374,18 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	p := s.registry.WebDL(providerName)
+	// Only a provider this endpoint chose may be reconsidered. A caller who
+	// named one asked for that account specifically, and quietly using a
+	// different one would put the download somewhere they didn't pick —
+	// the same reasoning readd applies.
+	chosenByCaller := r.FormValue("provider") != ""
 
-	id, err := p.AddLink(ctx, link, debrid.AddOptions{})
+	providerName, id, err := s.addWebLink(ctx, providerName, link, chosenByCaller)
 	if err != nil {
 		writeProviderError(w, "web download", err)
 		return
 	}
+	p := s.registry.WebDL(providerName)
 
 	status, statusErr := p.Status(ctx, id)
 	if statusErr != nil {

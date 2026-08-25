@@ -23,6 +23,22 @@ var ErrNoProvider = errors.New("debrid: no provider configured")
 // docs/providers.md for the concrete torbox.APIError.Unwrap wiring.
 var ErrRateLimited = errors.New("debrid: provider rate limit exceeded")
 
+// ErrHostNotSupported is a sentinel a concrete provider's error chain should
+// map its "I don't handle this file host" rejection onto, so callers can
+// tell it apart from a transient failure without knowing any provider's
+// vocabulary.
+//
+// The distinction matters because the two want opposite responses: a
+// transient failure should be retried against the same provider, while an
+// unsupported host never will be and is worth trying elsewhere. Which
+// hosts a service covers varies a lot — and, on AllDebrid, varies by plan —
+// so with several providers configured one of them may well take a link
+// another refuses.
+//
+// Only meaningful for web downloads. A magnet or an NZB isn't tied to a
+// file host, so no other kind can produce this.
+var ErrHostNotSupported = errors.New("debrid: provider does not support this file host")
+
 // DynamicTorrentProvider implements TorrentProvider by delegating to
 // whichever provider is currently set, so it can be swapped at runtime (see
 // the settings API in internal/api) without restarting the process or

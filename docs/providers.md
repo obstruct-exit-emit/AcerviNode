@@ -140,6 +140,18 @@ on AllDebrid. A default whose kinds are *all* switched off still routes
 everything elsewhere, and a kind no configured provider handles fails the add
 with a clear `503` rather than resolving to a provider that can't take it.
 
+**Web downloads also route on the file host, after the fact.** Kind-level
+routing can't see which hoster a link points at, so a provider that does web
+downloads may still refuse the specific link. When routing chose the provider
+itself, the add falls through to another configured web-download provider
+rather than failing — `debrid.ErrHostNotSupported` is the sentinel each
+provider maps its own refusal onto (AllDebrid's `LINK_HOST_NOT_SUPPORTED`
+code; TorBox has no code here, only prose, so that match is deliberately
+narrow and degrades to a plain provider error if the wording changes). Only
+that sentinel is retried — any other failure might mean the add partly
+landed, and re-sending it would risk a duplicate — and an explicitly named
+provider is never swapped out.
+
 **Routing resolves per kind, not globally.** `default_provider` names one
 entry, but `DefaultNameFor(kind)` falls through to the first registered entry
 that supports that kind when the default doesn't. Without the fallback, making

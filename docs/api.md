@@ -259,6 +259,25 @@ API key across its servers, so anything else sharing the key draws from the
 same bucket), `502` for any other provider-side failure (e.g. an invalid
 magnet, an unsupported hoster, or a real upstream error).
 
+**A web download whose file host the routed provider doesn't handle is
+retried elsewhere.** Which hosts a service covers varies a lot, and on
+AllDebrid varies by plan — a trial account covers five, against TorBox's
+~160 — so with several providers configured, a link one refuses is often one
+another takes. When routing picked the provider itself, such an add now falls
+through to the next configured web-download provider instead of failing with
+a capable provider sitting unused. The response's `provider` field reports
+which one actually accepted it.
+
+Deliberately narrow, in two ways. Only an unsupported *host* is retried: any
+other failure could mean the add partly landed, and re-sending it elsewhere
+would risk a second copy. And a `provider` you named explicitly is never
+swapped out — you asked for that account, and quietly using another would put
+the download somewhere you didn't choose. If no configured provider handles
+the host, the error is the routed provider's own explanation.
+
+Torrents and usenet can't hit this: a magnet or an NZB isn't tied to a file
+host.
+
 **`provider` (optional): choose which configured provider gets the
 download.** Names an entry from `GET /api/v1/providers`; omitted, the
 download goes to the configured default (`default_provider` in

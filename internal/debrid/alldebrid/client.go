@@ -70,6 +70,11 @@ func (e *APIError) Unwrap() error {
 	switch e.Code {
 	case rateLimitedCode, "TOO_MANY_REQUESTS", "MAGNET_TOO_MANY_ACTIVE":
 		return debrid.ErrRateLimited
+	case "LINK_HOST_NOT_SUPPORTED", "LINK_HOST_UNAVAILABLE":
+		// A clean, stable code — AllDebrid's supported set is small and
+		// plan-dependent (five hosts on a trial), so this is an ordinary
+		// answer rather than an edge case.
+		return debrid.ErrHostNotSupported
 	}
 	return nil
 }

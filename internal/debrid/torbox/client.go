@@ -51,7 +51,24 @@ func (e *APIError) Unwrap() error {
 	if e.StatusCode == http.StatusTooManyRequests {
 		return debrid.ErrRateLimited
 	}
+	if isUnsupportedHostDetail(e.Detail) {
+		return debrid.ErrHostNotSupported
+	}
 	return nil
+}
+
+// isUnsupportedHostDetail recognises TorBox's "this file host isn't one of
+// ours" rejection, which arrives as a plain 500 with the reason only in the
+// message: "The site you are trying to download from is not supported."
+//
+// Matching on prose is fragile and deliberately narrow because of it —
+// broad matching would swallow unrelated failures into a sentinel that
+// makes callers stop retrying. If TorBox ever reworks the wording this
+// quietly stops classifying, which degrades to today's behaviour (a plain
+// provider error) rather than misclassifying something else.
+func isUnsupportedHostDetail(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "site you are trying to download from is not supported")
 }
 
 // defaultRequestTimeout is NewClient's starting value — see

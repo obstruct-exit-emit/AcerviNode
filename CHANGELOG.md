@@ -60,6 +60,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A web download whose file host the routed provider can't handle now
+  falls through to one that can.** Kind-level routing picks a provider before
+  the add and has no idea which hoster a link points at, so an add could fail
+  against the default while a perfectly capable provider sat unused beside
+  it. That is not a rare shape: which hosts a service covers varies a lot,
+  and on AllDebrid varies by plan — a trial account covers five hosts against
+  TorBox's ~160 — so with AllDebrid as default, most hoster links would have
+  failed despite TorBox being able to take them.
+
+  New `debrid.ErrHostNotSupported`, which each provider maps its own refusal
+  onto: AllDebrid's `LINK_HOST_NOT_SUPPORTED` code, and TorBox's prose (it
+  returns a plain 500 with the reason only in the message, so that match is
+  deliberately narrow — if the wording ever changes this quietly stops
+  classifying rather than misclassifying something else).
+
+  Narrow on purpose. Only an unsupported host is retried, since any other
+  failure could mean the add partly landed and re-sending it would risk a
+  second copy. And a provider named explicitly is never swapped out — that is
+  a request for a specific account, the same reason `readd` refuses to
+  migrate a download. Verified live against both real accounts.
+
 - **Provider capabilities can be switched on and off per provider.**
   Settings → Provider now has a "Handles" section with a checkbox per kind,
   and everything a provider's service supports is on by default — disabling
