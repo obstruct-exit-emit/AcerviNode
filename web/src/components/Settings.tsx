@@ -569,7 +569,27 @@ export function Settings({ apiKey }: Props) {
   const providerLabel = (name: string) =>
     ({ torbox: 'TorBox', alldebrid: 'AllDebrid' } as Record<string, string>)[name] ?? name
 
-  const providers = settings ?? []
+  // Display order, curated by provider *type*, most capable first — TorBox
+  // handles all three kinds, AllDebrid two. Deliberately a fixed list rather
+  // than something derived: "which provider should I reach for first" is a
+  // judgement about the services, not something a capability count can
+  // settle, and it stays put as more are added.
+  //
+  // Sorted on type rather than entry name so a second account sits with its
+  // own service (torbox, torbox-work, then alldebrid) instead of being
+  // scattered alphabetically. A type missing from the list sorts last rather
+  // than breaking, so adding a provider without touching this still works.
+  //
+  // Ordering here is presentation only. The registry's own order is what
+  // drives fallback routing and is left alone.
+  const providerTypeOrder = ['torbox', 'alldebrid']
+  const providerRank = (p: ProviderSetting) => {
+    const i = providerTypeOrder.indexOf(p.type || p.name)
+    return i === -1 ? providerTypeOrder.length : i
+  }
+  const providers = [...(settings ?? [])].sort(
+    (a, b) => providerRank(a) - providerRank(b) || a.name.localeCompare(b.name),
+  )
   // Only worth offering a default when there is actually a choice to make.
   const showDefaultControls = providers.length > 1
   const current = settingsGroups.find((g) => g.name === group) ?? settingsGroups[0]
