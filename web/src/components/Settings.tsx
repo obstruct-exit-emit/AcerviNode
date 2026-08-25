@@ -927,6 +927,22 @@ export function Settings({ apiKey }: Props) {
                     {saveState.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
                     {saveState.kind === 'error' && <p className="settings-error">Failed to save: {saveState.message}</p>}
 
+                    {/* The default provider with no key is a state worth
+                        naming: adds still work, because routing falls
+                        through to a provider that has credentials, but they
+                        aren't going where this setting says. Silent
+                        compensation would leave that discoverable only in
+                        the log. */}
+                    {p.default && !p.configured && (
+                      <p className="settings-warn">
+                        {providerLabel(p.name)} is the default but has no API key, so new downloads are going to
+                        whichever provider does.{' '}
+                        {providers.some((o) => o.name !== p.name && o.configured)
+                          ? 'Add a key here, or make another provider the default.'
+                          : 'No other provider has a key either, so adds will fail until one is set up.'}
+                      </p>
+                    )}
+
                     {/* Which kinds this provider handles. Everything its
                         service supports is on by default; turning one off
                         unregisters it, so adds of that kind route to another

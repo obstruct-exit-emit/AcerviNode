@@ -261,6 +261,14 @@
   margin: 10px 0 0;
 }
 
+/* Something worth acting on, but nothing is broken — distinct from
+   settings-error, which reports a failure that just happened. */
+.settings-warn {
+  color: var(--state-fetching);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
 .settings-error {
   color: var(--state-error);
   font-size: 13px;
