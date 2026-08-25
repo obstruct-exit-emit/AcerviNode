@@ -437,6 +437,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A deployed UI change could stay invisible in the browser.** The frontend
+  was served with no cache headers at all, so browsers applied heuristic
+  caching to `index.html` — the one file whose contents change at a fixed
+  URL, and the one that points at the current fingerprinted bundle. A stale
+  index went on requesting the previous bundle indefinitely, so a deploy
+  simply never arrived. Found the honest way: a UI change was live on the
+  server and still not visible after reloading.
+
+  `index.html` and client-side routes are now `Cache-Control: no-cache`,
+  which still allows a conditional request, so an unchanged index costs a 304
+  rather than a full download. Fingerprinted assets under `assets/` are
+  `max-age=31536000, immutable` — their name changes whenever their contents
+  do, so a cached copy can never be wrong.
+
+  A missing asset is also a `404` now instead of the SPA fallback. Answering
+  `/assets/index-OLDHASH.js` with `index.html` handed the browser HTML under
+  a JavaScript name, which fails on a MIME mismatch rather than saying the
+  file is gone — the wrong answer for exactly the stale page this affects.
+  Routes without a file extension still fall back to the app, so deep links
+  and hard refreshes are unchanged.
+
 - **A clean restart logged three or four `ERROR` lines.** Stopping the
   service cancels the tick's context and closes the database underneath
   whatever was mid-flight, so the provider listing failed with "context
