@@ -417,7 +417,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             {managed && (
               <input
                 type="text"
-                placeholder="Category (optional, e.g. tv-sonarr)"
+                placeholder="Category (optional) — subfolder, e.g. iso"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
               />
