@@ -95,6 +95,12 @@ type Download struct {
 	// before it was added. Nil for a provider that reports no such thing.
 	// See CachedAt directly above for the one this is often confused with.
 	ProviderCachedAt *time.Time
+	// DeleteAfterFetch and KeepFiles are the lifecycle choices made when a
+	// Managed download was added through AcerviNode's own UI or API. Nil
+	// for an *arr-added download, which is how the two are told apart —
+	// AddedVia is AddedViaArr for both. See migration 0013.
+	DeleteAfterFetch *bool
+	KeepFiles        *bool
 	ErrorMessage     string
 	// RetryCount and NextRetryAt back internal/importer's backoff: a failed
 	// fetch attempt increments RetryCount and sets NextRetryAt to when it's
@@ -191,12 +197,16 @@ func (db *DB) InsertDownload(ctx context.Context, d *Download) error {
 		INSERT INTO downloads (
 			id, provider, provider_download_id, kind, hash, name, category,
 			save_path, size_bytes, state, progress, added_at, updated_at,
-			completed_at, cached_at, error_message, source, added_via, source_file, source_file_name
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			completed_at, cached_at, error_message, source, added_via, source_file, source_file_name,
+			delete_after_fetch, keep_files
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.Provider, d.ProviderDownloadID, string(d.Kind), nullable(d.Hash), d.Name,
 		nullable(d.Category), nullable(d.SavePath), d.SizeBytes, d.State, d.Progress,
 		d.AddedAt, d.UpdatedAt, d.CompletedAt, d.CachedAt, nullable(d.ErrorMessage), nullable(d.Source), string(d.AddedVia),
 		nullableBytes(d.SourceFile), nullable(d.SourceFileName),
+		// Left nil by every caller that isn't the native add endpoint, which
+		// is what keeps an *arr grab on its existing behaviour.
+		d.DeleteAfterFetch, d.KeepFiles,
 	)
 	if err != nil {
 		return fmt.Errorf("insert download %s: %w", d.ID, err)
@@ -513,6 +523,13 @@ func (db *DB) ListDownloadsEligibleForCleanup(ctx context.Context, olderThan tim
 		SELECT `+downloadColumns+`
 		FROM downloads
 		WHERE state = ? AND added_via = ? AND completed_at IS NOT NULL AND completed_at < ?
+		  -- keep_files is set only by the native add endpoint, for a Managed
+		  -- download added by hand. Cleanup's whole premise is that an *arr
+		  -- already imported the files elsewhere, which is true for an *arr
+		  -- grab and false for one added here: nothing imports it, so
+		  -- removing the local copy deletes the thing the operator asked
+		  -- for. NULL (every *arr grab) is not 1, so they clean as before.
+		  AND (keep_files IS NULL OR keep_files != 1)
 		ORDER BY completed_at`, StateReadyForImport, string(AddedViaArr), olderThan)
 	if err != nil {
 		return nil, fmt.Errorf("list downloads eligible for cleanup: %w", err)
@@ -1466,7 +1483,8 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
 	size_bytes, state, progress, added_at, updated_at, completed_at, cached_at, provider_cached_at, error_message,
-	retry_count, next_retry_at, source, added_via, missing_count, source_file_name`
+	retry_count, next_retry_at, source, added_via, missing_count, source_file_name,
+	delete_after_fetch, keep_files`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
 	row := db.QueryRowContext(ctx, query, args...)
@@ -1491,6 +1509,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
 		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &d.CachedAt, &d.ProviderCachedAt, &errorMessage,
 		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount, &sourceFileName,
+		&d.DeleteAfterFetch, &d.KeepFiles,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}

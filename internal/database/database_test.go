@@ -17,8 +17,8 @@ func TestOpen_AppliesMigrationsCleanly(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if count != 12 {
-		t.Errorf("schema_migrations count = %d, want 12", count)
+	if count != 13 {
+		t.Errorf("schema_migrations count = %d, want 13", count)
 	}
 
 	for _, table := range []string{"downloads", "download_files"} {
@@ -49,8 +49,8 @@ func TestOpen_MigrationsAreIdempotentAcrossReopens(t *testing.T) {
 	if err := db2.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if count != 12 {
-		t.Errorf("schema_migrations count after reopen = %d, want 12 (migrations re-applied)", count)
+	if count != 13 {
+		t.Errorf("schema_migrations count after reopen = %d, want 13 (migrations re-applied)", count)
 	}
 }
 

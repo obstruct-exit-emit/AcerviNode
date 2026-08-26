@@ -1,0 +1,21 @@
+-- Per-download lifecycle choices for a Managed download added through
+-- AcerviNode's own UI or API, rather than by an *arr app.
+--
+-- Deliberately nullable, and deliberately not defaulted at the column level.
+-- added_via is "arr" for both a hand-added Managed download and a real *arr
+-- grab, so it cannot distinguish them; NULL is what does. The add endpoints
+-- record a value only when the caller supplies one, so an *arr add leaves
+-- both NULL and keeps exactly its previous behaviour.
+--
+--   delete_after_fetch  Delete the provider-side copy as soon as the files
+--                       are on local disk, rather than waiting for the
+--                       retention policy days later. The provider copy is
+--                       dead weight against quota once the bytes are local.
+--
+--   keep_files          Exempt this download from cleanup_after_days.
+--                       Cleanup exists to remove a local copy an *arr has
+--                       already imported elsewhere; nothing imports a
+--                       hand-added download, so without this its files are
+--                       deleted out from under the person who asked for them.
+ALTER TABLE downloads ADD COLUMN delete_after_fetch BOOLEAN;
+ALTER TABLE downloads ADD COLUMN keep_files BOOLEAN;

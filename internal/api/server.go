@@ -111,6 +111,20 @@ type KindStatus struct {
 	ErrorCount int `json:"error_count"`
 }
 
+// ManagedAddOptions are the defaults for a hand-added Managed download's
+// lifecycle. They never apply to an *arr app's own adds — see
+// config.Config.ManagedAddDeleteAfterFetch.
+type ManagedAddOptions struct {
+	// DeleteAfterFetch removes the provider-side copy as soon as the files
+	// are on local disk, rather than leaving it until the retention policy
+	// runs days later.
+	DeleteAfterFetch bool `json:"delete_after_fetch"`
+	// KeepFiles exempts the download from cleanup_after_days. Cleanup
+	// assumes an *arr already imported the files elsewhere, which is not
+	// true of a download added here.
+	KeepFiles bool `json:"keep_files"`
+}
+
 // deleter is the subset of debrid.TorrentProvider/debrid.UsenetProvider that
 // DELETE /api/v1/downloads/{id} needs — same narrow-interface approach as
 // internal/importer's provider.
@@ -247,8 +261,10 @@ type GeneralInfo struct {
 	// StuckDownloadTimeoutMinutes/CleanupErrorAfterDays mirror
 	// config.Config's own watchdog/error-cleanup fields exactly — see
 	// config.Config.StuckDownloadTimeoutMinutes's own doc comment.
-	StuckDownloadTimeoutMinutes int `json:"stuck_download_timeout_minutes"`
-	CleanupErrorAfterDays       int `json:"cleanup_error_after_days"`
+	StuckDownloadTimeoutMinutes int  `json:"stuck_download_timeout_minutes"`
+	CleanupErrorAfterDays       int  `json:"cleanup_error_after_days"`
+	ManagedAddDeleteAfterFetch  bool `json:"managed_add_delete_after_fetch"`
+	ManagedAddKeepFiles         bool `json:"managed_add_keep_files"`
 	// BackupIntervalHours/BackupKeep mirror config's own fields — see
 	// internal/backup.
 	BackupIntervalHours int `json:"backup_interval_hours"`
@@ -284,6 +300,8 @@ type GeneralUpdate struct {
 	ExcludeFileRegex              string `json:"exclude_file_regex"`
 	StuckDownloadTimeoutMinutes   int    `json:"stuck_download_timeout_minutes"`
 	CleanupErrorAfterDays         int    `json:"cleanup_error_after_days"`
+	ManagedAddDeleteAfterFetch    bool   `json:"managed_add_delete_after_fetch"`
+	ManagedAddKeepFiles           bool   `json:"managed_add_keep_files"`
 	BackupIntervalHours           int    `json:"backup_interval_hours"`
 	BackupKeep                    int    `json:"backup_keep"`
 }
@@ -299,6 +317,10 @@ type Settings interface {
 	// ProviderConfigured reports whether the named provider currently holds
 	// credentials. False for a provider that isn't registered at all.
 	ProviderConfigured(name string) bool
+	// ManagedAddDefaults are the configured defaults for the lifecycle
+	// choices offered when adding a Managed download through this API — the
+	// add form pre-fills from them and may override either per download.
+	ManagedAddDefaults() ManagedAddOptions
 	// ProviderSupportedKinds reports which kinds the provider's *service*
 	// can do at all, regardless of whether they are switched on. Distinct
 	// from what the registry holds, which is the intersection of supported

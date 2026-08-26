@@ -66,6 +66,7 @@ const settingsGroups = [
   { name: 'Import', blurb: 'How a completed download gets fetched to local disk: retries, concurrency, and timeouts.' },
   { name: 'Filtering', blurb: 'Skip specific files, by size or name pattern, when fetching a download to local disk.' },
   { name: 'Cleanup', blurb: 'Automatically remove a finished, errored, or stuck download after a while.' },
+  { name: 'Managed adds', blurb: 'Defaults for Managed downloads you add here — not ones Sonarr or Radarr add.' },
   { name: 'Backup', blurb: "Snapshots of AcerviNode's database — its configuration, history, categories and accounts." },
   { name: 'Categories', blurb: 'Pre-register categories for Sonarr/Radarr, and optionally redirect their downloads to a specific directory.' },
   { name: 'Downloads', blurb: "This browser's remembered folder for the Manual tab's downloads." },
@@ -285,6 +286,8 @@ export function Settings({ apiKey }: Props) {
         exclude_file_regex: generalSettings.exclude_file_regex,
         stuck_download_timeout_minutes: generalSettings.stuck_download_timeout_minutes,
         cleanup_error_after_days: generalSettings.cleanup_error_after_days,
+        managed_add_delete_after_fetch: generalSettings.managed_add_delete_after_fetch,
+        managed_add_keep_files: generalSettings.managed_add_keep_files,
         backup_interval_hours: generalSettings.backup_interval_hours,
         backup_keep: generalSettings.backup_keep,
       })
@@ -1451,6 +1454,52 @@ export function Settings({ apiKey }: Props) {
                 </Fragment>
               ))}
             </dl>
+          )}
+        </section>
+      )}
+
+      {group === 'Managed adds' && (
+        <section className="settings-card">
+          <h2>Managed adds</h2>
+          <p className="settings-help">
+            Defaults for a Managed download you add here, through &quot;+ Add&quot;. Both can be changed
+            for a single download at the moment you add it. They never apply to downloads Sonarr or
+            Radarr add for themselves — an *arr owns its own downloads&apos; lifecycle: it imports the
+            files and the cleanup policy tidies up behind it. A download you add by hand has no such
+            owner, which is what these are for.
+          </p>
+          {form && (
+            <form className="general-form" onSubmit={handleGeneralSubmit}>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={form.managed_add_delete_after_fetch}
+                  onChange={(e) => setForm({ ...form, managed_add_delete_after_fetch: e.target.checked })}
+                />
+                Delete from the provider once fetched
+              </label>
+              <p className="settings-help">
+                Frees the provider&apos;s storage as soon as the files are on local disk, rather than
+                leaving the copy there until the cleanup policy runs days later. The download stays
+                listed and its local files are untouched.
+              </p>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={form.managed_add_keep_files}
+                  onChange={(e) => setForm({ ...form, managed_add_keep_files: e.target.checked })}
+                />
+                Keep local files (exempt from cleanup)
+              </label>
+              <p className="settings-help">
+                Cleanup removes a Managed download&apos;s local copy on the assumption an *arr app
+                already imported it elsewhere. Nothing imports a download you added here, so without
+                this its files are deleted once <code>cleanup_after_days</code> elapses.
+              </p>
+              <button type="submit" disabled={generalStatus.kind === 'saving'}>
+                {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
+              </button>
+            </form>
           )}
         </section>
       )}

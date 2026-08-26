@@ -413,6 +413,8 @@ func (s *liveSettings) General() api.GeneralInfo {
 		ExcludeFileRegex:              s.cfg.ExcludeFileRegex,
 		StuckDownloadTimeoutMinutes:   s.cfg.StuckDownloadTimeoutMinutes,
 		CleanupErrorAfterDays:         s.cfg.CleanupErrorAfterDays,
+		ManagedAddDeleteAfterFetch:    s.cfg.ManagedAddDeleteAfterFetch,
+		ManagedAddKeepFiles:           s.cfg.ManagedAddKeepFiles,
 		BackupIntervalHours:           s.cfg.BackupIntervalHours,
 		BackupKeep:                    s.cfg.BackupKeep,
 	}
@@ -475,6 +477,8 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.ExcludeFileRegex = update.ExcludeFileRegex
 	candidate.StuckDownloadTimeoutMinutes = update.StuckDownloadTimeoutMinutes
 	candidate.CleanupErrorAfterDays = update.CleanupErrorAfterDays
+	candidate.ManagedAddDeleteAfterFetch = update.ManagedAddDeleteAfterFetch
+	candidate.ManagedAddKeepFiles = update.ManagedAddKeepFiles
 	candidate.BackupIntervalHours = update.BackupIntervalHours
 	candidate.BackupKeep = update.BackupKeep
 	if err := candidate.Validate(); err != nil {
@@ -848,6 +852,17 @@ func (s *liveSettings) ProviderType(name string) string {
 		return pc.ResolvedType(name)
 	}
 	return name
+}
+
+// ManagedAddDefaults returns the configured defaults for a hand-added
+// Managed download's lifecycle — see config.ManagedAddDeleteAfterFetch.
+func (s *liveSettings) ManagedAddDefaults() api.ManagedAddOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return api.ManagedAddOptions{
+		DeleteAfterFetch: s.cfg.ManagedAddDeleteAfterFetch,
+		KeepFiles:        s.cfg.ManagedAddKeepFiles,
+	}
 }
 
 // ProviderSupportedKinds reports which kinds this entry's *service* can do,

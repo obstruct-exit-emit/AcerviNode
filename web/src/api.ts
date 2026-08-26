@@ -184,7 +184,7 @@ export type AddedVia = 'arr' | 'manual'
 
 export function addTorrent(
   apiKey: string,
-  input: ({ magnet: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string },
+  input: ({ magnet: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string; deleteAfterFetch?: boolean; keepFiles?: boolean },
 ): Promise<Download> {
   const form = new FormData()
   if ('magnet' in input) form.set('magnet', input.magnet)
@@ -202,7 +202,7 @@ export function addTorrent(
 
 export function addUsenet(
   apiKey: string,
-  input: ({ url: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string },
+  input: ({ url: string } | { file: File }) & { category?: string; addedVia?: AddedVia; provider?: string; deleteAfterFetch?: boolean; keepFiles?: boolean },
 ): Promise<Download> {
   const form = new FormData()
   if ('url' in input) form.set('url', input.url)
@@ -219,12 +219,14 @@ export function addUsenet(
 // ~160 others TorBox's Web Downloads service supports) — link-only, unlike
 // addTorrent/addUsenet: there's no file-upload variant for this endpoint
 // (TorBox's own createwebdownload API has none either).
-export function addWebDownload(apiKey: string, input: { link: string; category?: string; addedVia?: AddedVia; provider?: string }): Promise<Download> {
+export function addWebDownload(apiKey: string, input: { link: string; category?: string; addedVia?: AddedVia; provider?: string; deleteAfterFetch?: boolean; keepFiles?: boolean }): Promise<Download> {
   const body = new URLSearchParams()
   body.set('link', input.link)
   if (input.category) body.set('category', input.category)
   if (input.addedVia) body.set('added_via', input.addedVia)
   if (input.provider) body.set('provider', input.provider)
+  if (input.deleteAfterFetch !== undefined) body.set('delete_after_fetch', String(input.deleteAfterFetch))
+  if (input.keepFiles !== undefined) body.set('keep_files', String(input.keepFiles))
   return request('/api/v1/downloads/webdl', apiKey, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -418,6 +420,10 @@ export interface GeneralSettings {
   // cleanup_error_after_days automatically removes a download that's sat
   // in error for this many days — 0 (the default) disables it entirely.
   cleanup_error_after_days: number
+  // Defaults for a hand-added Managed download's lifecycle. Never applied
+  // to an *arr app's own adds.
+  managed_add_delete_after_fetch: boolean
+  managed_add_keep_files: boolean
   backup_interval_hours: number
   backup_keep: number
 }
@@ -456,6 +462,10 @@ export interface GeneralUpdateInput {
   exclude_file_regex: string
   stuck_download_timeout_minutes: number
   cleanup_error_after_days: number
+  // Defaults for a hand-added Managed download's lifecycle. Never applied
+  // to an *arr app's own adds.
+  managed_add_delete_after_fetch: boolean
+  managed_add_keep_files: boolean
   backup_interval_hours: number
   backup_keep: number
 }

@@ -1589,6 +1589,21 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 		return fmt.Errorf("mark ready_for_import: %w", err)
 	}
 	slog.Info("importer: download ready", "id", d.ID, "name", d.Name, "dest", destDir, "files", len(files))
+
+	// The provider-side copy is dead weight once the bytes are on local
+	// disk, and for a hand-added Managed download nothing else will ever
+	// remove it: an *arr grab gets tidied by the retention policy after it
+	// imports, but nothing imports this one. Opt-in per download, defaulted
+	// from config — see config.ManagedAddDeleteAfterFetch.
+	//
+	// Best-effort and after the row is already ready_for_import: the files
+	// are safely local by this point, so a failed provider delete must not
+	// undo a successful fetch. The tombstone records whether the provider
+	// confirmed, exactly as every other delete path does, so a failure
+	// cannot let discovery re-adopt the item as a ghost.
+	if d.DeleteAfterFetch != nil && *d.DeleteAfterFetch {
+		im.deleteProviderCopyAfterFetch(ctx, d)
+	}
 	return nil
 }
 
@@ -1698,6 +1713,34 @@ func (im *Importer) RemoveLocalFiles(d *database.Download) error {
 		return fmt.Errorf("refusing to remove local files: download has no name")
 	}
 	return os.RemoveAll(im.resolveDestDir(d))
+}
+
+// deleteProviderCopyAfterFetch removes the provider-side copy of a download
+// whose files are already on local disk, for a Managed download added by
+// hand with that option chosen.
+//
+// Deliberately does not touch the local files or the row: this frees the
+// provider's storage and nothing else. The download stays listed, stays
+// importable, and its files stay where they were put.
+func (im *Importer) deleteProviderCopyAfterFetch(ctx context.Context, d *database.Download) {
+	p := im.providerFor(d)
+	if p == nil {
+		slog.Warn("importer: cannot delete provider copy, no provider for download", "id", d.ID)
+		return
+	}
+	providerConfirmed := true
+	if err := p.Delete(ctx, debrid.ProviderDownloadID(d.ProviderDownloadID), true); err != nil {
+		providerConfirmed = false
+		slog.Warn("importer: delete-after-fetch provider delete failed", "id", d.ID, "error", err)
+	} else {
+		slog.Info("importer: provider copy deleted after fetch", "id", d.ID, "name", d.Name)
+	}
+	// Tombstone regardless, same as every other delete: the local row
+	// survives here, but the provider listing will stop reporting the item
+	// and discovery must not treat that as something new to adopt.
+	if err := im.db.RecordDeletedDownload(ctx, d.Provider, d.Kind, d.ProviderDownloadID, providerConfirmed); err != nil {
+		slog.Error("importer: delete-after-fetch tombstone failed", "id", d.ID, "error", err)
+	}
 }
 
 // cleanupDownload removes one download's local files, best-effort deletes

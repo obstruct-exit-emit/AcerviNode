@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -32,6 +33,42 @@ import (
 // added — auto-fetched to download_dir/a category override by
 // internal/importer, and admin-only from then on (see downloadByID/
 // handleListDownloads' own added_via scoping).
+// resolveManagedOptions reads the two lifecycle choices offered when adding
+// a Managed download through AcerviNode's own UI or API, falling back to the
+// configured defaults when the caller doesn't state one.
+//
+// Returns nils for a Manual add and for an *arr's own add. That is the whole
+// mechanism keeping *arr grabs on their existing behaviour: added_via is
+// AddedViaArr for a hand-added Managed download too, so it cannot tell them
+// apart — a stored NULL is what does, and only this endpoint ever writes a
+// value. Both compat shims persist through a different path entirely and
+// never reach here.
+func (s *Server) resolveManagedOptions(r *http.Request, addedVia database.AddedVia) (deleteAfterFetch, keepFiles *bool) {
+	if addedVia != database.AddedViaArr {
+		return nil, nil
+	}
+	def := s.settings.ManagedAddDefaults()
+	return boolFormValue(r, "delete_after_fetch", def.DeleteAfterFetch),
+		boolFormValue(r, "keep_files", def.KeepFiles)
+}
+
+// boolFormValue reads an explicit "true"/"false" from the form, falling back
+// to def when the field is absent or unparseable. Returns a pointer because
+// the column is deliberately nullable — see resolveManagedOptions.
+func boolFormValue(r *http.Request, name string, def bool) *bool {
+	v := strings.TrimSpace(r.FormValue(name))
+	if v == "" {
+		out := def
+		return &out
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		out := def
+		return &out
+	}
+	return &parsed
+}
+
 func (s *Server) resolveAddedVia(r *http.Request) (database.AddedVia, error) {
 	if r.FormValue("added_via") != string(database.AddedViaArr) {
 		return database.AddedViaManual, nil
@@ -196,6 +233,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
 	magnet := strings.TrimSpace(r.FormValue("magnet"))
@@ -261,6 +299,10 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		// only knows the qBittorrent/SABnzbd shims), but an admin can
 		// explicitly request Managed instead — see resolveAddedVia.
 		AddedVia: addedVia,
+		// nil for a Manual add and for an *arr's own add — see
+		// resolveManagedOptions.
+		DeleteAfterFetch: deleteAfterFetch,
+		KeepFiles:        keepFiles,
 	}
 	if d.Name == "" {
 		d.Name = d.Hash
@@ -290,6 +332,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
 	nzbURL := strings.TrimSpace(r.FormValue("url"))
@@ -362,6 +405,10 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		// Manual by default, or Managed if an admin explicitly requested it
 		// — see resolveAddedVia.
 		AddedVia: addedVia,
+		// nil for a Manual add and for an *arr's own add — see
+		// resolveManagedOptions.
+		DeleteAfterFetch: deleteAfterFetch,
+		KeepFiles:        keepFiles,
 	}
 	d, existed, err := s.existingOrInsert(ctx, providerName, string(id), d)
 	if err != nil {
@@ -458,6 +505,7 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
 	link := strings.TrimSpace(r.FormValue("link"))
@@ -514,6 +562,10 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		// the way a torrent/usenet Managed download can), or Managed if an
 		// admin explicitly requested it — see resolveAddedVia.
 		AddedVia: addedVia,
+		// nil for a Manual add and for an *arr's own add — see
+		// resolveManagedOptions.
+		DeleteAfterFetch: deleteAfterFetch,
+		KeepFiles:        keepFiles,
 	}
 	d, existed, err := s.existingOrInsert(ctx, providerName, string(id), d)
 	if err != nil {

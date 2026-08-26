@@ -1770,3 +1770,30 @@ table.detail-files tbody tr:last-child td {
 .add-provider select {
   flex: 1;
 }
+
+/* A checkbox and its label on one line, inside a settings form whose other
+   rows are stacked label-over-input. */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-direction: row;
+}
+
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+}
+
+/* The per-add overrides of the Managed defaults, grouped so they read as
+   belonging to the Managed choice above rather than to the form below. */
+.managed-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}

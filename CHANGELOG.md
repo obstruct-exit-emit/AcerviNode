@@ -60,6 +60,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Lifecycle options for Managed downloads you add yourself.** A Managed
+  download added through "+ Add" behaves like an \*arr-added one — fetched to
+  disk automatically — but nothing owns it afterwards. No \*arr imports the
+  files, and no \*arr triggers the tidy-up that assumes they were imported.
+  Two options now fill that gap, with defaults in **Settings → Managed adds**
+  and a per-download override on the add form itself:
+
+  - **Delete from provider once fetched.** Frees provider quota as soon as the
+    bytes are local, rather than leaving the copy until `cleanup_after_days`
+    runs days later. Local files and the row are untouched.
+  - **Keep local files.** Exempts the download from `cleanup_after_days`.
+
+  That second one closes a real data-loss path. Cleanup's premise is that an
+  \*arr already imported the files elsewhere, so removing AcerviNode's copy is
+  removing a redundant one. That premise holds for an \*arr grab and fails for
+  a hand-added download: nothing imports it, so cleanup was deleting the files
+  the operator had asked for. With `cleanup_after_days` enabled that was a
+  timer, not a hypothetical.
+
+  **\*arr-added downloads are untouched**, and by construction rather than by
+  a conditional: `added_via` is `arr` for both kinds, so it cannot distinguish
+  them. The new columns are nullable and only the native add endpoints ever
+  write one, so every \*arr grab leaves them `NULL` and behaves exactly as
+  before.
+
 - **Documented what removing a provider leaves behind.** `providers.md` had
   "Adding a new provider" and no counterpart. Measured against a binary
   pointed at a config naming a provider type it had never heard of, with that

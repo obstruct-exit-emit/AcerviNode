@@ -220,6 +220,22 @@ type Config struct {
 	// automatic cleanup path.
 	CleanupErrorAfterDays int `yaml:"cleanup_error_after_days"`
 
+	// ManagedAddDeleteAfterFetch and ManagedAddKeepFiles are the *defaults*
+	// for the two lifecycle choices offered when adding a Managed download
+	// through AcerviNode's own UI or API — the "+ Add → Managed" flow. The
+	// add form pre-fills from these and lets either be overridden for one
+	// download.
+	//
+	// They apply only to that flow, never to an *arr app's own adds. An
+	// *arr-added download's lifecycle is owned by the *arr: it imports the
+	// files and AcerviNode's retention policy tidies up behind it. A
+	// hand-added one has no such owner, which is the whole reason these
+	// exist. The mechanism is that the add endpoints only record a choice
+	// when the caller supplies one, so an *arr add leaves both unset and
+	// behaves exactly as it always has.
+	ManagedAddDeleteAfterFetch bool `yaml:"managed_add_delete_after_fetch"`
+	ManagedAddKeepFiles        bool `yaml:"managed_add_keep_files"`
+
 	// ProviderRequestTimeoutSeconds bounds how long a single call to the
 	// debrid provider's own API (list, status, add, delete, account — every
 	// one of them) may run before being cancelled. A plain total-request

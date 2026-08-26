@@ -67,6 +67,11 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // non-admin to end up with this true.
   const [managed, setManaged] = useState(isAdmin && defaultManaged)
   const [category, setCategory] = useState('')
+  // Per-add overrides of the configured Managed defaults. undefined until the
+  // defaults arrive, so an add before then sends nothing and the server
+  // applies its own defaults rather than a guessed false.
+  const [deleteAfterFetch, setDeleteAfterFetch] = useState<boolean | undefined>(undefined)
+  const [keepFiles, setKeepFiles] = useState<boolean | undefined>(undefined)
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   // Cached/metadata preview — cached is null until a check-cached response
@@ -146,17 +151,21 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
       // sends it: Manual downloads mirror TorBox's own web UI, which has no
       // category concept at all (see ROADMAP.md's "Manual categories" entry).
       const categoryToSend = managed ? category.trim() : undefined
+      // Managed-only: the server ignores them for a Manual add, and sending
+      // them anyway would imply they meant something there.
+      const dafToSend = managed ? deleteAfterFetch : undefined
+      const kfToSend = managed ? keepFiles : undefined
       const addedVia = managed ? 'arr' : undefined
       // Empty means "didn't choose", which the server reads as the default.
       const providerToSend = provider || undefined
       if (protocol === 'torrent') {
-        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend })
-        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
+        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
+        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
       } else if (protocol === 'usenet') {
-        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend })
-        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
+        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
+        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
       } else {
-        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia, provider: providerToSend })
+        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
       }
       onAdded(managed)
     } catch (err) {
@@ -207,6 +216,27 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               ? 'Fetched to disk automatically, same as an *arr-added download — shows up in the Managed tab.'
               : "Grabbed on demand, mirroring TorBox's own web UI — shows up in the Manual tab, never auto-fetched."}
           </p>
+        )}
+
+        {/* Only for a Managed add, and only once the defaults have loaded —
+            these override them for this one download. Nothing here applies to
+            a download an *arr adds for itself. Defaults live in
+            Settings → Managed adds. */}
+        {isAdmin && managed && deleteAfterFetch !== undefined && keepFiles !== undefined && (
+          <div className="managed-options">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={deleteAfterFetch}
+                onChange={(e) => setDeleteAfterFetch(e.target.checked)}
+              />
+              Delete from provider once fetched
+            </label>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={keepFiles} onChange={(e) => setKeepFiles(e.target.checked)} />
+              Keep local files (exempt from cleanup)
+            </label>
+          </div>
         )}
 
         {availableProtocols.length > 1 && (

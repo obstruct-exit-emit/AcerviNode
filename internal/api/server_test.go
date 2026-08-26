@@ -172,25 +172,26 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
-	resetProviders   []string
-	resetErr         error
-	supportedKinds   map[string]bool
-	setKinds         map[string]map[string]bool
-	setKindsErr      error
-	defaultProvider  string
-	addedProviders   [][3]string
-	removedProviders []string
-	addProviderErr   error
-	backupRuns       int
-	backupErr        error
-	backups          []BackupInfo
-	configured       bool
-	setCalls         []string
-	setErr           error
-	apiKey           string
-	regenCalls       int
-	regenErr         error
-	general          GeneralInfo
+	managedAddDefaults ManagedAddOptions
+	resetProviders     []string
+	resetErr           error
+	supportedKinds     map[string]bool
+	setKinds           map[string]map[string]bool
+	setKindsErr        error
+	defaultProvider    string
+	addedProviders     [][3]string
+	removedProviders   []string
+	addProviderErr     error
+	backupRuns         int
+	backupErr          error
+	backups            []BackupInfo
+	configured         bool
+	setCalls           []string
+	setErr             error
+	apiKey             string
+	regenCalls         int
+	regenErr           error
+	general            GeneralInfo
 
 	testLatencyMs int64
 	testErr       error
@@ -391,6 +392,9 @@ func (f *fakeSettings) ProviderSupportedKinds(string) map[string]bool {
 	}
 	return map[string]bool{"torrent": true, "usenet": true, "webdl": true}
 }
+
+// managedAddDefaults lets a test set what the add form would pre-fill.
+func (f *fakeSettings) ManagedAddDefaults() ManagedAddOptions { return f.managedAddDefaults }
 
 func (f *fakeSettings) ResetProvider(_ context.Context, name string) error {
 	if f.resetErr != nil {
