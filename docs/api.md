@@ -270,6 +270,22 @@ hoster link are genuinely indistinguishable without fetching them. That is
 purely a client-side convenience deciding which endpoint to call; nothing
 about these endpoints changed, and an API caller still picks one directly.
 
+The form also unwraps nested base64 before deciding: paste a link that has
+been base64'd, and it decodes in place — repeatedly, if it was encoded more
+than once — until it reaches a magnet, infohash or URL. Both standard base64
+and the URL-safe alphabet are handled, up to ten layers.
+
+A decode is only kept if it *lands* on one of those three. That rule is not
+caution for its own sake: a bare infohash is itself valid base64 — forty hex
+characters, correct alphabet, length divisible by four — and decodes cleanly
+into binary noise, so a decoder that accepted decodes on their own merit
+would silently destroy one. Requiring the result to be recognisable means a
+decode has to be going somewhere before it is taken.
+
+The transformation is shown, not silent, and one click restores what was
+pasted. Again this is the web UI only; the endpoints receive whatever the
+caller sends.
+
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web

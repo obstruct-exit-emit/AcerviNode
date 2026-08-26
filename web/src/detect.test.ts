@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectFromFile, detectFromLink, kindLabel } from './detect'
+import { detectFromFile, detectFromLink, kindLabel, unwrapEncoded } from './detect'
 
 describe('detectFromLink', () => {
   it.each([
@@ -143,5 +143,76 @@ describe('kindLabel', () => {
     expect(kindLabel('torrent')).toBe('Torrent')
     expect(kindLabel('usenet')).toBe('Usenet')
     expect(kindLabel('webdl')).toBe('Web Link')
+  })
+})
+
+describe('unwrapEncoded', () => {
+  // btoa rather than Buffer: this file is typechecked against the browser
+  // tsconfig, which has no Node types. Encoding through TextEncoder first
+  // keeps non-ASCII intact, which btoa alone cannot do.
+  const b64 = (s: string) =>
+    btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+
+  it('leaves something already usable alone', () => {
+    for (const clear of [MAGNET, 'https://mega.nz/file/abc', 'a'.repeat(40)]) {
+      expect(unwrapEncoded(clear)).toEqual({ value: clear, layers: 0 })
+    }
+  })
+
+  it('peels a single layer', () => {
+    expect(unwrapEncoded(b64(MAGNET))).toEqual({ value: MAGNET, layers: 1 })
+  })
+
+  it.each([2, 3, 5, 8])('peels %d nested layers', (n) => {
+    let enc = MAGNET
+    for (let i = 0; i < n; i++) enc = b64(enc)
+    expect(unwrapEncoded(enc)).toEqual({ value: MAGNET, layers: n })
+  })
+
+  it('gives up past the depth cap rather than looping', () => {
+    let enc = MAGNET
+    for (let i = 0; i < 12; i++) enc = b64(enc)
+    // Too deep to reach the magnet, so the input is returned untouched
+    // rather than half-decoded into something meaningless.
+    expect(unwrapEncoded(enc).layers).toBe(0)
+  })
+
+  // The reason the "must land somewhere recognisable" rule exists. Forty hex
+  // characters is valid base64 and decodes cleanly to binary noise, so a
+  // decoder that accepted decodes on their own merit would destroy a hash.
+  it('never mangles a bare infohash, which is itself valid base64', () => {
+    const hash = 'dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'
+    expect(unwrapEncoded(hash)).toEqual({ value: hash, layers: 0 })
+  })
+
+  it('leaves ordinary text that is not encoded alone', () => {
+    for (const s of ['Big Buck Bunny', 'not base64 at all!', '', '   ']) {
+      expect(unwrapEncoded(s).layers).toBe(0)
+    }
+  })
+
+  // Decoding to plausible-looking but useless text must not be accepted:
+  // the result has to be a magnet, hash or URL to be kept.
+  it('does not accept a decode that lands on nothing usable', () => {
+    const enc = b64('just some words here')
+    expect(unwrapEncoded(enc)).toEqual({ value: enc, layers: 0 })
+  })
+
+  it('handles base64url as well as standard base64', () => {
+    const url = 'https://example.com/a?x=1&y=2'
+    const std = b64(url)
+    const urlsafe = std.replace(/\+/g, '-').replace(/\//g, '_')
+    expect(unwrapEncoded(urlsafe)).toEqual({ value: url, layers: 1 })
+  })
+
+  it('preserves non-ASCII characters through the decode', () => {
+    const link = 'https://example.com/café-résumé'
+    expect(unwrapEncoded(b64(link))).toEqual({ value: link, layers: 1 })
+  })
+
+  it('detection then runs on the decoded value', () => {
+    const { value } = unwrapEncoded(b64(b64(MAGNET)))
+    expect(detectFromLink(value)).toEqual({ kind: 'torrent', certain: true })
   })
 })

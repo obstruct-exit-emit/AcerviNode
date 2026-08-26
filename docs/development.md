@@ -52,7 +52,7 @@ cd web && npm test
 ```
 
 Currently one suite: `src/detect.test.ts`, covering the add form's type
-detection. That logic decides which endpoint an add goes to from a pasted
+detection and its base64 unwrapping. That logic decides which endpoint an add goes to from a pasted
 link or an uploaded file's bytes, has genuinely fiddly edges — an extension
 in a query string, a half-typed URL, XML that isn't an NZB — and is the kind
 of pure function unit tests are actually good at. CI runs it alongside the

@@ -60,6 +60,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The add form unwraps base64-encoded links.** Paste a link that has been
+  base64'd and it decodes in place, repeatedly if it was encoded more than
+  once, until it reaches a magnet, infohash or URL. Standard base64 and the
+  URL-safe alphabet, up to ten layers deep. Verified against a magnet nested
+  five deep: 312 characters of base64 in, a working add out.
+
+  A decode is only kept if it **lands** on something recognisable, and that
+  rule is doing real work. A bare infohash is itself valid base64 — forty hex
+  characters, the right alphabet, length divisible by four — and decodes
+  cleanly into binary noise, so accepting decodes on their own merit would
+  have silently destroyed the hash support added in the same session.
+  Requiring the result to be a magnet, hash or URL means a decode must be
+  going somewhere before it is taken.
+
+  Shown rather than done silently: the field reports "decoded from base64
+  ×5" and one click restores exactly what was pasted. Rewriting someone's
+  input with no sign it happened and no way back is a poor trade for the
+  convenience.
+
+  A depth cap of ten bounds input that keeps decoding into more decodable
+  nonsense, which would otherwise spin in the browser.
+
 - **Torrents can be added by bare infohash.** Pasting a hash on its own —
   40 hex characters for v1, 64 for v2 — now works everywhere a magnet does,
   in the add form and through `POST /api/v1/downloads/torrent`.
