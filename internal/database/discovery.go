@@ -99,14 +99,24 @@ func (db *DB) HasAnyDownloads(ctx context.Context) (bool, error) {
 
 // recentlyDeletedGracePeriod is how long a tombstone recorded by
 // RecordDeletedDownload keeps an item excluded from discovery — see
-// RecentlyDeletedDownloads. Generous on purpose: a provider's own delete
-// isn't always instantly reflected in its listing endpoints (confirmed live
-// against a real account: TorBox's mylist could still briefly show a torrent
-// just after its delete call returned success), and there's essentially no
-// downside to erring long here — a provider_download_id that's genuinely
-// gone never legitimately reappears (a fresh add always gets a new one), so
-// this only ever blocks re-adopting the exact same now-defunct id.
-const recentlyDeletedGracePeriod = 5 * time.Minute
+// RecentlyDeletedDownloads. A provider's own delete isn't always instantly
+// reflected in its listing endpoints, and this has to outlast that lag or
+// the ghost it exists to prevent simply arrives once the window lapses.
+//
+// Was five minutes, described as generous, on an earlier observation that
+// TorBox's mylist could "briefly" still show a just-deleted torrent. Timed
+// properly against a real account it took roughly **six** minutes for a
+// confirmed delete to leave the listing — longer than the window meant to
+// cover it, leaving a gap in which discovery could re-adopt the download as
+// a brand-new Manual one. An hour is about ten times the observed lag.
+//
+// Erring long costs essentially nothing, which is what makes the fix easy:
+// a provider_download_id that is genuinely gone never legitimately
+// reappears (a fresh add always gets a new one), so this only ever blocks
+// re-adopting the exact same now-defunct id. Compare
+// unconfirmedDeleteGracePeriod below, which errs very much longer for the
+// same reason.
+const recentlyDeletedGracePeriod = time.Hour
 
 // unconfirmedDeleteGracePeriod is the tombstone lifetime when the
 // provider-side delete did *not* succeed. The reasoning above — that a

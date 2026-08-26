@@ -452,6 +452,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The delete tombstone expired before the provider's listing caught up.**
+  A confirmed delete kept an item out of discovery for five minutes, on an
+  earlier observation that TorBox's listing could "briefly" still show a
+  just-deleted torrent. Timed properly against a real account, a confirmed
+  delete took roughly **six** minutes to leave `mylist` — longer than the
+  window meant to cover it, so discovery could re-adopt the download as a
+  brand-new Manual one in the gap. Exactly the ghost the tombstone exists to
+  prevent.
+
+  Raised to an hour, about ten times the observed lag. Erring long costs
+  nothing here: a `provider_download_id` that is genuinely gone never
+  legitimately reappears, since a fresh add always gets a new one, so this
+  only ever suppresses re-adopting the one defunct id.
+
 - **A download whose provider listed no files was marked ready to import.**
   The importer guarded the case where *filters* removed every file, but not
   the case where the provider returned no file list at all. That walked

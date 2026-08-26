@@ -706,7 +706,10 @@ intentionally removed, showing as "Available" when it genuinely isn't.
 `handleDeleteDownload` (`internal/api`) tombstones every real delete
 (`database.RecordDeletedDownload`) before removing the local row;
 `discoverManual` skips adopting anything tombstoned within
-`recentlyDeletedGracePeriod` (5 minutes, generous on purpose — a
+`recentlyDeletedGracePeriod` (an hour — timed against a real account, where
+a confirmed delete took roughly six minutes to leave TorBox's listing, so
+the previous five-minute window expired *before* the lag it existed to
+cover; a
 `provider_download_id` that's genuinely gone never legitimately reappears,
 since a fresh add always gets a new one, so this only ever blocks
 re-adopting the exact same now-defunct id). Tombstones past their own expiry
@@ -714,7 +717,7 @@ are pruned opportunistically on every new one recorded, rather than needing
 a separate cleanup job.
 
 **A tombstone's lifetime depends on whether the provider-side delete
-actually succeeded**, because that five-minute reasoning quietly assumes it
+actually succeeded**, because that one-hour reasoning quietly assumes it
 did. The provider call is best-effort — a provider outage or rate limit must
 never leave a row the user can't remove — so when it fails, the item is
 genuinely still on the account, and a short window doesn't prevent the ghost
