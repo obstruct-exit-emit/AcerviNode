@@ -28,3 +28,6 @@ jobs:
       - run: make build
       - run: go vet ./...
       - run: go test ./...
+      - name: Frontend tests
+        run: npm test
+        working-directory: web

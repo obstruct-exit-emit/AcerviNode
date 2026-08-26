@@ -45,6 +45,19 @@ This was found the hard way: served with no cache headers at all, browsers
 applied heuristic caching to `index.html`, and a deployed UI change stayed
 invisible in the browser while being demonstrably live on the server.
 
+Frontend tests (vitest, no browser needed):
+
+```sh
+cd web && npm test
+```
+
+Currently one suite: `src/detect.test.ts`, covering the add form's type
+detection. That logic decides which endpoint an add goes to from a pasted
+link or an uploaded file's bytes, has genuinely fiddly edges — an extension
+in a query string, a half-typed URL, XML that isn't an NZB — and is the kind
+of pure function unit tests are actually good at. CI runs it alongside the
+Go suite.
+
 Frontend-only iteration (Node 22+):
 
 ```sh
