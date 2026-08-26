@@ -92,7 +92,7 @@ the storage layer.
 - Once a download finishes on the provider side, `internal/importer` fetches the
   actual files over plain HTTP and writes them to `save_path` — the same thing a
   normal download client does, just sourced from a debrid CDN link instead of
-  BitTorrent/NNTP. No FUSE, no Linux-only mount — this runs the same on Windows.
+  BitTorrent/NNTP. No FUSE, no Linux-only mount, so it builds and runs on Windows too — though the packaged, supported deployment is Linux with systemd.
 - A fetch that fails is retried with exponential backoff, not forever and not
   instantly — `import_max_retries` (default 5) caps how many attempts a download
   gets before it's moved to `error` instead of retried again.
