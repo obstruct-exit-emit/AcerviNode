@@ -12,7 +12,16 @@ import {
   type ProviderStatus,
   type TorrentInfoResponse,
 } from '../api'
-import { detectFromFile, detectFromLink, kindLabel, unwrapEncoded, type Detection, type Kind } from '../detect'
+import {
+  detectFromFile,
+  detectFromLink,
+  kindLabel,
+  noDecode,
+  stepDecode,
+  undoDecode,
+  type Detection,
+  type Kind,
+} from '../detect'
 import { formatBytes } from '../format'
 
 type Protocol = 'torrent' | 'usenet' | 'webdl'
@@ -59,9 +68,9 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   const [override, setOverride] = useState<Kind | null>(null)
   const [fileError, setFileError] = useState('')
   // What was decoded away, so the transformation is visible and reversible.
-  // decodedFrom holds the text as pasted; null means nothing was decoded.
-  const [decodedFrom, setDecodedFrom] = useState<string | null>(null)
-  const [decodedLayers, setDecodedLayers] = useState(0)
+  // The whole transition lives in stepDecode/undoDecode — see detect.ts for
+  // why this needs to be a state machine and not a single call.
+  const [decode, setDecode] = useState(noDecode)
   const protocol: Protocol = override ?? detected.kind
   // Web Downloads is genuinely link-only — TorBox's own createwebdownload API
   // has no file-upload variant, unlike torrent/usenet — so there's no mode
@@ -215,22 +224,18 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   useEffect(() => {
     if (mode !== 'link') return
     setOverride(null)
-    // Peel any nested base64 before deciding what this is. Rewrites the
-    // field in place, which is why the original is kept — see the notice
-    // rendered below, which offers it back.
-    const unwrapped = unwrapEncoded(link)
-    if (unwrapped.layers > 0 && unwrapped.value !== link) {
-      setDecodedFrom(link)
-      setDecodedLayers(unwrapped.layers)
-      setLink(unwrapped.value)
+    // Peel any nested base64 before deciding what this is. This can rewrite
+    // the field, which re-runs the effect; stepDecode is what keeps that
+    // second pass from undoing the notice or re-decoding a restored value.
+    const step = stepDecode(link, decode)
+    if (step.state !== decode) setDecode(step.state)
+    if (step.link !== link) {
+      setLink(step.link)
       return
     }
-    // Any edit that is not itself a decode invalidates a previous one.
-    if (decodedFrom !== null && link !== decodedFrom) setDecodedFrom(null)
     setDetected(detectFromLink(link))
-    // decodedFrom is deliberately not a dependency: including it would
-    // re-run this on the very state change it makes, clearing the notice
-    // immediately after setting it.
+    // decode is deliberately not a dependency: it changes as a result of
+    // this effect, and including it would re-enter on its own write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link, mode])
 
@@ -351,16 +356,16 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         {/* The decode is shown rather than done silently: rewriting what
             someone pasted, with no sign it happened and no way back, is a
             poor trade for the convenience. */}
-        {decodedFrom !== null && (
+        {decode.from !== null && (
           <p className="settings-help decoded-notice">
-            Decoded from base64 {decodedLayers > 1 ? `×${decodedLayers}` : ''}.{' '}
+            Decoded from base64 {decode.layers > 1 ? `×${decode.layers}` : ''}.{' '}
             <button
               type="button"
               className="link-button"
               onClick={() => {
-                const original = decodedFrom
-                setDecodedFrom(null)
-                setLink(original)
+                const step = undoDecode(decode)
+                setDecode(step.state)
+                setLink(step.link)
               }}
             >
               use what I pasted instead

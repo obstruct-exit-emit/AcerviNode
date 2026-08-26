@@ -576,6 +576,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Two bugs in the base64 decode notice.** The "Decoded from base64 ×N"
+  notice cleared itself on the very re-render the decode caused: after a
+  successful decode the field no longer matches what was pasted *by
+  definition*, and the stale-check read that as a user edit. Separately, the
+  "use what I pasted instead" button restored the encoded text only for the
+  effect to decode it straight back, so the button appeared inert.
+
+  Both lived in component state where nothing could reach them, so the
+  transition is now a pure function — `stepDecode`/`undoDecode` in
+  `web/src/detect.ts` — driven to a fixed point in tests the same way React
+  drives it. Reintroducing either bug fails the suite.
+
+  Worth recording what was *not* wrong: the report that prompted this was a
+  paste truncated to 41 characters, which is not valid base64 (41 % 4 = 1).
+  The decoder correctly declined it and left the text alone. The add form now
+  documents that complete input is required.
+
+
 - **"Cached" showed when AcerviNode noticed a download, not when the provider
   cached it.** The detail view's `cached_at` records the first moment this row
   was seen provider-complete — a fact about your download. Read under a

@@ -52,11 +52,19 @@ cd web && npm test
 ```
 
 Currently one suite: `src/detect.test.ts`, covering the add form's type
-detection and its base64 unwrapping. That logic decides which endpoint an add goes to from a pasted
-link or an uploaded file's bytes, has genuinely fiddly edges — an extension
-in a query string, a half-typed URL, XML that isn't an NZB — and is the kind
-of pure function unit tests are actually good at. CI runs it alongside the
-Go suite.
+detection, its base64 unwrapping, and the decode state machine. That logic
+decides which endpoint an add goes to from a pasted link or an uploaded
+file's bytes, has genuinely fiddly edges — an extension in a query string, a
+half-typed URL, XML that isn't an NZB — and is the kind of pure function unit
+tests are actually good at. CI runs it alongside the Go suite.
+
+`stepDecode`/`undoDecode` are pure for a specific reason. Decoding rewrites
+the input field, which re-runs the effect that did the rewrite, so the
+behaviour only makes sense across that second pass — and two bugs hid in
+exactly that gap while the logic lived in component state. The tests drive
+the pair to a fixed point the way React does, which is why they catch what
+inspection did not. Prefer that shape over adding a DOM test setup: there is
+no jsdom here, and this stayed testable without one.
 
 Frontend-only iteration (Node 22+):
 

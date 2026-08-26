@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { detectFromFile, detectFromLink, kindLabel, unwrapEncoded } from './detect'
+import {
+  detectFromFile,
+  detectFromLink,
+  kindLabel,
+  noDecode,
+  stepDecode,
+  undoDecode,
+  unwrapEncoded,
+} from './detect'
 
 describe('detectFromLink', () => {
   it.each([
@@ -214,5 +222,97 @@ describe('unwrapEncoded', () => {
   it('detection then runs on the decoded value', () => {
     const { value } = unwrapEncoded(b64(b64(MAGNET)))
     expect(detectFromLink(value)).toEqual({ kind: 'torrent', certain: true })
+  })
+})
+
+describe('stepDecode / undoDecode', () => {
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+
+  // The effect rewrites the field and thereby re-runs itself, so correctness
+  // is only visible across the settle, never in a single call. This drives it
+  // the same way React does, to a fixed point.
+  const settle = (link: string, state = noDecode, max = 6) => {
+    let cur = { link, state }
+    for (let i = 0; i < max; i++) {
+      const next = stepDecode(cur.link, cur.state)
+      if (next.link === cur.link && next.state === cur.state) return cur
+      cur = next
+    }
+    throw new Error('never settled — the effect would loop')
+  }
+
+  it('settles rather than looping', () => {
+    expect(() => settle(b64(b64(MAGNET)))).not.toThrow()
+    expect(() => settle(MAGNET)).not.toThrow()
+    expect(() => settle('')).not.toThrow()
+  })
+
+  it('leaves an untouched input with no notice', () => {
+    const r = settle(MAGNET)
+    expect(r.link).toBe(MAGNET)
+    expect(r.state.from).toBeNull()
+  })
+
+  // Bug 1: the notice cleared itself on the re-render the decode caused,
+  // because the field no longer matched the original — which is true by
+  // definition after a successful decode.
+  it('keeps the notice after the rewrite re-runs the effect', () => {
+    const enc = b64(b64(b64(MAGNET)))
+    const r = settle(enc)
+    expect(r.link).toBe(MAGNET)
+    expect(r.state.from).toBe(enc)
+    expect(r.state.layers).toBe(3)
+  })
+
+  it('retires the notice once the user edits the field', () => {
+    const after = settle(b64(MAGNET))
+    const edited = settle('https://example.com/other', after.state)
+    expect(edited.state.from).toBeNull()
+    expect(edited.state.layers).toBe(0)
+  })
+
+  // Bug 2: undo restored the pasted text, which the effect immediately
+  // decoded straight back — so the button appeared to do nothing at all.
+  it('undo restores the original and it stays restored', () => {
+    const enc = b64(b64(MAGNET))
+    const decoded = settle(enc)
+    expect(decoded.link).toBe(MAGNET)
+
+    const undone = undoDecode(decoded.state)
+    expect(undone.link).toBe(enc)
+
+    const after = settle(undone.link, undone.state)
+    expect(after.link).toBe(enc)
+    expect(after.state.from).toBeNull()
+  })
+
+  it('decodes again once the user replaces a pinned value', () => {
+    const first = b64(MAGNET)
+    const undone = undoDecode(settle(first).state)
+    const other = b64('https://example.com/x')
+    const r = settle(other, undone.state)
+    expect(r.link).toBe('https://example.com/x')
+    expect(r.state.layers).toBe(1)
+  })
+
+  it('does nothing to input that was never encoded', () => {
+    const r = settle('Big Buck Bunny')
+    expect(r.link).toBe('Big Buck Bunny')
+    expect(r.state).toBe(noDecode)
+  })
+
+  // The reported failure: text copied out of a truncated terminal line is no
+  // longer valid base64, and must be left exactly as pasted rather than
+  // half-decoded into something worse.
+  it('leaves a truncated paste alone', () => {
+    const truncated = b64(b64(MAGNET)).slice(23)
+    const r = settle(truncated)
+    expect(r.link).toBe(truncated)
+    expect(r.state.from).toBeNull()
+  })
+
+  it('undo on a state with nothing decoded is inert', () => {
+    expect(undoDecode(noDecode).state).toBe(noDecode)
   })
 })

@@ -282,9 +282,15 @@ into binary noise, so a decoder that accepted decodes on their own merit
 would silently destroy one. Requiring the result to be recognisable means a
 decode has to be going somewhere before it is taken.
 
+The input has to be *complete* base64 for any of this to happen. A partial
+paste — text copied out of a truncated terminal line, say — is not valid
+base64, fails the length check, and is left in the field exactly as pasted
+rather than being half-decoded into something worse.
+
 The transformation is shown, not silent, and one click restores what was
-pasted. Again this is the web UI only; the endpoints receive whatever the
-caller sends.
+pasted, which then stays restored rather than being decoded straight back.
+Again this is the web UI only; the endpoints receive whatever the caller
+sends.
 
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
