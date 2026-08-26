@@ -1843,7 +1843,11 @@ func TestHandleRetryDownload(t *testing.T) {
 	}
 }
 
-func TestHandleRetryDownload_RejectsNonErrorState(t *testing.T) {
+// Renamed from ...RejectsNonErrorState: retry now accepts several non-error
+// states (see retryableState). What it actually pins, and always did, is
+// that a download still in flight provider-side is refused — seedDownload
+// defaults to StateDownloading.
+func TestHandleRetryDownload_RejectsInFlightState(t *testing.T) {
 	srv, db := newTestServer(t, nil, nil, nil)
 	d := seedDownload(t, db, database.KindTorrent, "p1") // seedDownload defaults to StateDownloading
 

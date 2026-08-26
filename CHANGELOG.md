@@ -60,6 +60,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`GET /api/v1/status` reports a goroutine count.** Memory can sit
+  perfectly flat while goroutines accumulate against a wedged provider call,
+  so RSS alone cannot rule out a leak — a soak against this instance had no
+  way to see one, with thread count as the only proxy and it doesn't move
+  reliably. A single `goroutines` gauge rather than mounting
+  `net/http/pprof`, which answers this and much more: full stacks and heap
+  contents are a lot of internal detail to expose on a service holding
+  provider credentials.
+
+- **Settings warns when a compat shim has nothing behind it.** A shim with no
+  capable provider answers its \*arr app's Test perfectly — Test only probes
+  version and config, neither of which depends on provider state — and then
+  fails every grab with "no <kind>-capable provider configured". The gap
+  between a green Test and a broken grab now shows where someone would see
+  it. A notice rather than making Test fail: both shims mount
+  unconditionally so an \*arr can be configured before a key is pasted, and
+  failing Test would break that order.
+
 - **"Reset provider" replaces "Remove provider" for the providers this build
   knows about.** Removing one was always a slight lie: the config entry went,
   but the provider was rebuilt from the known list on the next start and the
@@ -451,6 +469,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **`retry` refused any download that wasn't in `error`.** It re-runs the
+  local fetch, so it applies to anything the provider has already finished —
+  but it accepted only `error`, which left a download that was *wrong without
+  having given up* with no way back. Hit live: a `ready_for_import` row whose
+  files never landed answered `409`, and delete-and-re-grab was the only
+  escape. That specific cause is fixed, but "wrong, yet not in error" is a
+  shape that recurs.
+
+  Now accepts `error`, `ready_for_import` and `provider_completed`, and still
+  refuses `queued`/`downloading` — forcing a row the provider hasn't finished
+  into `provider_completed` would have the importer fetch something that
+  doesn't exist yet.
 
 - **The delete tombstone expired before the provider's listing caught up.**
   A confirmed delete kept an item out of discovery for five minutes, on an

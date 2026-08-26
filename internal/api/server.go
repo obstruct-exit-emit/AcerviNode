@@ -54,6 +54,21 @@ type StatusInfo struct {
 	// the timestamp moving. Added rather than replacing Kinds so existing
 	// monitors keep working.
 	Providers []ProviderKindStatus `json:"providers"`
+	// Goroutines is runtime.NumGoroutine() at the moment of the request.
+	//
+	// The one number that reliably exposes a leak in a Go service: memory
+	// can sit flat while goroutines accumulate against a wedged provider
+	// call or a listener nothing drains, and a count that climbs and never
+	// falls is the signal. A soak against this instance had no way to see
+	// that — RSS and thread count were the only proxies available, and
+	// neither moves reliably when goroutines pile up.
+	//
+	// A plain integer rather than net/http/pprof: pprof would answer this
+	// and much more, including full stacks and heap contents, which is a
+	// great deal of internal detail to mount on a service that holds
+	// provider credentials. This endpoint is already the documented place
+	// for "is the background work healthy", and one gauge fits it.
+	Goroutines int `json:"goroutines"`
 }
 
 // ProviderKindStatus is one provider's handling of one kind within

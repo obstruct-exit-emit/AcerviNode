@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -376,18 +377,46 @@ func (s *Server) handleDeleteDownload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// retryableState reports whether a manual retry makes sense for a download
+// in this state. The provider side has to be done: retry re-runs the local
+// fetch, and there is nothing to fetch from a download the provider is still
+// working on.
+func retryableState(state string) bool {
+	switch state {
+	case database.StateError, database.StateReadyForImport, database.StateProviderCompleted:
+		return true
+	default:
+		// queued, downloading — still in flight provider-side.
+		return false
+	}
+}
+
 // handleRetryDownload implements POST /api/v1/downloads/{id}/retry — the
-// manual counterpart to internal/importer's automatic retry/backoff. Only
-// valid for a download that has actually given up (StateError); anything
-// else is rejected rather than silently reprocessed out of turn.
+// manual counterpart to internal/importer's automatic retry/backoff.
+//
+// Retrying means "run the local fetch again" (RetryDownload resets the row to
+// provider_completed), so it is valid for any state where the provider side
+// is already finished, and refused for one still in flight: forcing a queued
+// or downloading row to provider_completed would have the importer fetch
+// something the provider hasn't produced yet.
+//
+// Deliberately wider than StateError alone, which it used to require. A
+// download can be wrong without having given up — a ready_for_import row
+// whose files never actually landed is the case that motivated this, and
+// under the old rule it answered 409 and left delete-and-re-add as the only
+// way out. That particular cause is fixed (see internal/importer's
+// zero-file guard), but "wrong, yet not in error" is a shape that will
+// recur, and refusing to re-run a fetch is a poor answer to it.
 func (s *Server) handleRetryDownload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	d, ok := s.downloadByID(w, r)
 	if !ok {
 		return
 	}
-	if d.State != database.StateError {
-		http.Error(w, "download is not in error state", http.StatusConflict)
+	if !retryableState(d.State) {
+		http.Error(w, fmt.Sprintf(
+			"download is %s — retry re-runs the local fetch, so it only applies once the provider has finished",
+			d.State), http.StatusConflict)
 		return
 	}
 	if err := s.db.RetryDownload(ctx, d.ID); err != nil {

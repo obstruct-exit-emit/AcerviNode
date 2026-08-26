@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1093,7 +1094,7 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		// is attached, and returning null for a documented array would
 		// break a monitor polling during startup just as surely as the
 		// fully-disabled case below.
-		return api.StatusInfo{Kinds: kinds, Providers: []api.ProviderKindStatus{}}, nil
+		return api.StatusInfo{Kinds: kinds, Providers: []api.ProviderKindStatus{}, Goroutines: runtime.NumGoroutine()}, nil
 	}
 
 	for _, kind := range []database.Kind{database.KindTorrent, database.KindUsenet, database.KindWebDL} {
@@ -1141,7 +1142,7 @@ func (s *liveSettings) Status(ctx context.Context) (api.StatusInfo, error) {
 		kinds[string(kind)] = ks
 	}
 
-	status := api.StatusInfo{Kinds: kinds, Providers: providerStatuses}
+	status := api.StatusInfo{Kinds: kinds, Providers: providerStatuses, Goroutines: runtime.NumGoroutine()}
 	if t, ok := imp.LastTickAt(); ok {
 		status.LastTickAt = &t
 	}

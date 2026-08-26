@@ -604,6 +604,9 @@ export interface StatusInfo {
   last_tick_at?: string
   kinds: Record<string, KindStatus>
   providers?: ProviderKindStatus[]
+  // runtime.NumGoroutine() — a count that climbs and never falls is a
+  // leak, which memory alone will not reliably show.
+  goroutines: number
 }
 
 export function getStatus(apiKey: string): Promise<StatusInfo> {

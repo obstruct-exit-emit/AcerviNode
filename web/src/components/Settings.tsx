@@ -836,6 +836,36 @@ export function Settings({ apiKey }: Props) {
                 />
               )
             })()}
+          {/* A compat shim with nothing behind it answers its *arr app's
+              Test perfectly well — Test only probes version and config, both
+              of which work regardless of provider state — and then fails
+              every grab with "no <kind>-capable provider configured". That
+              gap between a green Test and a broken grab is worth closing
+              where someone would actually see it. Deliberately a notice
+              here rather than making Test fail: both shims are mounted
+              unconditionally so an *arr can be configured before a key is
+              pasted, and breaking Test would break that order. */}
+          {(() => {
+            const kinds = [
+              { kind: 'torrent' as const, shim: 'qBittorrent', label: 'torrents' },
+              { kind: 'usenet' as const, shim: 'SABnzbd', label: 'usenet' },
+            ].filter(
+              (k) => !providers.some((p) => p.configured && p[`${k.kind}_enabled`]),
+            )
+            if (kinds.length === 0) return null
+            return (
+              <section className="settings-card">
+                {kinds.map((k) => (
+                  <p key={k.kind} className="settings-warn">
+                    No configured provider handles {k.label}, so the {k.shim} endpoint will refuse every
+                    grab. Sonarr/Radarr will still report it as working when you press Test — Test only
+                    checks the connection, not whether anything can serve it.
+                  </p>
+                ))}
+              </section>
+            )
+          })()}
+
           {providers.map((p) => {
             const saveState = status[p.name] ?? { kind: 'idle' as const }
             const test = testStatus[p.name] ?? { kind: 'idle' as const }
