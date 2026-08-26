@@ -20,6 +20,13 @@
 *.db-shm
 config.yaml
 
+# Test payloads. Handy to keep a real .torrent/.nzb next to the repo when
+# exercising the add form, and neither belongs in git: they are someone
+# else's content, and an .nzb in particular embeds indexer credentials in
+# its article headers.
+/*.torrent
+/*.nzb
+
 # Personal Claude Code settings
 .claude/settings.local.json
 
