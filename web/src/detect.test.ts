@@ -64,8 +64,11 @@ describe('detectFromLink', () => {
 })
 
 describe('detectFromFile', () => {
-  const asFile = (body: string | Uint8Array, name = 'upload.bin') =>
-    new File([body], name)
+  // BlobPart rather than string | Uint8Array: the latter widens to
+  // Uint8Array<ArrayBufferLike>, which TypeScript will not accept as a
+  // BlobPart even though it is one at runtime. Caught by `tsc -b` in the
+  // build, not by vitest, which does not typecheck.
+  const asFile = (body: BlobPart, name = 'upload.bin') => new File([body], name)
 
   it('identifies a bencoded torrent by its leading bytes', async () => {
     const torrent = 'd8:announce35:http://tracker.example/announce4:infod4:name4:teste'

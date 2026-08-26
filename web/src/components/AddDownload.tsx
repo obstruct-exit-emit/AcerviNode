@@ -371,13 +371,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             {mode === 'link' ? (
               <input
                 type="text"
-                placeholder={
-                  protocol === 'torrent'
-                    ? 'magnet:?xt=urn:btih:...'
-                    : protocol === 'usenet'
-                      ? 'https://example.com/release.nzb'
-                      : 'https://mega.nz/folder/...'
-                }
+                placeholder="Magnet, .torrent/.nzb URL, or hoster link"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
                 autoFocus
