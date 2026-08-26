@@ -60,6 +60,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Documented what removing a provider leaves behind.** `providers.md` had
+  "Adding a new provider" and no counterpart. Measured against a binary
+  pointed at a config naming a provider type it had never heard of, with that
+  provider set as the default: startup logs `ignoring provider entry` and
+  carries on rather than refusing, the default repoints itself to a registered
+  provider, and downloads tracked against the absent provider stay listed,
+  keep an openable detail view, and still delete cleanly — `204`, row gone,
+  local files removed, with a 30-day unconfirmed tombstone rather than the
+  5-minute confirmed one.
+
+  The caveat worth knowing: removal cannot clean up the provider's own copies,
+  since the code to reach that service is gone. Delete downloads *before*
+  dropping a provider whose account you still hold; afterwards is fine for one
+  you're finished with.
+
 - **`GET /api/v1/status` reports a goroutine count.** Memory can sit
   perfectly flat while goroutines accumulate against a wedged provider call,
   so RSS alone cannot rule out a leak — a soak against this instance had no

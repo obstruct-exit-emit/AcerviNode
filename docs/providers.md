@@ -2037,3 +2037,51 @@ expensive way:
   durable. Most are short-lived and session-bound.
 - **Test against a real account.** Every provider-specific bug listed in this
   document was found live; none surfaced in unit tests against a fake.
+
+## Removing a provider
+
+Mechanically the exact inverse of adding: delete the subpackage, delete its
+entry from `knownProviders` and `knownProviderCapabilities`, delete the
+constructor. Nothing else references it.
+
+What matters is what the removal leaves behind, which was measured against a
+binary pointed at a config naming a provider type it had never heard of —
+including having that provider set as `default_provider`.
+
+**An unknown provider type does not stop startup.** `registerProviderEntry`
+returns an error for a type it cannot construct, and the caller logs
+`ignoring provider entry` and carries on. That is deliberate: a downgrade, or
+a hand-edited `config.yaml`, must not brick an instance. The stale
+`providers.<name>` block simply sits there unused.
+
+**The default repoints itself.** `SetDefault` ignores a name that isn't
+registered, so a `default_provider` naming the removed service falls back to
+whatever is registered first, and adds keep working. Confirmed: with
+`default_provider: premiumize` and no such provider in the binary, the
+instance came up defaulted to `torbox`.
+
+**Downloads tracked against it are kept, and stay usable.** They remain
+listed, their detail view still opens, and `DELETE /api/v1/downloads/{id}`
+still works — verified end to end with the provider absent: `204`, row gone,
+local files removed with `deleteFiles=true`, and a **30-day unconfirmed**
+tombstone recorded rather than the 5-minute confirmed one, because nothing
+could verify the provider-side copy was gone. That follows the same rule as
+any failed provider delete: *a provider outage or rate limit must never leave
+a row the user can't remove*, and a provider that no longer exists in the
+binary is the permanent case of that.
+
+**The one thing removal cannot do is clean up the provider's own copy**, since
+the code to talk to that service is gone. So the order matters only when the
+account still exists:
+
+- Dropping a provider you are **done with** (account closed, service dead) —
+  remove first, tidy the leftover rows through the UI afterwards.
+- Dropping one whose **account you still hold** — delete its downloads
+  *first*, while it can still reach the API, so the provider-side copies go
+  too. Otherwise they stay on that account consuming quota with nothing able
+  to remove them.
+
+Left alone, orphaned rows are inert but permanent: they never poll, never
+resolve, and are never flagged missing (`providerFor` returns nil and the
+importer declines to act rather than erroring). `cleanup_error_after_days`
+will not catch them either, since they are not in `error`.
