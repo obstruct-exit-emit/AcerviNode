@@ -138,6 +138,65 @@ the storage layer.
   support, so they're safe to take while it's running and open cleanly on their
   own — see [Backups and restore](docs/installation.md#backups-and-restore)
 
+## What AcerviNode is, and isn't
+
+Worth reading before you install it, so nothing here is a surprise later.
+
+**What it does**
+
+- Takes torrent, NZB and hoster-link adds from Sonarr/Radarr/Lidarr/Readarr by
+  pretending to be qBittorrent and SABnzbd, hands them to a debrid provider,
+  and downloads the finished result to local disk for the \*arr app to import.
+- Runs as **one static Go binary** with an embedded SQLite database and an
+  embedded web UI. No external database, no runtime dependencies.
+- Supports **TorBox and AllDebrid**, several accounts per service, with
+  per-provider control over which kinds each one handles.
+
+**What it deliberately doesn't do**
+
+- **No mount.** Every download is fetched in full to local disk before an
+  \*arr app imports it. There is no FUSE/rclone layer presenting the provider
+  as a filesystem, so **you need disk space for everything you download**, and
+  an import waits for the whole file rather than starting instantly. This is
+  the single biggest difference from decypharr, and it is a design choice —
+  the cost is disk and latency, the benefit is no `/dev/fuse`, no `SYS_ADMIN`,
+  no mount propagation, and nothing to unwedge when a mount goes stale.
+- **No Docker image.** Packaged as a Linux tarball with a systemd unit. The
+  binary itself is portable, but the supported install story is
+  Linux + systemd.
+- **Not a BitTorrent or NNTP client.** It speaks to debrid providers only. It
+  never joins a swarm or talks to a news server, which is also why it needs no
+  ports open and no VPN.
+- **Single instance, single machine.** No clustering, no shared-state
+  deployment, no multi-node coordination. One binary, one SQLite file.
+- **Not a media manager.** It has no library, no renaming, no metadata. That
+  is the \*arr app's job, and AcerviNode hands off to it.
+
+**Things worth knowing before you rely on it**
+
+- **A member account is trusted with the provider account.** Anyone who can
+  sign in as a member can obtain a download link that carries your provider
+  API key — see [API](docs/api.md#direct-file-downloads) for exactly why and
+  what was measured. Create member accounts only for people you'd trust with
+  the provider credentials themselves.
+- **Retention is off by default.** `cleanup_after_days`,
+  `cleanup_error_after_days` and `stuck_download_timeout_minutes` all default
+  to `0`, meaning nothing is ever removed automatically. That is deliberate —
+  every one of them deletes things, and a default that quietly discards data
+  is a bad default — but it does mean history and local files accumulate
+  until you turn them on. Backups are the exception and default to **on**,
+  since doing nothing there is the only case that costs you something.
+
+  Sensible starting values, if you want them on: `cleanup_after_days: 7`
+  (a week to notice a bad import before a handed-off download is tidied),
+  `cleanup_error_after_days: 14` (longer, because an error row is diagnostic),
+  and `stuck_download_timeout_minutes: 120` (a download reporting no change
+  at all for two hours is genuinely stuck; this only marks it `error`, it
+  deletes nothing, and `retry` puts it back).
+- **It has been run in earnest on one machine.** Fresh install, upgrade,
+  backup/restore and full Sonarr/Radarr integration are all verified, but by
+  one operator on one distro. Treat early releases accordingly.
+
 ## Quick start
 
 ```sh
