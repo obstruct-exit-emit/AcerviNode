@@ -328,6 +328,17 @@ func defaults() *Config {
 		// precisely for someone who never went looking for the setting.
 		BackupIntervalHours: 24,
 		BackupKeep:          7,
+		// Both on by default, unlike the retention knobs above, because
+		// they describe what a hand-added Managed download is *for*. You
+		// asked for these bytes on this disk: keeping them is the point,
+		// and the provider's copy has served its purpose once they are
+		// there. Neither deletes anything the operator asked to keep —
+		// KeepFiles is what stops a deletion, and DeleteAfterFetch removes
+		// only the now-redundant provider-side copy.
+		//
+		// Neither ever applies to an *arr's own adds; see the field docs.
+		ManagedAddDeleteAfterFetch: true,
+		ManagedAddKeepFiles:        true,
 	}
 }
 

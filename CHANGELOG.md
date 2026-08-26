@@ -72,6 +72,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     runs days later. Local files and the row are untouched.
   - **Keep local files.** Exempts the download from `cleanup_after_days`.
 
+  Both default to **on**, unlike the retention settings, because they describe
+  what a hand-added Managed download is for: you asked for these bytes on this
+  disk, so keeping them is the point and the provider's copy has done its job
+  once they are there. Neither removes anything the operator asked to keep.
+
   That second one closes a real data-loss path. Cleanup's premise is that an
   \*arr already imported the files elsewhere, so removing AcerviNode's copy is
   removing a redundant one. That premise holds for an \*arr grab and fails for
