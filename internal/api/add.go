@@ -149,6 +149,35 @@ func (s *Server) providerNamed(name string, kind database.Kind) downloadProvider
 	return nil
 }
 
+// parseAddForm reads an add request's fields whether they arrived as
+// multipart or as a plain urlencoded form.
+//
+// The three add endpoints used to disagree about this, each accepting
+// exactly one encoding and rejecting the other. Torrent and usenet take file
+// uploads (.torrent, .nzb) so they called ParseMultipartForm and treated its
+// ErrNotMultipart as fatal; web downloads have no file variant so they
+// called ParseForm, which ignores a multipart body entirely. Sending the
+// wrong one to either got a 400 — and the web-download case was the worse
+// of the two, reporting "link is required" for a request that carried a
+// perfectly good link, pointing at the caller's data when the real problem
+// was the Content-Type.
+//
+// ParseMultipartForm runs ParseForm itself before looking for a multipart
+// body, so by the time it reports ErrNotMultipart the urlencoded fields are
+// already parsed. Tolerating exactly that one error is therefore enough to
+// accept both, and it stays strict about every other parse failure.
+func parseAddForm(r *http.Request) error {
+	if err := r.ParseMultipartForm(addFormMaxMemory); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+		return err
+	}
+	return nil
+}
+
+// addFormMaxMemory is how much of an uploaded .torrent/.nzb is held in
+// memory before spilling to a temp file. Unchanged from the value the
+// endpoints passed inline.
+const addFormMaxMemory = 64 << 20
+
 // handleAddTorrent implements POST /api/v1/downloads/torrent — adds a
 // torrent directly (a magnet link or an uploaded .torrent file), without
 // needing to go through an *arr app or fake being one against the
@@ -158,7 +187,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no torrent-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	if err := parseAddForm(r); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -252,7 +281,7 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no usenet-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	if err := parseAddForm(r); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -420,7 +449,7 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+	if err := parseAddForm(r); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}

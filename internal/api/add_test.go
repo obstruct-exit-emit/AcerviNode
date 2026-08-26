@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -268,4 +270,64 @@ func getInfo(t *testing.T, srv *Server, target string) *httptest.ResponseRecorde
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	return rec
+}
+
+// TestAddEndpoints_AcceptEitherEncoding pins that all three add endpoints
+// take multipart and urlencoded alike.
+//
+// They used to disagree — torrent and usenet accepted only multipart because
+// they take file uploads, web downloads only urlencoded because it has none.
+// Sending the wrong one got a 400, and for web downloads that 400 read "link
+// is required" on a request that carried a link, blaming the caller's data
+// for a Content-Type mismatch.
+func TestAddEndpoints_AcceptEitherEncoding(t *testing.T) {
+	const magnet = "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c"
+
+	cases := []struct {
+		path, field, value string
+	}{
+		{"/api/v1/downloads/torrent", "magnet", magnet},
+		{"/api/v1/downloads/usenet", "url", "https://example.com/x.nzb"},
+		{"/api/v1/downloads/webdl", "link", "https://example.com/f.zip"},
+	}
+
+	for _, tc := range cases {
+		for _, encoding := range []string{"urlencoded", "multipart"} {
+			t.Run(tc.path+"/"+encoding, func(t *testing.T) {
+				p := &fakeProvider{addID: "id-1"}
+				srv, _ := newTestServerWithProviders(t, p, p, p, &fakeSettings{})
+
+				var req *http.Request
+				if encoding == "urlencoded" {
+					form := url.Values{tc.field: {tc.value}}
+					req = httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(form.Encode()))
+					req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				} else {
+					var buf bytes.Buffer
+					mw := multipart.NewWriter(&buf)
+					if err := mw.WriteField(tc.field, tc.value); err != nil {
+						t.Fatalf("WriteField() error = %v", err)
+					}
+					mw.Close()
+					req = httptest.NewRequest(http.MethodPost, tc.path, &buf)
+					req.Header.Set("Content-Type", mw.FormDataContentType())
+				}
+				req.Header.Set("Authorization", "Bearer secret")
+
+				rec := httptest.NewRecorder()
+				srv.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusCreated {
+					t.Fatalf("status = %d, want 201 — %s should be accepted: %s",
+						rec.Code, encoding, rec.Body.String())
+				}
+				// The field has to have actually been read, not just the
+				// body parsed: a silently empty form was exactly the old
+				// web-download failure.
+				if p.addedMagnet == "" && p.addedURL == "" && p.addedLink == "" {
+					t.Errorf("%s body parsed but no field reached the provider", encoding)
+				}
+			})
+		}
+	}
 }

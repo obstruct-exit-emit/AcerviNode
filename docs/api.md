@@ -229,6 +229,13 @@ surface). The web UI shows `files_error` directly instead of a generic
 
 ## Adding downloads directly
 
+Every add endpoint accepts **either** `multipart/form-data` or
+`application/x-www-form-urlencoded`. Torrent and usenet need multipart for
+their file-upload variants (`.torrent`, `.nzb`), but a magnet or URL can be
+sent either way, and web downloads take both despite having no file variant.
+They used to disagree — each accepted exactly one encoding and rejected the
+other with a `400`.
+
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web

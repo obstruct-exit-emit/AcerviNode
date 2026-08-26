@@ -452,6 +452,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The three add endpoints disagreed about request encoding.** Torrent and
+  usenet accepted only `multipart/form-data`, because they take `.torrent`
+  and `.nzb` uploads; web downloads accepted only
+  `application/x-www-form-urlencoded`, having no file variant. Sending the
+  other one got a `400` from any of them.
+
+  The web-download case was the worse of the two: `ParseForm` ignores a
+  multipart body entirely, so the request arrived with an empty form and the
+  handler answered `link is required` — blaming the caller's data for what
+  was actually a `Content-Type` mismatch.
+
+  All three now share `parseAddForm`, which tolerates exactly
+  `http.ErrNotMultipart` and nothing else. `ParseMultipartForm` runs
+  `ParseForm` before it looks for a multipart body, so the urlencoded fields
+  are already parsed by the time it reports that error — accepting both
+  costs one tolerated error and stays strict about every other parse
+  failure. Strictly widening: nothing that worked before stops working.
+
 - **The torrent metadata preview asks only the provider it was aimed at.**
   It briefly fell back to any provider that supported the lookup, so with
   AllDebrid as default a preview was answered by TorBox. The reasoning was
