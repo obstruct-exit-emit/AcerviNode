@@ -38,8 +38,15 @@ type downloadResponse struct {
 	// see database.Download.CachedAt. Distinct from CompletedAt: for a
 	// Manual download that's never fetched to local disk, CachedAt is set
 	// but CompletedAt stays nil forever.
-	CachedAt     *string `json:"cached_at,omitempty"`
-	ErrorMessage string  `json:"error_message,omitempty"`
+	CachedAt *string `json:"cached_at,omitempty"`
+	// ProviderCachedAt is when the provider says it cached this content —
+	// a property of the content, not of this download, and often long
+	// before it was added. Absent for a provider with no such concept.
+	// Distinct from CachedAt above, which is when AcerviNode first saw
+	// this row provider-complete; they were previously shown under one
+	// "Cached" label, which read as the provider's date and wasn't.
+	ProviderCachedAt *string `json:"provider_cached_at,omitempty"`
+	ErrorMessage     string  `json:"error_message,omitempty"`
 	// RetryCount/NextRetryAt reflect internal/importer's backoff — non-zero
 	// only for a download that has failed at least once and is still being
 	// retried (state stays provider_completed until either it succeeds or
@@ -122,6 +129,11 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus, fetchPro
 		s := d.CachedAt.UTC().Format(timeFormat)
 		cachedAt = &s
 	}
+	var providerCachedAt *string
+	if d.ProviderCachedAt != nil {
+		s := d.ProviderCachedAt.UTC().Format(timeFormat)
+		providerCachedAt = &s
+	}
 	var nextRetryAt *string
 	if d.NextRetryAt != nil {
 		s := d.NextRetryAt.UTC().Format(timeFormat)
@@ -142,6 +154,7 @@ func toDownloadResponse(d *database.Download, live database.LiveStatus, fetchPro
 		UpdatedAt:          d.UpdatedAt.UTC().Format(timeFormat),
 		CompletedAt:        completedAt,
 		CachedAt:           cachedAt,
+		ProviderCachedAt:   providerCachedAt,
 		ErrorMessage:       d.ErrorMessage,
 		RetryCount:         d.RetryCount,
 		NextRetryAt:        nextRetryAt,

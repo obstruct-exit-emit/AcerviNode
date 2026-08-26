@@ -27,6 +27,11 @@ export interface Download {
   // download that's never fetched has cached_at set but completed_at stays
   // unset forever.
   cached_at?: string
+  // provider_cached_at is when the *provider* cached this content — a fact
+  // about the content, not this download, and often long before it was
+  // added. Absent for a provider with no cache concept (AllDebrid unlocks
+  // links rather than caching). Distinct from cached_at above.
+  provider_cached_at?: string
   error_message?: string
   retry_count?: number
   next_retry_at?: string

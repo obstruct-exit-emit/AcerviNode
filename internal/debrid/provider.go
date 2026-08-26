@@ -4,6 +4,8 @@
 // that's what lets a new provider be a pure addition. See docs/providers.md.
 package debrid
 
+import "time"
+
 import "context"
 
 // ProviderDownloadID is the identifier a provider assigns to something it's
@@ -92,6 +94,17 @@ type DownloadStatus struct {
 	// outside AcerviNode at any time, so it's read fresh on every poll
 	// rather than stored. False for a provider with no such concept.
 	Airlocked bool
+	// ProviderCachedAt is when the *provider* cached this content, which is
+	// a fact about the content and not about this download: TorBox reports
+	// dates long predating the add, because someone else's download put it
+	// in the cache. Nil when the provider has no such concept — AllDebrid
+	// unlocks links rather than maintaining a cache, and reports nothing
+	// resembling this.
+	//
+	// Deliberately distinct from database.Download.CachedAt, which records
+	// when *this* row was first seen as provider-complete. Those answer
+	// different questions and were being shown under one label.
+	ProviderCachedAt *time.Time
 }
 
 // DownloadFile is one file within a download.

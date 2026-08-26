@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 // Control operations, per the TorBox API docs (torrents/controltorrent and
@@ -131,6 +132,11 @@ type Torrent struct {
 	// vanished-download detection exists to catch after the fact (see
 	// database.handleMissingFromProvider).
 	Airlocked bool `json:"airlocked"`
+	// CachedAt is TorBox's own record of when this content entered its
+	// cache — a property of the content, not of your download. Frequently
+	// long before the add: confirmed live against a torrent cached a month
+	// earlier by someone else's download. Null when not cached.
+	CachedAt *time.Time `json:"cached_at"`
 	// Seeds/Peers/DownloadSpeed are real, documented fields on TorBox's own
 	// SDK response schema (torbox-sdk-js's GetTorrentListOkResponseData)
 	// that weren't modeled here until the qBittorrent shim needed something
@@ -381,6 +387,10 @@ type UsenetFile struct {
 
 // UsenetDownload is one entry from ListUsenetDownloads.
 type UsenetDownload struct {
+	// CachedAt mirrors Torrent.CachedAt — TorBox's own cache timestamp for
+	// this content, not a fact about your download. Confirmed present on
+	// this endpoint live.
+	CachedAt         *time.Time   `json:"cached_at"`
 	ID               float64      `json:"id"`
 	Hash             string       `json:"hash"`
 	Name             string       `json:"name"`
@@ -602,6 +612,10 @@ type WebDownloadFile struct {
 
 // WebDownload is one entry from ListWebDownloads.
 type WebDownload struct {
+	// CachedAt mirrors Torrent.CachedAt — TorBox's own cache timestamp for
+	// this content, not a fact about your download. Confirmed present on
+	// this endpoint live.
+	CachedAt         *time.Time        `json:"cached_at"`
 	ID               float64           `json:"id"`
 	Hash             string            `json:"hash"`
 	Name             string            `json:"name"`

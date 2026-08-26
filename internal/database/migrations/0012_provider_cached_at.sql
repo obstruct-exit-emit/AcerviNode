@@ -1,0 +1,12 @@
+-- provider_cached_at is when the *provider* cached this content, as reported
+-- by the provider itself. Distinct from cached_at, which records when this
+-- row was first seen as provider-complete by AcerviNode.
+--
+-- They answer different questions and were being shown under one label:
+-- TorBox reports cache dates long predating the add, because someone else's
+-- download put the content there. A torrent added today showed "Cached 28
+-- minutes ago" for content TorBox had cached a month earlier.
+--
+-- Nullable and stays null for providers with no such concept — AllDebrid
+-- unlocks links rather than maintaining a cache and reports nothing like it.
+ALTER TABLE downloads ADD COLUMN provider_cached_at TIMESTAMP;

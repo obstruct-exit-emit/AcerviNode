@@ -115,15 +115,16 @@ func (p *WebDownloadProvider) CheckCached(ctx context.Context, hashes []string) 
 
 func webDownloadToStatus(d WebDownload) debrid.DownloadStatus {
 	return debrid.DownloadStatus{
-		ID:          debrid.ProviderDownloadID(formatID(d.ID)),
-		Name:        d.Name,
-		Hash:        d.Hash,
-		SizeBytes:   int64(d.Size),
-		Progress:    d.Progress,
-		State:       mapDownloadState(d.DownloadState), // TorBox shares one state vocabulary across all three services
-		ETASeconds:  int64(d.Eta),
-		RawState:    d.DownloadState,
-		OriginalURL: d.OriginalURL,
-		Airlocked:   d.Airlocked,
+		ID:               debrid.ProviderDownloadID(formatID(d.ID)),
+		Name:             d.Name,
+		Hash:             d.Hash,
+		SizeBytes:        int64(d.Size),
+		Progress:         d.Progress,
+		State:            mapDownloadState(d.DownloadState), // TorBox shares one state vocabulary across all three services
+		ETASeconds:       int64(d.Eta),
+		RawState:         d.DownloadState,
+		OriginalURL:      d.OriginalURL,
+		Airlocked:        d.Airlocked,
+		ProviderCachedAt: d.CachedAt,
 	}
 }

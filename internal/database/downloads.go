@@ -89,8 +89,13 @@ type Download struct {
 	// the files have been fetched to local disk yet (that's CompletedAt, a
 	// separate, later moment). Stays nil for a download that's never
 	// reached that state. See UpdateDownloadStatus.
-	CachedAt     *time.Time
-	ErrorMessage string
+	CachedAt *time.Time
+	// ProviderCachedAt is when the provider says it cached this content —
+	// a property of the content, not of this download, and frequently long
+	// before it was added. Nil for a provider that reports no such thing.
+	// See CachedAt directly above for the one this is often confused with.
+	ProviderCachedAt *time.Time
+	ErrorMessage     string
 	// RetryCount and NextRetryAt back internal/importer's backoff: a failed
 	// fetch attempt increments RetryCount and sets NextRetryAt to when it's
 	// eligible to try again, until MaxRetries is reached and the row moves
@@ -680,6 +685,31 @@ func (db *DB) UpdateDownloadStatus(ctx context.Context, id, state string, progre
 	return checkRowsAffected(res, id)
 }
 
+// SetProviderCachedAt records the provider's own cache timestamp for this
+// content.
+//
+// Distinct from cached_at, which UpdateDownloadStatus sets once when this row
+// is first seen provider-complete. This one is a fact about the *content* and
+// often predates the add — TorBox reports dates set by whoever's download
+// first populated its cache, confirmed live at a month earlier than the add.
+//
+// Written whenever it changes rather than set-once: it is simply what the
+// provider currently reports, so a later answer supersedes an earlier one. A
+// nil value is ignored, so a listing that omits the field leaves the stored
+// value alone instead of blanking it.
+func (db *DB) SetProviderCachedAt(ctx context.Context, id string, at *time.Time) error {
+	if at == nil {
+		return nil
+	}
+	_, err := db.ExecContext(ctx,
+		`UPDATE downloads SET provider_cached_at = ? WHERE id = ? AND (provider_cached_at IS NULL OR provider_cached_at != ?)`,
+		at.UTC(), id, at.UTC())
+	if err != nil {
+		return fmt.Errorf("set provider cached_at %s: %w", id, err)
+	}
+	return nil
+}
+
 // UpdateDownloadSavePath persists a save path that wasn't known at insert
 // time — see internal/importer's resolveDestDir/processDownload, the only
 // caller: when the adding *arr app didn't supply an explicit save_path (SABnzbd's
@@ -1229,6 +1259,14 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 			}
 		}
 
+		// The provider's own cache timestamp for this content, recorded for
+		// every matched row rather than only ones being backfilled: it is a
+		// property of the content that any listing can report, including for
+		// a row that has long since reached ready_for_import.
+		if err := db.SetProviderCachedAt(ctx, d.ID, st.ProviderCachedAt); err != nil {
+			slog.Warn("database: recording provider cache time failed", "id", d.ID, "error", err)
+		}
+
 		// A discovered download (see internal/importer.discoverManual) never
 		// had a Source recorded at insert time — there was no add request
 		// for AcerviNode to capture a link from. Backfilling it retroactively
@@ -1427,7 +1465,7 @@ func (db *DB) SetDownloadFileURL(ctx context.Context, fileID, url string, expire
 
 const downloadColumns = `
 	id, provider, provider_download_id, kind, hash, name, category, save_path,
-	size_bytes, state, progress, added_at, updated_at, completed_at, cached_at, error_message,
+	size_bytes, state, progress, added_at, updated_at, completed_at, cached_at, provider_cached_at, error_message,
 	retry_count, next_retry_at, source, added_via, missing_count, source_file_name`
 
 func (db *DB) scanOneDownload(ctx context.Context, query string, args ...any) (*Download, error) {
@@ -1451,7 +1489,7 @@ func scanDownload(row rowScanner) (*Download, error) {
 	if err := row.Scan(
 		&d.ID, &d.Provider, &d.ProviderDownloadID, &kind, &hash, &d.Name,
 		&category, &savePath, &d.SizeBytes, &d.State, &d.Progress,
-		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &d.CachedAt, &errorMessage,
+		&d.AddedAt, &d.UpdatedAt, &d.CompletedAt, &d.CachedAt, &d.ProviderCachedAt, &errorMessage,
 		&d.RetryCount, &d.NextRetryAt, &source, &addedVia, &d.MissingCount, &sourceFileName,
 	); err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)

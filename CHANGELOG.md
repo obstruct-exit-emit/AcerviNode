@@ -470,6 +470,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **"Cached" showed when AcerviNode noticed a download, not when the provider
+  cached it.** The detail view's `cached_at` records the first moment this row
+  was seen provider-complete — a fact about your download. Read under a
+  "Cached" label it says something else entirely, and TorBox had the real
+  answer on the wire the whole time: a torrent added today reported
+  `cached_at=2026-07-27`, because someone else's download put that content in
+  the cache a month earlier. AcerviNode simply never parsed the field.
+
+  Now parsed for torrents, usenet and web downloads, stored separately as
+  `provider_cached_at`, and shown as its own **"Cached by provider"** row —
+  present only when the provider reports one. AllDebrid unlocks links rather
+  than maintaining a cache and reports nothing resembling it, which is exactly
+  why the two are kept apart rather than merged with a fallback: one label
+  meaning two things was the original bug. AcerviNode's own observation stays,
+  relabelled **"Available"**.
+
 - **`retry` refused any download that wasn't in `error`.** It re-runs the
   local fetch, so it applies to anything the provider has already finished —
   but it accepted only `error`, which left a download that was *wrong without

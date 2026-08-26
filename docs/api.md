@@ -96,6 +96,17 @@ For a provider this build knows about, prefer `POST .../reset` above: deleting o
 
 ## Download JSON shape
 
+`cached_at` and `provider_cached_at` answer different questions and are easy
+to confuse. `cached_at` is when **AcerviNode** first saw this row
+provider-complete — a fact about your download. `provider_cached_at` is when
+the **provider** cached that content, which is a fact about the content and
+frequently long before you added it: TorBox reports dates set by whoever's
+download first populated its cache (measured live at a month before the add).
+`provider_cached_at` is absent for a provider with no cache concept —
+AllDebrid unlocks links rather than caching and reports nothing resembling
+it. They were previously shown under one "Cached" label, which read as the
+provider's date and was not.
+
 ```json
 {
   "id": "a1b2c3d4-...",

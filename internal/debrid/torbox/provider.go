@@ -219,6 +219,7 @@ func torrentToStatus(t Torrent) debrid.DownloadStatus {
 		Leechers:           int64(t.Peers),
 		DownloadSpeedBytes: int64(t.DownloadSpeed),
 		Airlocked:          t.Airlocked,
+		ProviderCachedAt:   t.CachedAt,
 	}
 }
 
