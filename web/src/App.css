@@ -1797,3 +1797,32 @@ table.detail-files tbody tr:last-child td {
   border-radius: 8px;
   font-size: 13px;
 }
+
+/* The detected type, shown as chips rather than tabs: this reports what the
+   input is, and lets that be corrected, instead of asking for a choice
+   before anything has been typed. */
+.detected-kind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  flex-wrap: wrap;
+}
+
+.detected-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.detected-kind .cap {
+  cursor: pointer;
+  background: none;
+  font-family: inherit;
+}
+
+.detected-kind .cap-selected {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}

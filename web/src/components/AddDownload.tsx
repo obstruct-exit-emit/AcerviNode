@@ -12,6 +12,7 @@ import {
   type ProviderStatus,
   type TorrentInfoResponse,
 } from '../api'
+import { detectFromFile, detectFromLink, kindLabel, type Detection, type Kind } from '../detect'
 import { formatBytes } from '../format'
 
 type Protocol = 'torrent' | 'usenet' | 'webdl'
@@ -37,11 +38,6 @@ interface Props {
   onAdded: (addedManaged: boolean) => void
 }
 
-const PROTOCOL_LABELS: Record<Protocol, string> = {
-  torrent: 'Torrent',
-  usenet: 'Usenet',
-  webdl: 'Web Link',
-}
 
 export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClose, onAdded }: Props) {
   // Only offered when there is genuinely a choice — with one provider the
@@ -56,7 +52,13 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     ...(webdlAvailable ? (['webdl'] as const) : []),
   ]
 
-  const [protocol, setProtocol] = useState<Protocol>(availableProtocols[0] ?? 'torrent')
+  // What the current input looks like, and whether the user has corrected it.
+  // override wins while set; it is cleared whenever the input changes, so a
+  // correction made for one link never silently carries to the next.
+  const [detected, setDetected] = useState<Detection>({ kind: 'torrent', certain: false })
+  const [override, setOverride] = useState<Kind | null>(null)
+  const [fileError, setFileError] = useState('')
+  const protocol: Protocol = override ?? detected.kind
   // Web Downloads is genuinely link-only — TorBox's own createwebdownload API
   // has no file-upload variant, unlike torrent/usenet — so there's no mode
   // toggle to show for it (see handleSubmit's protocol==='webdl' branch).
@@ -169,9 +171,8 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (protocol !== 'webdl' && mode === 'link' && !link.trim()) return
-    if (protocol !== 'webdl' && mode === 'file' && !file) return
-    if (protocol === 'webdl' && !link.trim()) return
+    if (mode === 'link' && !link.trim()) return
+    if (mode === 'file' && !file) return
 
     setStatus({ kind: 'saving' })
     try {
@@ -204,11 +205,34 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     }
   }
 
-  function selectProtocol(p: Protocol) {
-    setProtocol(p)
-    setMode('link')
-    setStatus({ kind: 'idle' })
-  }
+  // Detection runs on every input change, and clears any correction the user
+  // made for the previous input — a link they told us was usenet must not
+  // make the next one usenet too.
+  useEffect(() => {
+    if (mode !== 'link') return
+    setOverride(null)
+    setDetected(detectFromLink(link))
+  }, [link, mode])
+
+  // A file is identified by its first bytes rather than its name: a browser
+  // will hand over "x.torrent" containing anything at all.
+  useEffect(() => {
+    if (mode !== 'file' || !file) return
+    let cancelled = false
+    setOverride(null)
+    setFileError('')
+    detectFromFile(file).then((d) => {
+      if (cancelled) return
+      if (!d) {
+        setFileError('That file is neither a .torrent nor an .nzb. Web links have no file upload — paste the link instead.')
+        return
+      }
+      setDetected(d)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [file, mode])
 
   const protocolAvailable =
     protocol === 'torrent' ? torrentAvailable : protocol === 'usenet' ? usenetAvailable : webdlAvailable
@@ -276,20 +300,35 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
           </div>
         )}
 
-        {availableProtocols.length > 1 && (
-          <div className="protocol-tabs">
+        {/* What the input looks like, rather than a choice to make up front.
+            A magnet, a .torrent/.nzb link and an uploaded file are identified
+            with certainty; any other URL is assumed to be a web link, because
+            an indexer API URL and a hoster link are genuinely the same shape.
+            The assumption is shown as one, and can be corrected — the
+            correction clears as soon as the input changes. */}
+        {(link.trim() !== '' || file) && availableProtocols.length > 1 && (
+          <div className="detected-kind">
+            <span className="detected-label">
+              {detected.certain || override ? 'Type' : 'Looks like'}
+            </span>
             {availableProtocols.map((p) => (
               <button
                 key={p}
                 type="button"
-                className={protocol === p ? 'tab tab-active' : 'tab'}
-                onClick={() => selectProtocol(p)}
+                className={protocol === p ? 'cap cap-selected' : 'cap'}
+                onClick={() => setOverride(p)}
+                title={
+                  protocol === p
+                    ? `Adding as ${kindLabel(p)}`
+                    : `Add as ${kindLabel(p)} instead`
+                }
               >
-                {PROTOCOL_LABELS[p]}
+                {kindLabel(p)}
               </button>
             ))}
           </div>
         )}
+        {fileError && <p className="settings-error">{fileError}</p>}
 
         {/* Only shown when more than one provider can handle the selected
             protocol — otherwise there is nothing to choose between, and a
@@ -314,20 +353,22 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
 
         {protocolAvailable && (
           <form onSubmit={handleSubmit}>
-            {protocol !== 'webdl' && (
-              <div className="mode-toggle">
-                <label>
-                  <input type="radio" checked={mode === 'link'} onChange={() => setMode('link')} />
-                  {protocol === 'torrent' ? 'Magnet link' : 'NZB URL'}
-                </label>
-                <label>
-                  <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
-                  Upload file
-                </label>
-              </div>
-            )}
+            {/* How the input is supplied, which is decided before there is
+                anything to detect — an empty form looks like a web link, and
+                gating this on that would hide file upload until something was
+                typed. */}
+            <div className="mode-toggle">
+              <label>
+                <input type="radio" checked={mode === 'link'} onChange={() => setMode('link')} />
+                Link
+              </label>
+              <label>
+                <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
+                Upload file
+              </label>
+            </div>
 
-            {protocol === 'webdl' || mode === 'link' ? (
+            {mode === 'link' ? (
               <input
                 type="text"
                 placeholder={
@@ -392,7 +433,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               type="submit"
               disabled={
                 status.kind === 'saving' ||
-                (protocol === 'webdl' ? !link.trim() : mode === 'link' ? !link.trim() : !file)
+                (mode === 'link' ? !link.trim() : !file)
               }
             >
               {status.kind === 'saving' ? 'Adding…' : 'Add'}

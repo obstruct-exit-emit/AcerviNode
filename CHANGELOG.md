@@ -432,6 +432,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **One add field instead of Torrent / Usenet / Web Link tabs.** The form now
+  works out what an input is rather than asking first. A `magnet:` scheme, a
+  `.torrent` or `.nzb` path, and an uploaded file's leading bytes are all
+  identified with certainty; a file is read rather than trusted by name,
+  since a browser will hand over `x.torrent` containing anything.
+
+  One class genuinely cannot be told apart: an indexer API URL
+  (`https://indexer/api?t=get&id=123`) and a hoster link are the same shape,
+  with no way to distinguish them short of fetching. Those are assumed to be
+  web links and **shown as an assumption** — the row reads "Looks like" rather
+  than "Type" — and can be corrected in one click. A correction clears as soon
+  as the input changes, so it never silently carries to the next paste.
+
+  Detection drives what the tabs used to: which providers the picker offers
+  (a usenet link now narrows it to providers that do usenet), which
+  cached-check runs, whether a metadata preview is fetched, and which endpoint
+  the add uses. Nothing changed server-side.
+
+  Choosing between a link and a file upload stays a separate, explicit choice,
+  because it is made before there is anything to detect. Web links have no
+  file-upload variant at all, so uploading now simply rejects anything that
+  isn't a `.torrent` or `.nzb`, rather than offering a Web Link tab that
+  could never accept the file.
+
 - **"Add another account" is now a quiet link rather than a fifth button.**
   A second account on one service is a rare, one-time action, and at button
   weight it sat level with "Test connection" — something pressed often — and
