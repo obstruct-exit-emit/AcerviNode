@@ -71,7 +71,7 @@ Removing a provider *type* from the build is a different thing again, and is cov
 | `PUT` | `/api/v1/settings/providers/{name}/kinds` | Body `{"torrent": bool, "usenet": bool, "webdl": bool}` — switches which kinds this provider handles, live and persisted. Fields are optional and **only the kinds present are changed**: an omitted kind keeps its current setting rather than being read as `false`, so a client that knows about torrents but not web downloads can't silently switch web downloads off. A disabled kind stops being registered entirely, so it also stops being polled. Enabling a kind the provider's service doesn't have is refused with `400` rather than accepted and ignored. `204` on success |
 | `POST` | `/api/v1/settings/providers/{name}/test` | A real, live connectivity and auth check against that provider with its currently configured key — not just "is a key set". Always `200`: a failed check is reported in the body as `{"ok": false, "error": "..."}`. `404` for an unknown provider |
 | `GET` | `/api/v1/settings/general` | AcerviNode's own current configuration, including its own `api_key` in plaintext — see [Auth](#auth) for why that's not a secrecy problem here |
-| `PUT` | `/api/v1/settings/general` | Body: `port`, `data_dir`, `download_dir`, `log_level`, `import_interval_seconds`, `import_max_retries`, `max_concurrent_downloads`, `import_fetch_timeout_seconds`, `cleanup_after_days`, `cleanup_error_after_days`, `stuck_download_timeout_minutes`, `min_fetch_file_size_bytes`, `max_fetch_file_size_bytes`, `include_file_regex`, `exclude_file_regex`, `backup_interval_hours`, `backup_keep`, `download_dir_mode`, `fast_poll_interval_seconds`, `provider_request_timeout_seconds`, `tls_enabled`, `tls_port`, `tls_cert_file`, `tls_key_file` (**all required — this replaces the whole set rather than patching it**; a field you leave out is read as its zero value and *overwrites* what was there, which for `backup_interval_hours` means switching scheduled backups off and for the filters means clearing them. Read the current values with `GET` first, change what you want, send the lot back — which is what the web UI does). Everything except `port`/`data_dir`/`tls_enabled`/`tls_port` applies immediately; those four are persisted but only take effect after a restart. Returns `{"restart_required": bool}` reflecting whether any of those four changed. Rejected (400) if any value fails the same validation `config.Load` applies at startup. `data_dir`/`tls_cert_file`/`tls_key_file` are part of the contract here (the web UI must still send their current, unchanged values), but the UI itself only shows `data_dir` read-only and doesn't surface the cert/key fields at all — see [Configuration](configuration.md) for why |
+| `PUT` | `/api/v1/settings/general` | Body: `port`, `data_dir`, `download_dir`, `log_level`, `import_interval_seconds`, `import_max_retries`, `max_concurrent_downloads`, `import_fetch_timeout_seconds`, `cleanup_after_days`, `cleanup_error_after_days`, `stuck_download_timeout_minutes`, `min_fetch_file_size_bytes`, `max_fetch_file_size_bytes`, `include_file_regex`, `exclude_file_regex`, `backup_interval_hours`, `backup_keep`, `managed_add_delete_after_fetch`, `managed_add_keep_files`, `download_dir_mode`, `fast_poll_interval_seconds`, `provider_request_timeout_seconds`, `tls_enabled`, `tls_port`, `tls_cert_file`, `tls_key_file` (**all required — this replaces the whole set rather than patching it**; a field you leave out is read as its zero value and *overwrites* what was there, which for `backup_interval_hours` means switching scheduled backups off and for the filters means clearing them. Read the current values with `GET` first, change what you want, send the lot back — which is what the web UI does). Everything except `port`/`data_dir`/`tls_enabled`/`tls_port` applies immediately; those four are persisted but only take effect after a restart. Returns `{"restart_required": bool}` reflecting whether any of those four changed. Rejected (400) if any value fails the same validation `config.Load` applies at startup. `data_dir`/`tls_cert_file`/`tls_key_file` are part of the contract here (the web UI must still send their current, unchanged values), but the UI itself only shows `data_dir` read-only and doesn't surface the cert/key fields at all — see [Configuration](configuration.md) for why |
 | `POST` | `/api/v1/settings/api-key/regenerate` | Replaces AcerviNode's own API key with a fresh random one. Takes effect immediately (every route, both compat shims included) and is persisted to `config.yaml`. Returns `{"api_key": "..."}` — the caller must switch to it right away, since the key it just authenticated with is now invalid everywhere, including for this same request's own credentials going forward |
 | `GET` | `/api/v1/settings/categories` | `{"torrent": [...], "usenet": [...], "paths": {"category": "override-dir", ...}}` — every category name each compat shim currently knows about (populated reactively as *arr apps declare them), plus any per-category save-path overrides currently set |
 | `POST` | `/api/v1/settings/categories` | Body `{"protocol": "torrent"\|"usenet", "name": "..."}` — manually registers a category, the same way an *arr app declaring one does. Not exposed in the web UI (a save-path override can be set for any category name directly, with no need to pre-declare it — see `PUT .../categories/path` below) but still available directly |
@@ -123,6 +123,7 @@ provider's date and was not.
   "updated_at": "2026-07-27T05:16:17Z",
   "completed_at": "2026-07-27T05:16:17Z",
   "cached_at": "2026-07-27T05:15:03Z",
+  "provider_cached_at": "2026-06-14T22:41:09Z",
   "added_via": "arr",
   "has_source": true,
   "eta_seconds": 754,
@@ -131,6 +132,19 @@ provider's date and was not.
   "download_speed_bytes": 191117,
   "phase": "",
   "airlocked": false
+}
+```
+
+Two fields are omitted when empty rather than sent null: `provider_cached_at`
+(absent for a provider that reports no cache date of its own) and
+`error_message` (present only on a download in `error`, carrying the reason —
+`"no longer found in the provider's account"`, a provider's own failure text,
+and so on).
+
+```json
+{
+  "state": "error",
+  "error_message": "no longer found in the provider's account"
 }
 ```
 
@@ -246,6 +260,15 @@ their file-upload variants (`.torrent`, `.nzb`), but a magnet or URL can be
 sent either way, and web downloads take both despite having no file variant.
 They used to disagree — each accepted exactly one encoding and rejected the
 other with a `400`.
+
+The three endpoints stay separate on the wire, but the web UI no longer asks
+which one you want: its add form takes a single input and works out the kind
+itself — a `magnet:` scheme, a bare infohash, a `.torrent`/`.nzb` path, or an
+uploaded file's leading bytes. An ordinary `https://` URL is assumed to be a
+web download and shown as an assumption, because an indexer API URL and a
+hoster link are genuinely indistinguishable without fetching them. That is
+purely a client-side convenience deciding which endpoint to call; nothing
+about these endpoints changed, and an API caller still picks one directly.
 
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
