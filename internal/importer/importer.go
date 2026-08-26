@@ -1511,11 +1511,29 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 	if err != nil {
 		return fmt.Errorf("list files: %w", err)
 	}
+	// A provider listing no files at all is not a finished download, it is
+	// a download whose file list hasn't materialised yet — a torrent whose
+	// metadata is still resolving, or a listing that came back thin. Left
+	// unguarded this walked straight through: destination created, nothing
+	// fetched, ready_for_import set, and the *arr app then parked forever
+	// on "No files found are eligible for import" against an empty folder.
+	// Observed exactly that with a real Sonarr grab.
+	//
+	// Returning an error instead puts it through the ordinary retry
+	// backoff, which is right for something expected to resolve on its own
+	// shortly.
+	//
+	// Deliberately distinct from every file being *filtered* out below:
+	// that is a real answer about a real file list, and completing is the
+	// correct response to "you asked us to skip all of these".
+	if len(allFiles) == 0 {
+		return fmt.Errorf("provider reported no files for download %s yet", d.ID)
+	}
 	files := im.filterFiles(allFiles)
 	if skipped := len(allFiles) - len(files); skipped > 0 {
 		slog.Info("importer: skipped files not matching configured filters", "id", d.ID, "name", d.Name, "skipped", skipped, "kept", len(files))
 	}
-	if len(files) == 0 && len(allFiles) > 0 {
+	if len(files) == 0 {
 		slog.Warn("importer: every file was filtered out, nothing to fetch", "id", d.ID, "name", d.Name)
 	}
 

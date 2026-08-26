@@ -452,6 +452,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A download whose provider listed no files was marked ready to import.**
+  The importer guarded the case where *filters* removed every file, but not
+  the case where the provider returned no file list at all. That walked
+  straight through: destination directory created, nothing fetched,
+  `ready_for_import` set, and the download reported to the \*arr app as
+  complete.
+
+  Sonarr then parked on "No files found are eligible for import" against an
+  empty folder, permanently — and there was no way out through the API,
+  since `POST /downloads/{id}/retry` only accepts rows in `error`.
+
+  Found with a real Sonarr grab, against a torrent whose metadata had not
+  resolved by the time the fetch ran. An empty file list is not a finished
+  download; it now returns an error so the download goes through the ordinary
+  retry backoff, which is right for something expected to resolve shortly.
+  Every file being *filtered* out still completes, deliberately — that is a
+  real answer about a real file list.
+
+  Verified by re-running the same grab: local fetch progressed 17.8% → 100%,
+  four files landed on disk, and Sonarr imported the 1.17 GB episode.
+
 - **The three add endpoints disagreed about request encoding.** Torrent and
   usenet accepted only `multipart/form-data`, because they take `.torrent`
   and `.nzb` uploads; web downloads accepted only

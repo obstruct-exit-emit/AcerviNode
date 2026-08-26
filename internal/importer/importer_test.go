@@ -3187,3 +3187,43 @@ func TestTrimRedundantTopDir_CannotEscape(t *testing.T) {
 		}
 	}
 }
+
+// TestTick_NoFilesFromProviderDoesNotReachReadyForImport pins the difference
+// between "the provider has no file list yet" and "you filtered everything
+// out" — the test directly above being the second case.
+//
+// A provider listing zero files used to walk straight through: destination
+// created, nothing fetched, ready_for_import set. A real Sonarr grab then
+// parked forever on "No files found are eligible for import" against an
+// empty folder, because AcerviNode had told it the download was complete.
+// Found with a real Sonarr, against a torrent whose metadata had not
+// resolved by the time the fetch ran.
+func TestTick_NoFilesFromProviderDoesNotReachReadyForImport(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{files: nil} // knows of no files yet
+
+	d := &database.Download{
+		ID: "dl-1", Provider: "faketorbox", ProviderDownloadID: "provider-1", Kind: database.KindTorrent,
+		Hash: "abc123", Name: "Nothing Here", Category: "tv-sonarr", SavePath: t.TempDir(),
+		State: database.StateProviderCompleted,
+	}
+	if err := db.InsertDownload(ctx, d); err != nil {
+		t.Fatalf("InsertDownload() error = %v", err)
+	}
+
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
+	// Tick surfaces the per-download failure through its own error or
+	// leaves the row for the next attempt; either way the row must not be
+	// claimed as importable.
+	_ = im.Tick(ctx)
+
+	got, err := db.GetDownloadByID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if got.State == database.StateReadyForImport {
+		t.Fatal("state = ready_for_import with no files — an *arr blocks on the empty folder forever")
+	}
+}
