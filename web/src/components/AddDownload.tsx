@@ -7,6 +7,7 @@ import {
   checkCachedTorrent,
   checkCachedUsenet,
   checkCachedWebDownload,
+  getGeneralSettings,
   getTorrentInfo,
   type ProviderStatus,
   type TorrentInfoResponse,
@@ -72,6 +73,36 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // applies its own defaults rather than a guessed false.
   const [deleteAfterFetch, setDeleteAfterFetch] = useState<boolean | undefined>(undefined)
   const [keepFiles, setKeepFiles] = useState<boolean | undefined>(undefined)
+  // defaultsLoaded distinguishes "not fetched yet" from "fetched, both
+  // false". Without it a failed fetch is indistinguishable from real
+  // defaults of false — and an earlier version of this gated rendering on
+  // the values being set, so a failure hid the controls entirely with no
+  // way to tell why.
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false)
+
+  // Seed the two Managed options from the configured defaults. Admin-only,
+  // because the settings endpoint is and only an admin can add a Managed
+  // download at all. On failure the controls still render, unchecked and
+  // usable — an untouched box sends nothing, so the server applies its own
+  // default and a failed fetch costs accuracy of the initial tick rather
+  // than the whole feature.
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    getGeneralSettings(apiKey)
+      .then((g) => {
+        if (cancelled) return
+        setDeleteAfterFetch(g.managed_add_delete_after_fetch)
+        setKeepFiles(g.managed_add_keep_files)
+        setDefaultsLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setDefaultsLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [apiKey, isAdmin])
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'error'; message?: string }>({ kind: 'idle' })
 
   // Cached/metadata preview — cached is null until a check-cached response
@@ -222,18 +253,24 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             these override them for this one download. Nothing here applies to
             a download an *arr adds for itself. Defaults live in
             Settings → Managed adds. */}
-        {isAdmin && managed && deleteAfterFetch !== undefined && keepFiles !== undefined && (
+        {isAdmin && managed && (
           <div className="managed-options">
             <label className="checkbox-row">
               <input
                 type="checkbox"
-                checked={deleteAfterFetch}
+                checked={deleteAfterFetch ?? false}
+                disabled={!defaultsLoaded}
                 onChange={(e) => setDeleteAfterFetch(e.target.checked)}
               />
               Delete from provider once fetched
             </label>
             <label className="checkbox-row">
-              <input type="checkbox" checked={keepFiles} onChange={(e) => setKeepFiles(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={keepFiles ?? false}
+                disabled={!defaultsLoaded}
+                onChange={(e) => setKeepFiles(e.target.checked)}
+              />
               Keep local files (exempt from cleanup)
             </label>
           </div>
