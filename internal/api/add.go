@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -236,7 +237,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
-	magnet := strings.TrimSpace(r.FormValue("magnet"))
+	magnet := normalizeMagnet(strings.TrimSpace(r.FormValue("magnet")))
 	header := formFile(r, "file")
 
 	if magnet == "" && header == nil {
@@ -982,6 +983,30 @@ func md5Hex(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// normalizeMagnet turns a bare infohash into a magnet URI, and leaves
+// anything else untouched.
+//
+// A hash on its own is a perfectly reasonable thing to paste — it is what
+// an indexer, a tracker page or another client will often show you, and
+// GET /downloads/torrent/info already previews one directly. The add path
+// did not: providers want a magnet, and TorBox answers a bare hash with
+// "Invalid Magnet Link" (HTTP 400), so previewing by hash worked while
+// adding the same hash failed. Wrapping it here closes that gap in one
+// place, ahead of every provider.
+//
+// 40 hex characters is a v1 (SHA-1) infohash, 64 a v2 (SHA-256) one.
+// Nothing else arriving in this field looks like either, so the test is
+// safe to apply before deciding the input is a magnet at all.
+func normalizeMagnet(in string) string {
+	if in == "" || !bareInfohash.MatchString(in) {
+		return in
+	}
+	return "magnet:?xt=urn:btih:" + strings.ToLower(in)
+}
+
+// bareInfohash matches a v1 or v2 infohash with nothing around it.
+var bareInfohash = regexp.MustCompile(`^(?i)([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // magnetHash extracts the infohash from a magnet URI's xt=urn:btih:HASH
 // parameter, lowercased. A small, self-contained duplicate of

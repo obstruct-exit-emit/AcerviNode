@@ -13,6 +13,24 @@ describe('detectFromLink', () => {
     expect(detectFromLink(link)).toEqual({ kind, certain })
   })
 
+  it.each([
+    ['08ada5a7a6183aae1e09d831df6748d566095a10', 'a 40-char v1 infohash'],
+    ['08ADA5A7A6183AAE1E09D831DF6748D566095A10', 'the same uppercased'],
+    ['a'.repeat(64), 'a 64-char v2 infohash'],
+  ])('treats %s as a torrent (%s)', (hash) => {
+    expect(detectFromLink(hash)).toEqual({ kind: 'torrent', certain: true })
+  })
+
+  // Guard the hash rule from being too eager: near-misses must not be
+  // mistaken for one, or a short hoster path would become a torrent.
+  it.each([
+    ['08ada5a7a6183aae1e09d831df6748d566095a1', '39 chars'],
+    ['08ada5a7a6183aae1e09d831df6748d566095a10a', '41 chars'],
+    ['08ada5a7a6183aae1e09d831df6748d566095g10', 'non-hex character'],
+  ])('does not treat %s as an infohash (%s)', (notHash) => {
+    expect(detectFromLink(notHash).kind).toBe('webdl')
+  })
+
   // The case the whole "shown as an assumption" design exists for: an
   // indexer API URL is indistinguishable from a hoster link, so it must be
   // reported as a guess rather than asserted.

@@ -32,6 +32,14 @@ export function detectFromLink(raw: string): Detection {
   // A magnet is unambiguous — nothing else uses the scheme.
   if (/^magnet:/i.test(link)) return { kind: 'torrent', certain: true }
 
+  // A bare infohash. 40 hex characters is a v1 (SHA-1) hash and 64 a v2
+  // (SHA-256) one; nothing else a person pastes here looks like that, so
+  // this is treated as certain. The add endpoint wraps it into a magnet
+  // before handing it to a provider, which will not accept a bare hash.
+  if (/^[0-9a-f]{40}$/i.test(link) || /^[0-9a-f]{64}$/i.test(link)) {
+    return { kind: 'torrent', certain: true }
+  }
+
   // Extension, taken from the path only: a hoster link may well carry
   // ".torrent" inside a query parameter (a filename, a redirect target)
   // without being a torrent itself.

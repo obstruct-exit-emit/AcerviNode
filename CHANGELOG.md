@@ -60,6 +60,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Torrents can be added by bare infohash.** Pasting a hash on its own —
+  40 hex characters for v1, 64 for v2 — now works everywhere a magnet does,
+  in the add form and through `POST /api/v1/downloads/torrent`.
+
+  This closes an inconsistency rather than adding a convenience:
+  `GET /api/v1/downloads/torrent/info` already accepted a bare `hash=` and
+  previewed it happily, so you could look a hash up and then not add it.
+  Providers want a magnet URI, and TorBox answered a bare hash with
+  "Invalid Magnet Link" (HTTP 400). It is wrapped once, ahead of every
+  provider, so nothing downstream needs to know.
+
+  The add form recognises one too, as a *certain* detection rather than an
+  assumption — nothing else pasted into that field looks like 40 or 64 hex
+  characters and nothing else.
+
 - **Lifecycle options for Managed downloads you add yourself.** A Managed
   download added through "+ Add" behaves like an \*arr-added one — fetched to
   disk automatically — but nothing owns it afterwards. No \*arr imports the

@@ -331,3 +331,66 @@ func TestAddEndpoints_AcceptEitherEncoding(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeMagnet covers adding a torrent by bare infohash.
+//
+// A hash on its own is what an indexer or another client will often show
+// you, and GET /downloads/torrent/info already previewed one directly — so
+// previewing by hash worked while adding the same hash failed, with TorBox
+// answering "Invalid Magnet Link". Measured before fixing.
+func TestNormalizeMagnet(t *testing.T) {
+	const v1 = "08ada5a7a6183aae1e09d831df6748d566095a10"
+	v2 := strings.Repeat("a", 64)
+
+	t.Run("wraps a bare infohash", func(t *testing.T) {
+		if got := normalizeMagnet(v1); got != "magnet:?xt=urn:btih:"+v1 {
+			t.Errorf("normalizeMagnet(v1) = %q", got)
+		}
+		if got := normalizeMagnet(strings.ToUpper(v1)); got != "magnet:?xt=urn:btih:"+v1 {
+			t.Errorf("uppercase hash not lowercased: %q", got)
+		}
+		if got := normalizeMagnet(v2); got != "magnet:?xt=urn:btih:"+v2 {
+			t.Errorf("normalizeMagnet(v2) = %q", got)
+		}
+	})
+
+	// Anything already a magnet, or plainly not a hash, has to pass through
+	// untouched — this runs on every torrent add, including file uploads
+	// where the field is empty.
+	t.Run("leaves everything else alone", func(t *testing.T) {
+		for _, in := range []string{
+			"",
+			"magnet:?xt=urn:btih:" + v1,
+			"https://example.com/x.torrent",
+			v1[:39],  // one short
+			v1 + "a", // one long
+			"08ada5a7a6183aae1e09d831df6748d566095g10", // non-hex
+		} {
+			if got := normalizeMagnet(in); got != in {
+				t.Errorf("normalizeMagnet(%q) = %q, want it unchanged", in, got)
+			}
+		}
+	})
+}
+
+// TestAddTorrent_AcceptsBareInfohash proves it end to end through the
+// handler, not just the helper.
+func TestAddTorrent_AcceptsBareInfohash(t *testing.T) {
+	const hash = "08ada5a7a6183aae1e09d831df6748d566095a10"
+	p := &fakeProvider{addID: "t-1"}
+	srv, _ := newTestServerWithProviders(t, p, nil, nil, &fakeSettings{})
+
+	form := url.Values{"magnet": {hash}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/torrent", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if p.addedMagnet != "magnet:?xt=urn:btih:"+hash {
+		t.Errorf("provider received %q, want a wrapped magnet — a bare hash is rejected by real providers", p.addedMagnet)
+	}
+}
