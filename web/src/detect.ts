@@ -119,6 +119,10 @@ export function isListFilename(name: string): boolean {
   return LIST_FILE_EXTENSIONS.has(base.slice(dot + 1).toLowerCase())
 }
 
+/** An NZB's root element. Not anchored: it follows an XML declaration and
+ *  usually a doctype, and how much precedes it varies. */
+const NZB_ROOT = /<nzb[\s>]/i
+
 /** How much of a file to read when looking for a list of links. Generous — a
  *  hundred links is a few kilobytes — while still refusing to pull a video
  *  into memory because it happened to be selected. */
@@ -147,7 +151,7 @@ export async function detectFromFile(file: File): Promise<FileContent | null> {
   // stray XML file is not silently treated as usenet — and before the link
   // scan below, since an NZB is text and would otherwise be searched for
   // links and come back empty.
-  if (/<nzb[\s>]/i.test(head)) {
+  if (NZB_ROOT.test(head)) {
     return { type: 'file', kind: 'usenet' }
   }
 
@@ -156,6 +160,15 @@ export async function detectFromFile(file: File): Promise<FileContent | null> {
   // are all handled identically — a file is just a bigger clipboard.
   const text = await readText(file, MAX_LIST_BYTES)
   if (text === null) return null
+
+  // Checked again on the full text, not just the sniffed head. A real NZB
+  // carries its DTD URL in the DOCTYPE, and a long comment or doctype can
+  // push the root element past SNIFF_BYTES — at which point the link scan
+  // below finds that DTD URL and presents the NZB as a web download of its
+  // own schema. The head check above still earns its place: it works on a
+  // file that is not valid UTF-8, which this one cannot.
+  if (NZB_ROOT.test(text)) return { type: 'file', kind: 'usenet' }
+
   const items = sanitizeBatch(text)
   return items.length > 0 ? { type: 'links', items } : null
 }
