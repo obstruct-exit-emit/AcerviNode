@@ -327,10 +327,38 @@ function cleanToken(raw: string): string {
   if (markdown) out = markdown[1]
   out = out.replace(/^[>\-*•]+/, '')
   out = out.replace(/^\d+[.)]/, '')
-  out = out.replace(/^[<("'[]+/, '')
-  out = out.replace(/[>)"'\]]+$/, '')
+  // Sentence punctuation comes off before the brackets, so "(url)." can
+  // still unwrap instead of leaving the closing paren stranded.
   out = out.replace(/[,;.]+$/, '')
-  return out.trim()
+  return unwrapPairs(out).trim()
+}
+
+/** Openers that wrap a written-down link, and what closes each. */
+const WRAPPERS: Record<string, string> = {
+  '<': '>',
+  '(': ')',
+  '[': ']',
+  '"': '"',
+  "'": "'",
+}
+
+// unwrapPairs removes wrapping punctuation, but only in matched pairs.
+//
+// A closing bracket with nothing opening it is part of the link, not
+// decoration around it. Stripping unconditionally corrupted real input:
+// "https://host/wiki/Thing_(disambiguation)" lost its final paren and 404s,
+// and a magnet's "&dn=Movie+[1080p]" lost the bracket off its display name.
+// A leading wrapper on its own is still dropped, since nothing legitimate
+// starts with one.
+function unwrapPairs(input: string): string {
+  const leading = /^[<("'[]+/.exec(input)?.[0] ?? ''
+  let out = input.slice(leading.length)
+  // Outermost first, so "<(url)>" peels in the order it was written.
+  for (const opener of leading) {
+    const closer = WRAPPERS[opener]
+    if (closer !== undefined && out.endsWith(closer)) out = out.slice(0, -1)
+  }
+  return out
 }
 
 // unwrapEncoded peels nested base64/base64url until it reaches something

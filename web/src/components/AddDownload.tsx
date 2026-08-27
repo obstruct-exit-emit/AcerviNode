@@ -149,6 +149,14 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         ? { kind: 'torrent', certain: false } // unused: a batch has no one kind
         : { kind: field.kind, certain: field.certain }
   const protocol: Protocol = override ?? detected.kind
+  // Web downloads have no file-upload variant, so an uploaded file can never
+  // be one, and offering the correction would only let someone pick a route
+  // that cannot exist. A link *extracted* from a batch file is still a link,
+  // so it keeps all three.
+  const singleUpload = fileItems.length === 1 && fileLinks.length === 0
+  const offerableProtocols = singleUpload
+    ? availableProtocols.filter((p) => p !== 'webdl')
+    : availableProtocols
   // managed is always false for a member — isAdmin gates whether the toggle
   // even renders, not just whether it's editable, so there's no path for a
   // non-admin to end up with this true.
@@ -356,19 +364,31 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         // Uploads and extracted links go out together in one batch. A .torrent
         // is sent as a file; a link that came out of a list file is added as a
         // link, exactly as if it had been pasted.
-        const tasks = [
-          ...fileItems.map((item) => ({
-            label: item.file.name,
-            run: () =>
-              item.kind === 'usenet'
-                ? addUsenet(apiKey, { file: item.file, ...common })
-                : addTorrent(apiKey, { file: item.file, ...common }),
-          })),
-          ...fileLinks.map((item) => ({
-            label: item.link,
-            run: () => addOne(item.kind, item.link, common),
-          })),
-        ]
+          // The correction chips only render for a single item — a batch has
+          // no one kind to correct — so an override can only ever mean that
+          // item. `protocol` is exactly what those chips display, so using it
+          // here is what keeps the shown type and the request in step; reading
+          // item.kind instead made the chip a decoration that did nothing.
+          const single = fileBatch.length === 1
+          const tasks = [
+            ...fileItems.map((item) => {
+              // webdl is excluded rather than trusted: it is not offered for an
+              // upload, and treating it as anything else here would silently
+              // route the file somewhere the user did not pick.
+              const kind = single && protocol !== 'webdl' ? protocol : item.kind
+              return {
+                label: item.file.name,
+                run: () =>
+                  kind === 'usenet'
+                    ? addUsenet(apiKey, { file: item.file, ...common })
+                    : addTorrent(apiKey, { file: item.file, ...common }),
+              }
+            }),
+            ...fileLinks.map((item) => {
+              const kind = single ? protocol : item.kind
+              return { label: item.link, run: () => addOne(kind, item.link, common) }
+            }),
+          ]
         const failures = await runBatch(tasks)
         if (failures.length > 0) {
           reportPartial(tasks.length, failures)
@@ -520,7 +540,13 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         setFileError(
           mode === 'batchfile'
             ? `${names(wrongMode)} is a torrent or NZB, not a list — switch to File(s) to add it.`
-            : `${names(wrongMode)} is a list of links — switch to Batch file to add it.`,
+            : // Only send them to Batch file if Batch file would take it.
+              // A list of links named "x.torrent" is refused by both modes,
+              // and telling someone to switch to one that will also say no is
+              // worse than saying so outright.
+              wrongMode.every((f) => isListFilename(f.name))
+              ? `${names(wrongMode)} is a list of links — switch to Batch file to add it.`
+              : `${names(wrongMode)} looks like a list of links, but Batch file only reads .txt files and files with no extension.`,
         )
       } else if (notAList.length > 0) {
         setFileError(
@@ -644,12 +670,12 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             ))}
           </div>
         )}
-        {!summaryItems && (link.trim() !== '' || files.length > 0) && availableProtocols.length > 1 && (
+        {!summaryItems && (link.trim() !== '' || files.length > 0) && offerableProtocols.length > 1 && (
           <div className="detected-kind">
             <span className="detected-label">
               {detected.certain || override ? 'Type' : 'Looks like'}
             </span>
-            {availableProtocols.map((p) => (
+            {offerableProtocols.map((p) => (
               <button
                 key={p}
                 type="button"

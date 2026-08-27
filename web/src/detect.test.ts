@@ -359,6 +359,31 @@ describe('sanitizeBatch', () => {
     expect(sanitizeBatch(text).map((i) => i.link)).toEqual([MAGNET, MAGNET2])
   })
 
+  // Regression: wrapping punctuation was stripped from the end whether or not
+  // anything opened it, so a link that legitimately ends in a bracket lost it.
+  it.each([
+    ['https://host.example/wiki/Thing_(disambiguation)', 'a URL ending in a paren'],
+    ['https://host.example/Some_File_[2024].zip', 'a bracket mid-path'],
+    ['magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056&dn=Movie+[1080p]', 'a magnet display name'],
+  ])('keeps an unmatched closing bracket: %s (%s)', (link) => {
+    expect(sanitizeBatch(link).map((i) => i.link)).toEqual([link])
+  })
+
+  it.each([
+    ['<', '>'],
+    ['(', ')'],
+    ['"', '"'],
+    ["'", "'"],
+  ])('still unwraps a matched %s%s pair', (open, close) => {
+    const link = 'https://host.example/wrapped.zip'
+    expect(sanitizeBatch(open + link + close).map((i) => i.link)).toEqual([link])
+  })
+
+  it('unwraps a matched pair even with trailing punctuation outside it', () => {
+    const link = 'https://host.example/wrapped.zip'
+    expect(sanitizeBatch('(' + link + ').').map((i) => i.link)).toEqual([link])
+  })
+
   it('takes the URL out of a markdown link', () => {
     const text = `[Sintel](${MAGNET})\n[Other](${WEB})`
     expect(sanitizeBatch(text).map((i) => i.link)).toEqual([MAGNET, WEB])

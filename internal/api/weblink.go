@@ -27,12 +27,17 @@ var (
 	// Folder is matched before file only for readability; the two cannot both
 	// match, since "#F!" and "#!" differ at the first character after the
 	// fragment marker.
-	megaLegacyFolder = regexp.MustCompile(`^https?://mega(?:\.co)?\.nz/#F!([A-Za-z0-9_-]+)!([A-Za-z0-9_-]+)$`)
-	megaLegacyFile   = regexp.MustCompile(`^https?://mega(?:\.co)?\.nz/#!([A-Za-z0-9_-]+)!([A-Za-z0-9_-]+)$`)
+	//
+	// Only the scheme and host are case-folded. Hostnames are case-insensitive
+	// so MEGA.NZ has to match, but the "F" marking a folder link is MEGA's own
+	// and is always uppercase — folding it too would let "#f!" be read as a
+	// folder share when it is not one.
+	megaLegacyFolder = regexp.MustCompile(`^(?i:https?://mega(?:\.co)?\.nz)/#F!([A-Za-z0-9_-]+)!([A-Za-z0-9_-]+)$`)
+	megaLegacyFile   = regexp.MustCompile(`^(?i:https?://mega(?:\.co)?\.nz)/#!([A-Za-z0-9_-]+)!([A-Za-z0-9_-]+)$`)
 
 	// The pre-2016 domain. It still resolves, but by redirecting, and a
 	// provider fetching server-side may not follow that.
-	megaOldDomain = regexp.MustCompile(`^https?://mega\.co\.nz(/.*)?$`)
+	megaOldDomain = regexp.MustCompile(`^(?i:https?://mega\.co\.nz)(/.*)?$`)
 )
 
 // normalizeWebLink rewrites a web download link into the form providers
@@ -47,8 +52,11 @@ var (
 // the provider's own error — the better outcome of the two.
 func normalizeWebLink(in string) string {
 	link := strings.TrimSpace(in)
+	// The trimmed value, not the original: the callers test the result against
+	// "" to decide whether a link was supplied at all, and handing back a
+	// whitespace-only string would sail past that check.
 	if link == "" {
-		return in
+		return link
 	}
 	if m := megaLegacyFolder.FindStringSubmatch(link); m != nil {
 		return "https://mega.nz/folder/" + m[1] + "#" + m[2]

@@ -86,6 +86,31 @@ func TestNormalizeWebLink(t *testing.T) {
 			want: "",
 		},
 		{
+			// Regression: this returned the original, untrimmed, so the
+			// handlers' `link == ""` check saw a non-empty string and let a
+			// blank link through to the provider.
+			name: "whitespace-only normalises to empty, not to itself",
+			in:   "   ",
+			want: "",
+		},
+		{
+			name: "an uppercased host still matches",
+			in:   "https://MEGA.NZ/#F!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg",
+			want: "https://mega.nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg",
+		},
+		{
+			name: "a mixed-case old domain still matches",
+			in:   "HTTPS://Mega.Co.Nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg",
+			want: "https://mega.nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg",
+		},
+		{
+			// The "F" is MEGA's own marker and is always uppercase. Folding it
+			// would read a non-folder link as a folder share.
+			name: "a lowercase f is not a folder marker",
+			in:   "https://mega.nz/#f!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg",
+			want: "https://mega.nz/#f!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg",
+		},
+		{
 			name: "surrounding whitespace is trimmed",
 			in:   "  https://mega.nz/#F!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg  ",
 			want: "https://mega.nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg",

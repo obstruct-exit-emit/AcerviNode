@@ -687,6 +687,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Six bugs from a hunt over the day's own changes.** Four were regressions
+  introduced today; two were latent and only became reachable because of them.
+
+  **A blank web-download link reached the provider.** `normalizeWebLink`
+  returned its *untrimmed* input when the link was empty, so a whitespace-only
+  value was not `""` by the time the handler tested it and sailed past the
+  "link is required" check. Live before the fix: HTTP 502 carrying TorBox's own
+  "the link you provided is invalid". After: 400, and nothing leaves the box.
+  The existing test only covered `""`, never `"   "`.
+
+  **The kind-correction chip did nothing for an uploaded file.** The batch
+  refactor started reading `item.kind` from detection where the old code used
+  `protocol`, which is what the chips actually display — so clicking "Usenet"
+  on a `.torrent` selected the chip and changed nothing about the request. The
+  UI was reporting a choice it then ignored.
+
+  **Web Link was offered as a correction for an uploaded file**, which has no
+  upload variant at all. Latent while the override was inert; fixing the above
+  would have turned it into a real misroute, so both had to move together.
+
+  **"Switch to Batch file to add it" was given for files Batch file refuses.**
+  A list of links named `x.torrent` is rejected by both modes, and being told
+  to switch to one that will also say no is worse than being told outright.
+
+  **A URL ending in a bracket was truncated.** Wrapping punctuation was
+  stripped from the end whether or not anything opened it, so
+  `https://host/wiki/Thing_(disambiguation)` lost its final paren and would
+  404, and a magnet's `&dn=Movie+[1080p]` lost the bracket off its display
+  name. Unwrapping is now done only in matched pairs; a leading wrapper on its
+  own is still dropped, since nothing legitimate starts with one.
+
+  **MEGA host matching was case-sensitive**, so `MEGA.NZ` missed normalisation
+  entirely. Only the scheme and host are folded — the `F` marking a folder
+  share is MEGA's own and is always uppercase, so folding that too would read
+  `#f!` as a folder link when it is not one.
+
+  Every fix has a test that fails when only that fix is reverted, and the
+  blank-link one is covered at the handler as well as the function.
+
+
 - **Legacy MEGA links are rewritten into the form providers accept.** MEGA's
   pre-2020 links keep the node handle and decryption key in the URL fragment
   behind `!` markers (`https://mega.nz/#F!ID!KEY`); the modern form moved the

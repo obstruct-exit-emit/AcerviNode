@@ -2818,6 +2818,23 @@ func TestHandleAddWebDownload_RequiresLink(t *testing.T) {
 	}
 }
 
+// Regression: normalizeWebLink returned its untrimmed input for a blank link,
+// so a whitespace-only value was not "" by the time the handler checked, and
+// went to the provider instead of being refused.
+func TestHandleAddWebDownload_RejectsWhitespaceOnlyLink(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "123"}
+	srv, _ := newTestServerWithWebDownload(t, provider, nil)
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": "   "})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if provider.addedLink != "" {
+		t.Errorf("provider was called with %q; a blank link must never reach it", provider.addedLink)
+	}
+}
+
 func TestHandleAddWebDownload_NoProviderConfigured(t *testing.T) {
 	srv, _ := newTestServerWithWebDownload(t, nil, nil)
 	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": "https://mega.nz/folder/abc123"})
