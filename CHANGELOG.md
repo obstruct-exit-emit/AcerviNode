@@ -60,6 +60,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The add form takes a whole list, and multiple files.** Paste a batch and it
+  is cleaned to the links it holds, one per line, and the field grows to show
+  them; paste a single link and the field is exactly what it was. Kinds are
+  detected per item, so a magnet, an `.nzb` link and a hoster link in the same
+  paste each route to their own endpoint. The file picker takes several files
+  the same way, each identified from its own leading bytes, so one upload can
+  mix `.torrent` and `.nzb`.
+
+  Junk removal is emergent rather than a blocklist, which is the part worth
+  keeping. Splitting on whitespace is safe by construction — a magnet
+  percent-encodes spaces, a URL cannot hold a raw one, base64 has no whitespace
+  and an infohash is hex — so prose falls away on its own: a word is just a
+  token that fails to be, or to decode into, something recognisable. There is
+  no "is this junk?" heuristic to get wrong.
+
+  Each item is base64-decoded independently, so one line five layers deep and
+  another in clear text both come out right. A single blob that decodes to a
+  whole list is expanded into a batch. That last one meant relaxing the
+  "a decode must land on one recognisable value" rule to "…or on a list of
+  two or more", which in turn exposed a latent bug: `isRecognisable` anchored
+  at the start but never required a single token, so a decoded list beginning
+  with a magnet was swallowed whole as one enormous link. Both rules are
+  mutation-checked.
+
+  No new API surface: a batch is N calls to the three existing endpoints, three
+  at a time. On a provider 429 the rest are abandoned rather than piled on and
+  reported as not attempted. A partial result keeps the successes, rewrites the
+  box to hold only the failures, and gives a reason per link.
+
+  The field is now always a `<textarea>`, never an `<input>` swapped out for
+  one when a batch appears — changing the element type remounts the node and
+  drops focus mid-typing. At one row it is sized to exactly what the input was.
+  Sanitizing runs on paste only; doing it per keystroke would eat a link
+  halfway through being typed on a second line.
+
+  Verified live: a mixed batch of four (magnet, bare infohash, two hoster
+  links) fired three-at-a-time against the real instance, all four tracked with
+  the right protocol.
+
+  Known limitation: a URL hard-wrapped across lines by a plain-text email
+  client arrives as two broken tokens and both are dropped. Rejoining cannot be
+  done safely — a magnet fragment plus a stray word still looks like a magnet.
+
+
 - **The add form unwraps base64-encoded links.** Paste a link that has been
   base64'd and it decodes in place, repeatedly if it was encoded more than
   once, until it reaches a magnet, infohash or URL. Standard base64 and the

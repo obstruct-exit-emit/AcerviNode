@@ -292,6 +292,42 @@ pasted, which then stays restored rather than being decoded straight back.
 Again this is the web UI only; the endpoints receive whatever the caller
 sends.
 
+### Batches
+
+The same field takes a whole list. Paste one and it is cleaned to the links it
+contains, one per line, and the box grows to show them; paste a single link and
+nothing about the field changes. Detection is per item, so a magnet, an `.nzb`
+link and a hoster link in the same paste each route to their own endpoint.
+
+Cleaning splits on whitespace, which is safe by construction — a magnet
+percent-encodes spaces, a URL cannot hold a raw one, base64 has no whitespace
+and an infohash is hex. Prose therefore falls away on its own rather than being
+matched against a list of things to strip: a word is simply a token that fails
+to be, or to decode into, something recognisable. Bullets, numbering, email
+quoting (`>`), markdown links and wrapping brackets are removed first. Each
+surviving item is base64-decoded independently, so one line five layers deep
+and another in clear text both come out right. Duplicates are dropped
+case-insensitively, and a batch is capped at 100 items.
+
+A single base64 blob that decodes to a whole list is expanded into a batch,
+up to three levels of nesting.
+
+The file picker takes multiple files the same way, each identified from its own
+leading bytes rather than its name, so one upload can mix `.torrent` and `.nzb`.
+Files that are neither are skipped and named, rather than blocking the rest.
+
+**This adds no API surface.** A batch is N calls to the three endpoints above,
+made by the browser, three at a time. On a provider 429 the remaining items are
+abandoned rather than piled on, and reported as not attempted. A partial result
+leaves the successes added, rewrites the box to hold only what failed, and
+lists the reason per link — so a batch is never all-or-nothing and nothing has
+to be hunted down a second time.
+
+One limitation worth knowing: a URL hard-wrapped across lines by a plain-text
+email client arrives as two broken tokens and both are dropped. Rejoining them
+cannot be done safely — a magnet fragment plus a stray word still looks like a
+magnet — so it is left alone.
+
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web

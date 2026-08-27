@@ -1,4 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  // Aliased: the unprefixed name would shadow the DOM KeyboardEvent that
+  // the Escape-to-close handler below is typed against.
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import {
   addTorrent,
   addUsenet,
@@ -13,12 +22,16 @@ import {
   type TorrentInfoResponse,
 } from '../api'
 import {
+  batchSummary,
+  detectField,
   detectFromFile,
-  detectFromLink,
   kindLabel,
+  kindPlural,
   noDecode,
   stepDecode,
+  stepSanitize,
   undoDecode,
+  type BatchItem,
   type Detection,
   type Kind,
 } from '../detect'
@@ -26,6 +39,17 @@ import { formatBytes } from '../format'
 
 type Protocol = 'torrent' | 'usenet' | 'webdl'
 type InputMode = 'link' | 'file'
+
+/** How many adds run at once. Each one hits the provider, and twenty at a
+ *  time invites the 429 we would then have to explain; on the first one the
+ *  rest are abandoned rather than piled on. */
+const BATCH_CONCURRENCY = 3
+
+/** Rows the input grows to for a batch before it scrolls instead. */
+const MAX_VISIBLE_ROWS = 12
+
+/** Everything an add carries besides the link or file itself. */
+type CommonAdd = Omit<Parameters<typeof addWebDownload>[1], 'link'>
 
 interface Props {
   apiKey: string
@@ -64,20 +88,48 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // What the current input looks like, and whether the user has corrected it.
   // override wins while set; it is cleared whenever the input changes, so a
   // correction made for one link never silently carries to the next.
-  const [detected, setDetected] = useState<Detection>({ kind: 'torrent', certain: false })
+  // Only an uploaded file needs its kind held in state — it is sniffed
+  // asynchronously. A link's kind is derived from the field itself, below.
+  const [fileDetected, setFileDetected] = useState<Detection>({ kind: 'torrent', certain: false })
   const [override, setOverride] = useState<Kind | null>(null)
   const [fileError, setFileError] = useState('')
   // What was decoded away, so the transformation is visible and reversible.
   // The whole transition lives in stepDecode/undoDecode — see detect.ts for
   // why this needs to be a state machine and not a single call.
   const [decode, setDecode] = useState(noDecode)
-  const protocol: Protocol = override ?? detected.kind
   // Web Downloads is genuinely link-only — TorBox's own createwebdownload API
   // has no file-upload variant, unlike torrent/usenet — so there's no mode
   // toggle to show for it (see handleSubmit's protocol==='webdl' branch).
   const [mode, setMode] = useState<InputMode>('link')
   const [link, setLink] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  // Kinds for an upload, resolved by sniffing each file's leading bytes.
+  const [fileItems, setFileItems] = useState<{ file: File; kind: Kind }[]>([])
+  // Set by the input's onPaste and consumed by the effect below. Only a paste
+  // triggers the aggressive multi-link clean-up: running it per keystroke
+  // would eat a link halfway through being typed on a second line.
+  const pasted = useRef(false)
+  // Which items of a batch failed, so a partial result can name them.
+  const [batchErrors, setBatchErrors] = useState<{ link: string; message: string }[]>([])
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+
+  // What the field holds as a whole: one item, or a batch of them. Memoised
+  // because it re-parses the entire paste, and this renders on every keystroke.
+  const field = useMemo(() => detectField(link), [link])
+  const isBatch = mode === 'link' && field.batch
+  // A batch of either kind, described the same way for the summary chips.
+  const summaryItems: BatchItem[] | null = isBatch
+    ? field.items
+    : mode === 'file' && fileItems.length > 1
+      ? fileItems.map((f) => ({ link: f.file.name, kind: f.kind, certain: true, layers: 0 }))
+      : null
+  const detected: Detection =
+    mode === 'file'
+      ? fileDetected
+      : field.batch
+        ? { kind: 'torrent', certain: false } // unused: a batch has no one kind
+        : { kind: field.kind, certain: field.certain }
+  const protocol: Protocol = override ?? detected.kind
   // managed is always false for a member — isAdmin gates whether the toggle
   // even renders, not just whether it's editable, so there's no path for a
   // non-admin to end up with this true.
@@ -145,6 +197,10 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     setTorrentInfo(null)
     if (mode !== 'link') return
     const value = link.trim()
+    // A batch is many links, so there is no single thing to preview — and
+    // the torrent test below is not anchored, so a list of magnets would
+    // otherwise match and fire a lookup for nonsense.
+    if (/\s/.test(value)) return
     // Cheap client-side sanity checks before ever spending a round trip —
     // real validation still happens server-side either way, this just
     // avoids firing on a clearly-incomplete paste-in-progress.
@@ -182,12 +238,81 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey, protocol, mode, link])
 
-  async function handleSubmit(e: FormEvent) {
+  // Runs a batch's adds a few at a time, collecting per-item outcomes instead
+  // of abandoning the rest on the first error.
+  //
+  // Bounded deliberately: every add hits the provider, and firing twenty at
+  // once invites the 429 we would then have to explain. On the first
+  // rate-limit the remaining items are dropped rather than piled on, and are
+  // reported as not attempted rather than as failures of their own.
+  async function runBatch(tasks: { label: string; run: () => Promise<unknown> }[]) {
+    // undefined = never attempted, null = succeeded, string = failed.
+    const outcome: (string | null | undefined)[] = new Array(tasks.length).fill(undefined)
+    let next = 0
+    let done = 0
+    let rateLimited = false
+    setProgress({ done: 0, total: tasks.length })
+
+    async function worker() {
+      for (;;) {
+        if (rateLimited) return
+        const index = next++
+        if (index >= tasks.length) return
+        try {
+          await tasks[index].run()
+          outcome[index] = null
+        } catch (err) {
+          outcome[index] = err instanceof ApiError ? err.message : String(err)
+          if (err instanceof ApiError && err.status === 429) rateLimited = true
+        }
+        done++
+        setProgress({ done, total: tasks.length })
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, tasks.length) }, () => worker()),
+    )
+
+    const failures: { link: string; message: string }[] = []
+    for (let i = 0; i < tasks.length; i++) {
+      if (outcome[i] === null) continue
+      failures.push({
+        link: tasks[i].label,
+        message:
+          outcome[i] ?? (rateLimited ? 'not attempted — provider rate limited' : 'not attempted'),
+      })
+    }
+    return failures
+  }
+
+  function addOne(kind: Kind, value: string, common: CommonAdd) {
+    if (kind === 'torrent') return addTorrent(apiKey, { magnet: value, ...common })
+    if (kind === 'usenet') return addUsenet(apiKey, { url: value, ...common })
+    return addWebDownload(apiKey, { link: value, ...common })
+  }
+
+  // A single failure keeps the plain message it always had; only a real batch
+  // gets the "n of m" summary and the per-item list.
+  function reportPartial(total: number, failures: { link: string; message: string }[]) {
+    if (total === 1) {
+      setStatus({ kind: 'error', message: failures[0].message })
+      return
+    }
+    setBatchErrors(failures)
+    setStatus({
+      kind: 'error',
+      message: `${total - failures.length} of ${total} added — ${failures.length} failed`,
+    })
+  }
+
+  async function handleSubmit(e: FormEvent | ReactKeyboardEvent<HTMLTextAreaElement>) {
     e.preventDefault()
     if (mode === 'link' && !link.trim()) return
-    if (mode === 'file' && !file) return
+    if (mode === 'file' && fileItems.length === 0) return
 
     setStatus({ kind: 'saving' })
+    setBatchErrors([])
     try {
       // Category only means anything for a Managed add — it drives
       // internal/importer's save-path resolution, the same as a category
@@ -195,27 +320,65 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
       // docs/configuration.md#categories-and-save-paths). A Manual add never
       // sends it: Manual downloads mirror TorBox's own web UI, which has no
       // category concept at all (see ROADMAP.md's "Manual categories" entry).
-      const categoryToSend = managed ? category.trim() : undefined
-      // Managed-only: the server ignores them for a Manual add, and sending
-      // them anyway would imply they meant something there.
-      const dafToSend = managed ? deleteAfterFetch : undefined
-      const kfToSend = managed ? keepFiles : undefined
-      const addedVia = managed ? 'arr' : undefined
-      // Empty means "didn't choose", which the server reads as the default.
-      const providerToSend = provider || undefined
-      if (protocol === 'torrent') {
-        if (mode === 'file') await addTorrent(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
-        else await addTorrent(apiKey, { magnet: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
-      } else if (protocol === 'usenet') {
-        if (mode === 'file') await addUsenet(apiKey, { file: file as File, category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
-        else await addUsenet(apiKey, { url: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
+      //
+      // The Managed-only options go the same way: the server ignores them for
+      // a Manual add, and sending them anyway would imply they meant
+      // something there. An empty provider means "didn't choose", which the
+      // server reads as the default.
+      const common: CommonAdd = {
+        category: managed ? category.trim() : undefined,
+        addedVia: managed ? 'arr' : undefined,
+        provider: provider || undefined,
+        deleteAfterFetch: managed ? deleteAfterFetch : undefined,
+        keepFiles: managed ? keepFiles : undefined,
+      }
+
+      if (mode === 'file') {
+        const failures = await runBatch(
+          fileItems.map((item) => ({
+            label: item.file.name,
+            run: () =>
+              item.kind === 'usenet'
+                ? addUsenet(apiKey, { file: item.file, ...common })
+                : addTorrent(apiKey, { file: item.file, ...common }),
+          })),
+        )
+        if (failures.length > 0) {
+          reportPartial(fileItems.length, failures)
+          return
+        }
+      } else if (field.batch) {
+        const failures = await runBatch(
+          field.items.map((item) => ({
+            label: item.link,
+            run: () => addOne(item.kind, item.link, common),
+          })),
+        )
+        if (failures.length > 0) {
+          // Leave only what failed in the box, so it can be corrected and
+          // sent again without having to hunt those links down a second time.
+          setDecode(noDecode)
+          setLink(failures.map((failure) => failure.link).join('\n'))
+          reportPartial(field.items.length, failures)
+          return
+        }
       } else {
-        await addWebDownload(apiKey, { link: link.trim(), category: categoryToSend, addedVia, provider: providerToSend, deleteAfterFetch: dafToSend, keepFiles: kfToSend })
+        await addOne(protocol, link.trim(), common)
       }
       onAdded(managed)
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    } finally {
+      setProgress(null)
     }
+  }
+
+  // Enter still submits a single link, exactly as it did when this was an
+  // <input>. In a batch it has to insert a newline instead — you are editing
+  // a list at that point — so Ctrl/Cmd+Enter submits either way.
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== 'Enter') return
+    if (e.ctrlKey || e.metaKey || !isBatch) void handleSubmit(e)
   }
 
   // Detection runs on every input change, and clears any correction the user
@@ -227,13 +390,17 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     // Peel any nested base64 before deciding what this is. This can rewrite
     // the field, which re-runs the effect; stepDecode is what keeps that
     // second pass from undoing the notice or re-decoding a restored value.
-    const step = stepDecode(link, decode)
+    // A paste gets the full clean-up: strip everything that is not a link,
+    // then decode each survivor separately. Typing gets only the single-value
+    // decoder, so a link being typed on a second line is left alone.
+    const wasPasted = pasted.current
+    pasted.current = false
+    const step = wasPasted ? stepSanitize(link, decode) : stepDecode(link, decode)
     if (step.state !== decode) setDecode(step.state)
     if (step.link !== link) {
       setLink(step.link)
       return
     }
-    setDetected(detectFromLink(link))
     // decode is deliberately not a dependency: it changes as a result of
     // this effect, and including it would re-enter on its own write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,30 +409,61 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // A file is identified by its first bytes rather than its name: a browser
   // will hand over "x.torrent" containing anything at all.
   useEffect(() => {
-    if (mode !== 'file' || !file) return
+    if (mode !== 'file' || files.length === 0) {
+      setFileItems([])
+      setFileError('')
+      return
+    }
     let cancelled = false
     setOverride(null)
     setFileError('')
-    detectFromFile(file).then((d) => {
+    Promise.all(
+      files.map(async (f) => ({ file: f, detected: await detectFromFile(f) })),
+    ).then((results) => {
       if (cancelled) return
-      if (!d) {
-        setFileError('That file is neither a .torrent nor an .nzb. Web links have no file upload — paste the link instead.')
-        return
+      const good: { file: File; kind: Kind }[] = []
+      const bad: File[] = []
+      for (const result of results) {
+        if (result.detected) good.push({ file: result.file, kind: result.detected.kind })
+        else bad.push(result.file)
       }
-      setDetected(d)
+      setFileItems(good)
+      // Unusable files are skipped rather than blocking the rest of the
+      // upload, but they are named — silently dropping one would look like
+      // the add simply lost it.
+      if (bad.length === results.length) {
+        setFileError('Neither a .torrent nor an .nzb. Web links have no file upload — paste the link instead.')
+      } else if (bad.length > 0) {
+        setFileError(
+          `Skipping ${bad.length} file${bad.length === 1 ? '' : 's'} that ${bad.length === 1 ? 'is' : 'are'} neither a .torrent nor an .nzb: ${bad.map((f) => f.name).join(', ')}`,
+        )
+      }
+      if (good.length === 1) setFileDetected({ kind: good[0].kind, certain: true })
     })
     return () => {
       cancelled = true
     }
-  }, [file, mode])
+  }, [files, mode])
 
-  const protocolAvailable =
-    protocol === 'torrent' ? torrentAvailable : protocol === 'usenet' ? usenetAvailable : webdlAvailable
+  const kindAvailable = (kind: Kind) =>
+    kind === 'torrent' ? torrentAvailable : kind === 'usenet' ? usenetAvailable : webdlAvailable
+  // A batch keeps the form open if any item has somewhere to go. Items whose
+  // kind has no provider fail individually with the server's own message,
+  // rather than hiding the entire form because one line cannot be routed.
+  const protocolAvailable = summaryItems
+    ? summaryItems.some((item) => kindAvailable(item.kind))
+    : kindAvailable(protocol)
 
   // Which providers can actually take the protocol currently selected — a
   // torrent-only provider shouldn't be offered for a usenet add.
+  const providerHandles = (p: ProviderStatus, kind: Kind) =>
+    kind === 'torrent' ? p.torrent_capable : kind === 'usenet' ? p.usenet_capable : p.webdl_capable
+  // One provider is chosen for the whole batch, so only those able to take
+  // every kind in it are offered. Leaving it on Default routes per kind.
   const capableProviders = providers.filter((p) =>
-    protocol === 'torrent' ? p.torrent_capable : protocol === 'usenet' ? p.usenet_capable : p.webdl_capable,
+    summaryItems
+      ? summaryItems.every((item) => providerHandles(p, item.kind))
+      : providerHandles(p, protocol),
   )
 
   return (
@@ -331,7 +529,19 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             an indexer API URL and a hoster link are genuinely the same shape.
             The assumption is shown as one, and can be corrected — the
             correction clears as soon as the input changes. */}
-        {(link.trim() !== '' || file) && availableProtocols.length > 1 && (
+        {summaryItems && (
+          // A batch has no single kind to correct, so this reports the mix
+          // rather than offering chips to click.
+          <div className="detected-kind">
+            <span className="detected-label">Batch</span>
+            {batchSummary(summaryItems).map(({ kind, count }) => (
+              <span key={kind} className="cap cap-selected">
+                {count} {kindPlural(kind, count)}
+              </span>
+            ))}
+          </div>
+        )}
+        {!summaryItems && (link.trim() !== '' || files.length > 0) && availableProtocols.length > 1 && (
           <div className="detected-kind">
             <span className="detected-label">
               {detected.certain || override ? 'Type' : 'Looks like'}
@@ -358,7 +568,9 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             poor trade for the convenience. */}
         {decode.from !== null && (
           <p className="settings-help decoded-notice">
-            Decoded from base64 {decode.layers > 1 ? `×${decode.layers}` : ''}.{' '}
+            {decode.items > 1
+              ? `Found ${decode.items} links${decode.layers > 0 ? ', decoding base64 along the way' : ''}.`
+              : `Decoded from base64 ${decode.layers > 1 ? `×${decode.layers}` : ''}.`}{' '}
             <button
               type="button"
               className="link-button"
@@ -413,22 +625,35 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             </div>
 
             {mode === 'link' ? (
-              <input
-                type="text"
+              // Always a textarea, never an <input> swapped out for one when a
+              // batch appears: changing the element type remounts the node and
+              // drops focus mid-typing. At one row it is exactly the size the
+              // input was, and it only grows once there is a list to show.
+              <textarea
+                className="add-link-input"
+                rows={isBatch ? Math.min(field.items.length, MAX_VISIBLE_ROWS) : 1}
                 placeholder="Magnet, .torrent/.nzb URL, or hoster link"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
+                onPaste={() => {
+                  pasted.current = true
+                }}
+                onKeyDown={handleKeyDown}
                 autoFocus
               />
             ) : (
+              // accept is no longer narrowed to the detected protocol: one
+              // upload can hold both kinds, and each file's kind is decided
+              // from its own bytes regardless of what the picker allowed.
               <input
                 type="file"
-                accept={protocol === 'torrent' ? '.torrent' : '.nzb'}
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                multiple
+                accept=".torrent,.nzb"
+                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
               />
             )}
 
-            {mode === 'link' && (previewLoading || cached !== null || torrentInfo) && (
+            {mode === 'link' && !isBatch && (previewLoading || cached !== null || torrentInfo) && (
               <div className="add-preview">
                 {previewLoading && <p className="settings-help">Checking…</p>}
                 {!previewLoading && cached !== null && (
@@ -471,12 +696,34 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               type="submit"
               disabled={
                 status.kind === 'saving' ||
-                (mode === 'link' ? !link.trim() : !file)
+                (mode === 'link' ? !link.trim() : fileItems.length === 0)
               }
             >
-              {status.kind === 'saving' ? 'Adding…' : 'Add'}
+              {status.kind === 'saving'
+                ? progress && progress.total > 1
+                  ? `Adding ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+                  : 'Adding…'
+                : summaryItems
+                  ? `Add ${summaryItems.length}`
+                  : 'Add'}
             </button>
-            {status.kind === 'error' && <p className="settings-error">Failed to add: {status.message}</p>}
+            {status.kind === 'error' && (
+              <p className="settings-error">
+                {batchErrors.length > 0 ? status.message : `Failed to add: ${status.message}`}
+              </p>
+            )}
+            {batchErrors.length > 0 && (
+              <ul className="batch-errors">
+                {batchErrors.map((failure) => (
+                  <li key={failure.link}>
+                    <span className="batch-error-link" title={failure.link}>
+                      {failure.link}
+                    </span>
+                    <span className="batch-error-message">{failure.message}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </form>
         )}
       </div>

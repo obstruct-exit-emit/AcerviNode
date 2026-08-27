@@ -52,7 +52,8 @@ cd web && npm test
 ```
 
 Currently one suite: `src/detect.test.ts`, covering the add form's type
-detection, its base64 unwrapping, and the decode state machine. That logic
+detection, its base64 unwrapping, the decode state machine, and batch
+sanitizing. That logic
 decides which endpoint an add goes to from a pasted link or an uploaded
 file's bytes, has genuinely fiddly edges — an extension in a query string, a
 half-typed URL, XML that isn't an NZB — and is the kind of pure function unit
@@ -65,6 +66,15 @@ exactly that gap while the logic lived in component state. The tests drive
 the pair to a fixed point the way React does, which is why they catch what
 inspection did not. Prefer that shape over adding a DOM test setup: there is
 no jsdom here, and this stayed testable without one.
+
+Batch support is built the same way. `sanitizeBatch`/`detectField` are pure, so
+the tricky half — pulling links out of arbitrary prose, decoding each to its
+own depth, expanding a blob that decodes to a list — is covered before any UI
+exists. Two rules there are load-bearing enough to be worth mutation-checking
+when touched: `isRecognisable` requires a single token (without it a decoded
+list beginning with a magnet is swallowed whole as one enormous link), and
+`decodeOnce` rejects control characters (which is what stops a bare infohash,
+itself valid base64, from being decoded into binary noise).
 
 Frontend-only iteration (Node 22+):
 

@@ -1510,7 +1510,8 @@ table.detail-files tbody tr:last-child td {
 }
 
 .add-download-panel input[type='text'],
-.add-download-panel input[type='file'] {
+.add-download-panel input[type='file'],
+.add-download-panel .add-link-input {
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -1519,9 +1520,61 @@ table.detail-files tbody tr:last-child td {
   font: inherit;
 }
 
-.add-download-panel input[type='text']:focus {
+.add-download-panel input[type='text']:focus,
+.add-download-panel .add-link-input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* The link field is a textarea so a pasted batch can be shown one link per
+   line, but at rows=1 it must be indistinguishable from the input it replaced.
+   That means NOT setting line-height here: `font: inherit` above already
+   carries the inherited value, and overriding it afterwards made the textarea
+   taller than the input sitting next to it. box-sizing is likewise left to
+   the global reset. */
+.add-download-panel .add-link-input {
+  width: 100%;
+  resize: none;
+  /* Links are long. Scrolling one line sideways beats wrapping every entry
+     across three and turning a ten-item batch into a wall of text. */
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* Per-item failures from a batch: a partial result has to name what to fix,
+   not just count it. Capped and scrollable so twenty failures cannot push the
+   Add button off the panel. */
+.batch-errors {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.batch-errors li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.batch-error-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.batch-error-message {
+  color: var(--state-error);
+  flex-shrink: 0;
 }
 
 .add-download-panel button[type='submit'] {

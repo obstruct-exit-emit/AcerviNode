@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  batchSummary,
+  batchText,
+  detectField,
   detectFromFile,
   detectFromLink,
   kindLabel,
+  kindPlural,
   noDecode,
+  sanitizeBatch,
   stepDecode,
+  stepSanitize,
   undoDecode,
   unwrapEncoded,
 } from './detect'
@@ -314,5 +320,213 @@ describe('stepDecode / undoDecode', () => {
 
   it('undo on a state with nothing decoded is inert', () => {
     expect(undoDecode(noDecode).state).toBe(noDecode)
+  })
+})
+
+describe('sanitizeBatch', () => {
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const MAGNET2 = 'magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'
+  const NZB = 'https://indexer.example/get/Some.Release.nzb'
+  const WEB = 'https://mega.nz/file/abc123'
+
+  // The whole point of splitting on whitespace: prose is not matched against
+  // a blocklist, it simply fails to be a link and falls away.
+  it('pulls links out of surrounding prose', () => {
+    const text = `Here you go mate:\n\n${MAGNET}\n\nand the second one ${MAGNET2} enjoy!`
+    expect(sanitizeBatch(text).map((i) => i.link)).toEqual([MAGNET, MAGNET2])
+  })
+
+  it('handles a mixed batch, each item keeping its own kind', () => {
+    const items = sanitizeBatch([MAGNET, NZB, WEB].join('\n'))
+    expect(items.map((i) => i.kind)).toEqual(['torrent', 'usenet', 'webdl'])
+  })
+
+  it.each([
+    ['- ', ''],
+    ['* ', ''],
+    ['1. ', ''],
+    ['2) ', ''],
+    ['> ', ''],
+    ['<', '>'],
+    ['"', '"'],
+    ['', ','],
+    ['', ';'],
+  ])('strips list decoration %s...%s', (before, after) => {
+    const text = `${before}${MAGNET}${after}\n${MAGNET2}`
+    expect(sanitizeBatch(text).map((i) => i.link)).toEqual([MAGNET, MAGNET2])
+  })
+
+  it('takes the URL out of a markdown link', () => {
+    const text = `[Sintel](${MAGNET})\n[Other](${WEB})`
+    expect(sanitizeBatch(text).map((i) => i.link)).toEqual([MAGNET, WEB])
+  })
+
+  // Each line decodes to its own depth: this is what "acting as it does now,
+  // but for more than one" has to mean.
+  it('decodes each item independently to its own depth', () => {
+    let five = MAGNET
+    for (let i = 0; i < 5; i++) five = b64(five)
+    const items = sanitizeBatch([five, MAGNET2, b64(WEB)].join('\n'))
+    expect(items.map((i) => i.link)).toEqual([MAGNET, MAGNET2, WEB])
+    expect(items.map((i) => i.layers)).toEqual([5, 0, 1])
+  })
+
+  it('dedupes, first occurrence winning', () => {
+    expect(sanitizeBatch([MAGNET, MAGNET2, MAGNET].join('\n')).map((i) => i.link)).toEqual([
+      MAGNET,
+      MAGNET2,
+    ])
+  })
+
+  it('dedupes case-insensitively', () => {
+    expect(sanitizeBatch([MAGNET, MAGNET.toUpperCase()].join('\n'))).toHaveLength(1)
+  })
+
+  it('drops everything that is not a link', () => {
+    expect(sanitizeBatch('just some words, nothing here at all')).toEqual([])
+    expect(sanitizeBatch('')).toEqual([])
+    expect(sanitizeBatch('   \n  ')).toEqual([])
+  })
+
+  // The failure that started all this: text copied out of a truncated
+  // terminal line is not valid base64 and must be dropped, not half-decoded.
+  it('drops a truncated base64 item without disturbing the rest', () => {
+    const truncated = b64(b64(MAGNET)).slice(23)
+    expect(sanitizeBatch(`${MAGNET2}\n${truncated}`).map((i) => i.link)).toEqual([MAGNET2])
+  })
+
+  // A bare infohash is itself valid base64. It must survive a batch intact,
+  // exactly as it does on the single path.
+  it('keeps a bare infohash intact inside a batch', () => {
+    const hash = 'dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'
+    const items = sanitizeBatch(`${hash}\n${WEB}`)
+    expect(items.map((i) => i.link)).toEqual([hash, WEB])
+    expect(items[0].kind).toBe('torrent')
+  })
+
+  it('expands one blob that decodes to a whole list', () => {
+    expect(sanitizeBatch(b64([MAGNET, NZB, WEB].join('\n'))).map((i) => i.link)).toEqual([
+      MAGNET,
+      NZB,
+      WEB,
+    ])
+  })
+
+  it('expands a list nested several layers deep', () => {
+    let enc = [MAGNET, MAGNET2].join('\n')
+    for (let i = 0; i < 3; i++) enc = b64(enc)
+    expect(sanitizeBatch(enc).map((i) => i.link)).toEqual([MAGNET, MAGNET2])
+  })
+
+  it('caps a runaway paste', () => {
+    const many = Array.from(
+      { length: 250 },
+      (_, i) => `magnet:?xt=urn:btih:${i.toString(16).padStart(40, '0')}`,
+    ).join('\n')
+    expect(sanitizeBatch(many)).toHaveLength(100)
+  })
+})
+
+describe('detectField', () => {
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const WEB = 'https://mega.nz/file/abc123'
+
+  it('reports a single link the way it always did', () => {
+    expect(detectField(MAGNET)).toEqual({ batch: false, kind: 'torrent', certain: true })
+  })
+
+  // New behaviour on the single path, and deliberate: a lone link pasted with
+  // a release title around it used to go to the server verbatim and fail.
+  it('cleans a lone link pasted with a title around it', () => {
+    expect(detectField(`Cool.Movie.2024.1080p ${MAGNET}`)).toEqual({
+      batch: false,
+      kind: 'torrent',
+      certain: true,
+    })
+  })
+
+  it('reports text with no links as an assumed web link, not a batch', () => {
+    expect(detectField('hello there')).toEqual({ batch: false, kind: 'webdl', certain: false })
+  })
+
+  it('becomes a batch at two links', () => {
+    const field = detectField([MAGNET, WEB].join('\n'))
+    expect(field.batch).toBe(true)
+    if (field.batch) expect(field.items).toHaveLength(2)
+  })
+})
+
+describe('batchSummary / batchText / kindPlural', () => {
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const MAGNET2 = 'magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'
+  const NZB = 'https://indexer.example/get/Some.Release.nzb'
+  const WEB = 'https://mega.nz/file/abc123'
+
+  it('counts per kind in chip order, skipping absent kinds', () => {
+    const items = sanitizeBatch([MAGNET, MAGNET2, NZB].join('\n'))
+    expect(batchSummary(items)).toEqual([
+      { kind: 'torrent', count: 2 },
+      { kind: 'usenet', count: 1 },
+    ])
+  })
+
+  it('renders one link per line, in order', () => {
+    const items = sanitizeBatch([WEB, MAGNET].join('\n'))
+    expect(batchText(items)).toBe(`${WEB}\n${MAGNET}`)
+  })
+
+  it('pluralises for the summary, leaving usenet uncountable', () => {
+    expect(kindPlural('torrent', 1)).toBe('torrent')
+    expect(kindPlural('torrent', 3)).toBe('torrents')
+    expect(kindPlural('webdl', 1)).toBe('web link')
+    expect(kindPlural('webdl', 2)).toBe('web links')
+    expect(kindPlural('usenet', 1)).toBe('usenet')
+    expect(kindPlural('usenet', 4)).toBe('usenet')
+  })
+})
+
+describe('stepSanitize', () => {
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const WEB = 'https://mega.nz/file/abc123'
+  const MESSY = `grab these:\n- ${MAGNET}\n- ${WEB}\ncheers`
+  const CLEAN = `${MAGNET}\n${WEB}`
+
+  it('cleans a pasted list and records the original for undo', () => {
+    const step = stepSanitize(MESSY, noDecode)
+    expect(step.link).toBe(CLEAN)
+    expect(step.state.from).toBe(MESSY)
+    expect(step.state.to).toBe(CLEAN)
+    expect(step.state.items).toBe(2)
+  })
+
+  // The cleaned value re-enters the effect as a normal change, where the
+  // single-path decoder must leave it alone rather than fight it.
+  it('leaves its own output alone on the pass that follows', () => {
+    const cleaned = stepSanitize(MESSY, noDecode)
+    const next = stepDecode(cleaned.link, cleaned.state)
+    expect(next.link).toBe(CLEAN)
+    expect(next.state).toBe(cleaned.state)
+  })
+
+  it('undo restores the messy paste and it stays restored', () => {
+    const cleaned = stepSanitize(MESSY, noDecode)
+    const undone = undoDecode(cleaned.state)
+    expect(undone.link).toBe(MESSY)
+    // Pinned, so pasting logic run again over the restored text is inert.
+    expect(stepSanitize(undone.link, undone.state).link).toBe(MESSY)
+    expect(stepDecode(undone.link, undone.state).link).toBe(MESSY)
+  })
+
+  it('leaves text holding no links alone', () => {
+    const step = stepSanitize('hello there', noDecode)
+    expect(step.link).toBe('hello there')
+    expect(step.state.from).toBeNull()
+  })
+
+  it('is inert when the text is already clean', () => {
+    const step = stepSanitize(CLEAN, noDecode)
+    expect(step.link).toBe(CLEAN)
+    expect(step.state).toBe(noDecode)
   })
 })
