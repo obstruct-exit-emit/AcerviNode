@@ -380,6 +380,12 @@ function unwrapPairs(input: string): string {
     const closer = WRAPPERS[opener]
     if (closer !== undefined && out.endsWith(closer)) out = out.slice(0, -1)
   }
+  // A trailing > or " needs no opener to be noise: RFC 3986 excludes both
+  // from a URI unless percent-encoded, so one sitting raw at the end came
+  // from whatever wrapped the link -- an email quote, a mangled markup tag.
+  // Parentheses, brackets and apostrophes are legal in a path, so those are
+  // still only removed when something opened them.
+  out = out.replace(/[>"]+$/, '')
   return out
 }
 

@@ -369,6 +369,15 @@ describe('sanitizeBatch', () => {
     expect(sanitizeBatch(link).map((i) => i.link)).toEqual([link])
   })
 
+  // > and " are stripped from the end whether or not anything opened them:
+  // neither is legal in a URI unencoded, so a raw one is always wrapping.
+  it.each([
+    ['https://host.example/f.zip>', 'https://host.example/f.zip'],
+    ['https://host.example/f.zip"', 'https://host.example/f.zip'],
+  ])('strips an unmatched %s', (input, want) => {
+    expect(sanitizeBatch(input).map((i) => i.link)).toEqual([want])
+  })
+
   it.each([
     ['<', '>'],
     ['(', ')'],
