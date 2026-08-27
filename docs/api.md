@@ -328,6 +328,40 @@ email client arrives as two broken tokens and both are dropped. Rejoining them
 cannot be done safely — a magnet fragment plus a stray word still looks like a
 magnet — so it is left alone.
 
+### Link normalisation (server-side)
+
+Unlike everything above, this is **not** a web-UI convenience — it runs in the
+`webdl` handlers themselves, so an add from Sonarr/Radarr or from a direct API
+call gets it too.
+
+MEGA's pre-2020 links put the node handle and decryption key in the URL
+fragment behind `!` markers. The modern form moved the handle into the path:
+
+| Legacy | Normalised to |
+| --- | --- |
+| `https://mega.nz/#F!ID!KEY` | `https://mega.nz/folder/ID#KEY` |
+| `https://mega.nz/#!ID!KEY` | `https://mega.nz/file/ID#KEY` |
+| `https://mega.co.nz/...` | `https://mega.nz/...` |
+
+Both forms open in a browser, because mega.nz's own front end rewrites the old
+shape client-side. A debrid provider parses the URL instead of running that
+JavaScript, and a parser reading the path finds nothing there — so the legacy
+form has to be converted before it is handed over. The key is identical in both;
+only the shape changes.
+
+This runs on **both** `POST /api/v1/downloads/webdl` and
+`GET /api/v1/downloads/webdl/check-cached`, and has to: TorBox keys a web
+download's cache entry on an MD5 of the link, so normalising one and not the
+other would answer "is this cached?" about a string that never gets added.
+
+One case is deliberately left alone. A legacy folder link may carry a third
+segment naming a node inside the folder (`#F!ID!KEY!NODE`). The modern
+equivalent is either `/folder/ID#KEY/file/NODE` or `/folder/ID#KEY/folder/NODE`
+depending on what that node actually is, and nothing in the URL says which.
+Guessing would silently point the download at the wrong thing; leaving it
+untouched fails loudly with the provider's own error, which is the better of
+the two.
+
 `POST /api/v1/downloads/torrent`, `POST /api/v1/downloads/usenet`, and
 `POST /api/v1/downloads/webdl` let you add a download without going through
 Sonarr/Radarr or faking being one against a compat shim — this is what the web

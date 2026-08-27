@@ -2770,6 +2770,44 @@ func TestHandleAddWebDownload_Link(t *testing.T) {
 	}
 }
 
+// A legacy MEGA link has to reach the provider in the modern form, and be
+// stored that way: a provider parses the URL rather than running mega.nz's own
+// front-end JavaScript, and the legacy shape keeps the node handle in the
+// fragment where a path parser finds nothing.
+func TestHandleAddWebDownload_NormalisesLegacyMegaLink(t *testing.T) {
+	provider := &fakeProvider{providerName: "torbox", addID: "123", statusErr: errors.New("not indexed yet")}
+	srv, db := newTestServerWithWebDownload(t, provider, nil)
+
+	const legacy = "https://mega.nz/#F!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg"
+	const modern = "https://mega.nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg"
+	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"link": legacy})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.addedLink != modern {
+		t.Errorf("provider received %q, want the modern form %q", provider.addedLink, modern)
+	}
+
+	var got downloadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	d, err := db.GetDownloadByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("GetDownloadByID() error = %v", err)
+	}
+	if d == nil {
+		t.Fatal("row was not persisted")
+	}
+	// The stored source has to match what was sent, or a later re-add would
+	// hand the provider a link it already rejected once.
+	if d.Source != modern {
+		t.Errorf("persisted source = %q, want %q", d.Source, modern)
+	}
+}
+
 func TestHandleAddWebDownload_RequiresLink(t *testing.T) {
 	srv, _ := newTestServerWithWebDownload(t, &fakeProvider{}, nil)
 	req := formURLEncodedRequest(t, "/api/v1/downloads/webdl", map[string]string{"category": "movies"})
@@ -2949,6 +2987,35 @@ func TestHandleCheckCachedWebDownload_HashesTheLink(t *testing.T) {
 	}
 	if len(provider.checkCachedHashes) != 1 || provider.checkCachedHashes[0] != wantHash {
 		t.Errorf("CheckCached called with %v, want [%s] (md5 of the link)", provider.checkCachedHashes, wantHash)
+	}
+}
+
+// The legacy and modern forms of one MEGA link must land on the same cache
+// key. TorBox keys a web download's cache entry on an MD5 of the link, so
+// check-cached normalising differently from the add path would report on a
+// string that never actually gets added.
+func TestHandleCheckCachedWebDownload_NormalisesLegacyMegaLink(t *testing.T) {
+	const legacy = "https://mega.nz/#F!5zRGyQZR!u91UYP1weBd6gaLRJDBCMg"
+	const modern = "https://mega.nz/folder/5zRGyQZR#u91UYP1weBd6gaLRJDBCMg"
+	wantHash := md5Hex(modern)
+	provider := &fakeProvider{checkCachedResp: map[string]bool{wantHash: true}}
+	srv, _ := newTestServerWithWebDownload(t, provider, nil)
+
+	req := authedRequest(http.MethodGet, "/api/v1/downloads/webdl/check-cached?link="+url.QueryEscape(legacy))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got checkCachedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Cached {
+		t.Error("cached = false — the legacy link did not hash to the modern link's key")
+	}
+	if len(provider.checkCachedHashes) != 1 || provider.checkCachedHashes[0] != wantHash {
+		t.Errorf("CheckCached called with %v, want [%s] (md5 of the MODERN form)", provider.checkCachedHashes, wantHash)
 	}
 }
 

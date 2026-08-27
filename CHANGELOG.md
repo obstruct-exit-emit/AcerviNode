@@ -620,6 +620,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Legacy MEGA links are rewritten into the form providers accept.** MEGA's
+  pre-2020 links keep the node handle and decryption key in the URL fragment
+  behind `!` markers (`https://mega.nz/#F!ID!KEY`); the modern form moved the
+  handle into the path (`https://mega.nz/folder/ID#KEY`). Both open in a
+  browser, because mega.nz's own front end rewrites the old shape client-side —
+  but a debrid provider parses the URL rather than running that JavaScript, and
+  a parser reading the path finds nothing there. Folder links, file links and
+  the pre-2016 `mega.co.nz` domain are all handled.
+
+  Done **server-side**, in the `webdl` handlers, so an add from Sonarr/Radarr
+  or a direct API call benefits too — not just the web UI.
+
+  It runs on the check-cached path as well, which it has to: TorBox keys a web
+  download's cache entry on an MD5 of the link, so normalising the add and not
+  the lookup would report on a string that never gets added. Both wiring points
+  are covered by their own test, each of which fails if only that one is
+  reverted.
+
+  A legacy folder link naming a node *inside* the folder (`#F!ID!KEY!NODE`) is
+  deliberately left alone: the modern equivalent is `/file/NODE` or
+  `/folder/NODE` depending on what the node is, and nothing in the URL says
+  which. Guessing would silently fetch the wrong thing, while leaving it fails
+  loudly with the provider's own error.
+
+  Verified live against TorBox: the legacy and modern forms of the same folder
+  both report cached, while a wrong key and a made-up link both report not
+  cached — so the check genuinely discriminates rather than answering yes to
+  everything.
+
+
 - **Two bugs in the base64 decode notice.** The "Decoded from base64 ×N"
   notice cleared itself on the very re-render the decode caused: after a
   successful decode the field no longer matches what was pasted *by

@@ -509,7 +509,10 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
-	link := strings.TrimSpace(r.FormValue("link"))
+	// Normalised before anything else touches it, so the link stored, the
+	// link sent to the provider and the link the cache was checked against
+	// are all the same string. See normalizeWebLink.
+	link := normalizeWebLink(r.FormValue("link"))
 	if link == "" {
 		http.Error(w, "link is required", http.StatusBadRequest)
 		return
@@ -755,7 +758,10 @@ func (s *Server) handleCheckCachedWebDownload(w http.ResponseWriter, r *http.Req
 		http.Error(w, "no web-download-capable provider configured", http.StatusServiceUnavailable)
 		return
 	}
-	link := strings.TrimSpace(r.URL.Query().Get("link"))
+	// Must match handleAddWebDownload exactly: the cache key is an MD5 of
+	// the link, so normalising there and not here would look up a different
+	// string than the one an add would use.
+	link := normalizeWebLink(r.URL.Query().Get("link"))
 	if link == "" {
 		http.Error(w, "link is required", http.StatusBadRequest)
 		return
