@@ -45,8 +45,10 @@ type InputMode = 'link' | 'file'
  *  rest are abandoned rather than piled on. */
 const BATCH_CONCURRENCY = 3
 
-/** Rows the input grows to for a batch before it scrolls instead. */
-const MAX_VISIBLE_ROWS = 12
+/** How tall the input may grow for a batch before it scrolls instead. The
+ *  overlay scrolls the whole panel, so this only has to stay short enough to
+ *  keep the Add button reachable without one. */
+const MAX_INPUT_HEIGHT = 400
 
 /** Everything an add carries besides the link or file itself. */
 type CommonAdd = Omit<Parameters<typeof addWebDownload>[1], 'link'>
@@ -109,6 +111,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // triggers the aggressive multi-link clean-up: running it per keystroke
   // would eat a link halfway through being typed on a second line.
   const pasted = useRef(false)
+  const linkInput = useRef<HTMLTextAreaElement>(null)
   // Which items of a batch failed, so a partial result can name them.
   const [batchErrors, setBatchErrors] = useState<{ link: string; message: string }[]>([])
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
@@ -406,6 +409,26 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link, mode])
 
+  // Grow the field to fit a batch rather than scrolling it.
+  //
+  // rows= cannot do this correctly: long links mean a horizontal scrollbar,
+  // that scrollbar lives inside the content box, and so N rows renders fewer
+  // than N lines with a vertical scrollbar to make up the difference.
+  // Measuring is the only way to get it right.
+  useEffect(() => {
+    const el = linkInput.current
+    if (!el) return
+    if (!isBatch) {
+      el.style.height = ''
+      return
+    }
+    el.style.height = 'auto'
+    // offsetHeight - clientHeight is the borders plus whatever the horizontal
+    // scrollbar is occupying; scrollHeight on its own clips the last line.
+    const chrome = el.offsetHeight - el.clientHeight
+    el.style.height = `${Math.min(el.scrollHeight + chrome, MAX_INPUT_HEIGHT)}px`
+  }, [link, isBatch, mode])
+
   // A file is identified by its first bytes rather than its name: a browser
   // will hand over "x.torrent" containing anything at all.
   useEffect(() => {
@@ -630,8 +653,9 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               // drops focus mid-typing. At one row it is exactly the size the
               // input was, and it only grows once there is a list to show.
               <textarea
+                ref={linkInput}
                 className="add-link-input"
-                rows={isBatch ? Math.min(field.items.length, MAX_VISIBLE_ROWS) : 1}
+                rows={1}
                 placeholder="Magnet, .torrent/.nzb URL, or hoster link"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}

@@ -1539,6 +1539,9 @@ table.detail-files tbody tr:last-child td {
      across three and turning a ten-item batch into a wall of text. */
   white-space: pre;
   overflow-x: auto;
+  /* Height is set by measurement (see AddDownload's grow effect); this is the
+     fallback once a batch is taller than the cap. */
+  overflow-y: auto;
 }
 
 /* Per-item failures from a batch: a partial result has to name what to fix,
