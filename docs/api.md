@@ -345,11 +345,13 @@ File(s) mode) and it says which mode to switch to rather than just refusing;
 the same selection is re-judged when you switch, so nothing has to be picked
 again.
 
+One batch file at a time — the picker drops `multiple` in this mode, which is
+also where its "Choose File" label comes from.
+
 Reading is content-based and defensive: strict UTF-8 decoding rejects binary
 before anything looks for links in it, a UTF-8 BOM is handled, a UTF-16 file is
-refused rather than half-read, and at most 512 KB is read. Links are deduped
-and capped across all uploaded lists together, so several files cannot get past
-the 100-item limit a single paste has.
+refused rather than half-read, at most 512 KB is read, and the same 100-item
+cap a paste gets applies.
 
 **This adds no API surface.** A batch is N calls to the three endpoints above,
 made by the browser, three at a time. On a provider 429 the remaining items are

@@ -524,7 +524,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         )
       } else if (notAList.length > 0) {
         setFileError(
-          `Batch file reads .txt files and files with no extension. Skipping ${names(notAList)}.`,
+          `Batch file reads a .txt file, or one with no extension. Skipping ${names(notAList)}.`,
         )
       } else if (bad.length > 0) {
         setFileError(
@@ -767,7 +767,10 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
                     after selection instead. */}
                 <input
                   type="file"
-                  multiple
+                  // One batch file at a time. This also settles the picker's
+                  // own label, which the browser derives from this attribute:
+                  // "Choose Files" with it, "Choose File" without.
+                  multiple={mode === 'file'}
                   accept={mode === 'file' ? '.torrent,.nzb' : undefined}
                   onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
                 />
