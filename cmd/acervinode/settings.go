@@ -416,6 +416,7 @@ func (s *liveSettings) General() api.GeneralInfo {
 		ManagedAddDeleteAfterFetch:    s.cfg.ManagedAddDeleteAfterFetch,
 		ManagedAddKeepFiles:           s.cfg.ManagedAddKeepFiles,
 		Base32Infohashes:              s.cfg.Base32Infohashes,
+		DecodeBase64Links:             s.cfg.DecodeBase64Links,
 		BackupIntervalHours:           s.cfg.BackupIntervalHours,
 		BackupKeep:                    s.cfg.BackupKeep,
 	}
@@ -481,6 +482,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.ManagedAddDeleteAfterFetch = update.ManagedAddDeleteAfterFetch
 	candidate.ManagedAddKeepFiles = update.ManagedAddKeepFiles
 	candidate.Base32Infohashes = update.Base32Infohashes
+	candidate.DecodeBase64Links = update.DecodeBase64Links
 	candidate.BackupIntervalHours = update.BackupIntervalHours
 	candidate.BackupKeep = update.BackupKeep
 	if err := candidate.Validate(); err != nil {

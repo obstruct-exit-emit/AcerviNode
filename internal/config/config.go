@@ -242,6 +242,13 @@ type Config struct {
 	// would be read as a torrent. Worth switching on only if a tracker
 	// you use still hands out base32 hashes.
 	Base32Infohashes bool `yaml:"base32_infohashes"`
+	// DecodeBase64Links unwraps a base64-wrapped link pasted into the add
+	// form. On by default — the transformation is shown and reversible,
+	// and it only ever accepts a decode that lands on a magnet, infohash
+	// or URL. Purely a browser-side convenience: nothing here or in any
+	// provider ever base64-decodes an add, so switching it off simply
+	// means a wrapped link is left as the text it looks like.
+	DecodeBase64Links bool `yaml:"decode_base64_links"`
 
 	// ProviderRequestTimeoutSeconds bounds how long a single call to the
 	// debrid provider's own API (list, status, add, delete, account — every
@@ -349,6 +356,7 @@ func defaults() *Config {
 		// Off: the shape collides with ordinary base32 strings, and being
 		// wrong here means treating someone's secret as a download.
 		Base32Infohashes:           false,
+		DecodeBase64Links:          true,
 	}
 }
 

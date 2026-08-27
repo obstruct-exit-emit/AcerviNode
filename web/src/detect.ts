@@ -23,6 +23,11 @@ export interface DetectOptions {
    *  so accepting it unconditionally turns a pasted secret into an add. Worth
    *  switching on only for a tracker that still hands out base32 hashes. */
   base32Infohashes?: boolean
+  /** Unwrap base64-wrapped links. On unless explicitly switched off,
+   *  which is why every check below reads `!== false` rather than
+   *  `=== true`: an absent option means the default, and the default
+   *  here is on. */
+  decodeBase64?: boolean
 }
 
 export interface Detection {
@@ -284,8 +289,14 @@ function looksBase64(s: string): boolean {
 // copied out of a redirect URL is far more common than a base64-wrapped one.
 // The two cannot be confused — base64's alphabet has no "%", and a
 // percent-encoded string is not valid base64.
-function decodeOnce(s: string): string | null {
-  return decodePercentOnce(s) ?? decodeBase64Once(s)
+function decodeOnce(s: string, opts: DetectOptions): string | null {
+  const percent = decodePercentOnce(s)
+  if (percent !== null) return percent
+  // Percent-decoding stays on regardless. It is the far less surprising
+  // of the two — it only ever turns an escaped URL back into the URL it
+  // already was, where base64 turns text into something else entirely.
+  if (opts.decodeBase64 === false) return null
+  return decodeBase64Once(s)
 }
 
 // decodePercentOnce undoes percent-encoding, the shape a link takes when it
@@ -439,7 +450,7 @@ export function unwrapEncoded(raw: string, opts: DetectOptions = {}): Unwrapped 
 
   let current = input
   for (let depth = 1; depth <= MAX_DECODE_DEPTH; depth++) {
-    const next = decodeOnce(current)
+    const next = decodeOnce(current, opts)
     if (next === null) break
     current = next
     if (hasLanded(current, opts)) return { value: current, layers: depth }

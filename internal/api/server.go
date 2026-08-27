@@ -265,8 +265,10 @@ type GeneralInfo struct {
 	CleanupErrorAfterDays       int  `json:"cleanup_error_after_days"`
 	ManagedAddDeleteAfterFetch  bool `json:"managed_add_delete_after_fetch"`
 	ManagedAddKeepFiles         bool `json:"managed_add_keep_files"`
-	// Base32Infohashes mirrors config.Config's own field.
-	Base32Infohashes bool `json:"base32_infohashes"`
+	// Base32Infohashes and DecodeBase64Links mirror config.Config's own
+	// fields.
+	Base32Infohashes  bool `json:"base32_infohashes"`
+	DecodeBase64Links bool `json:"decode_base64_links"`
 	// BackupIntervalHours/BackupKeep mirror config's own fields — see
 	// internal/backup.
 	BackupIntervalHours int `json:"backup_interval_hours"`
@@ -305,6 +307,7 @@ type GeneralUpdate struct {
 	ManagedAddDeleteAfterFetch    bool   `json:"managed_add_delete_after_fetch"`
 	ManagedAddKeepFiles           bool   `json:"managed_add_keep_files"`
 	Base32Infohashes              bool   `json:"base32_infohashes"`
+	DecodeBase64Links             bool   `json:"decode_base64_links"`
 	BackupIntervalHours           int    `json:"backup_interval_hours"`
 	BackupKeep                    int    `json:"backup_keep"`
 }

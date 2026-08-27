@@ -289,6 +289,7 @@ export function Settings({ apiKey }: Props) {
         managed_add_delete_after_fetch: generalSettings.managed_add_delete_after_fetch,
         managed_add_keep_files: generalSettings.managed_add_keep_files,
         base32_infohashes: generalSettings.base32_infohashes,
+        decode_base64_links: generalSettings.decode_base64_links,
         backup_interval_hours: generalSettings.backup_interval_hours,
         backup_keep: generalSettings.backup_keep,
       })
@@ -784,6 +785,27 @@ export function Settings({ apiKey }: Props) {
               </Section>
 
               <div className="general-form">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={form.decode_base64_links}
+                    onChange={(e) => setForm({ ...form, decode_base64_links: e.target.checked })}
+                  />
+                  Unwrap base64-encoded links
+                </label>
+                <p className="settings-help">
+                  Links are sometimes passed around wrapped in base64, occasionally several layers
+                  deep. With this on, pasting one into the add box unwraps it back to the real link
+                  &mdash; the box shows what it found and offers a one-click undo, and a decode is
+                  only kept if it arrives at a magnet, infohash or web link.
+                </p>
+                <p className="settings-help">
+                  Switch it off if you would rather nothing you paste was ever rewritten. Encoded
+                  links then stay as the text they look like, and you unwrap them yourself. This is
+                  a browser-side convenience only: nothing on the server or at a provider decodes an
+                  add either way. URL percent-escapes are still unwrapped, since that only turns an
+                  escaped link back into the link it already was.
+                </p>
                 <label className="checkbox-row">
                   <input
                     type="checkbox"

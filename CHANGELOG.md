@@ -60,6 +60,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Base64 link unwrapping can be switched off**, the counterpart to the base32
+  switch and its opposite: opt-*out*, on by default, because unwrapping is
+  useful and already shipped. Off, an encoded link stays as the text it looks
+  like and you unwrap it yourself — for anyone who would rather nothing they
+  paste is ever rewritten.
+
+  Percent-escapes keep unwrapping regardless. They are the far less surprising
+  of the two: an escape only turns a link back into the link it already was,
+  where base64 turns text into something else entirely.
+
+  Purely a browser-side convenience, and the setting says so — nothing on the
+  server or at any provider base64-decodes an add either way. The client
+  defaults it on before settings load, so the brief window before the call
+  returns behaves like the common case rather than silently refusing.
+
+
 - **Base32 infohashes are now opt-in**, off by default, with the trade spelled
   out in Settings. A v1 infohash has a 32-character base32 spelling that some
   older trackers still hand out — but that shape is indistinguishable from any

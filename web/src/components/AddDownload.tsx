@@ -132,7 +132,14 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // an add actually does, so the worst case is a member not being able
   // to paste a base32 hash, not one being mis-added.
   const [base32Infohashes, setBase32Infohashes] = useState(false)
-  const detectOpts = useMemo(() => ({ base32Infohashes }), [base32Infohashes])
+  // On until the settings call says otherwise, matching the server default —
+  // so the brief window before settings load behaves like the common case
+  // rather than silently refusing to unwrap.
+  const [decodeBase64, setDecodeBase64] = useState(true)
+  const detectOpts = useMemo(
+    () => ({ base32Infohashes, decodeBase64 }),
+    [base32Infohashes, decodeBase64],
+  )
 
   // What the field holds as a whole: one item, or a batch of them. Memoised
   // because it re-parses the entire paste, and this renders on every keystroke.
@@ -200,6 +207,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         setDeleteAfterFetch(g.managed_add_delete_after_fetch)
         setKeepFiles(g.managed_add_keep_files)
         setBase32Infohashes(g.base32_infohashes)
+        setDecodeBase64(g.decode_base64_links)
         setDefaultsLoaded(true)
       })
       .catch(() => {

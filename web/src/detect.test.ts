@@ -582,6 +582,41 @@ describe('stepSanitize', () => {
   })
 })
 
+describe('base64 unwrapping can be switched off', () => {
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const OFF = { decodeBase64: false }
+
+  it('unwraps by default, and when explicitly on', () => {
+    expect(unwrapEncoded(b64(MAGNET)).value).toBe(MAGNET)
+    expect(unwrapEncoded(b64(MAGNET), { decodeBase64: true }).value).toBe(MAGNET)
+  })
+
+  it('leaves a wrapped link as text when off', () => {
+    const wrapped = b64(MAGNET)
+    expect(unwrapEncoded(wrapped, OFF)).toEqual({ value: wrapped, layers: 0 })
+    expect(sanitizeBatch(wrapped, OFF)).toEqual([])
+  })
+
+  it('does not disturb a link that was never encoded', () => {
+    expect(sanitizeBatch([MAGNET, 'https://host.example/a.zip'].join('\n'), OFF)).toHaveLength(2)
+  })
+
+  // Percent-escapes are a different thing: they turn an escaped link back
+  // into the link it already was, rather than text into something else.
+  it('still unwraps percent-escapes when base64 is off', () => {
+    const web = 'https://mega.nz/file/abc#key'
+    expect(unwrapEncoded(encodeURIComponent(web), OFF).value).toBe(web)
+  })
+
+  it('peels a mixed stack down to the percent layer only', () => {
+    // percent(base64(link)) with base64 off: the outer percent layer comes
+    // away, the base64 underneath does not, and nothing lands.
+    const stacked = encodeURIComponent(b64(MAGNET))
+    expect(unwrapEncoded(stacked, OFF).layers).toBe(0)
+  })
+})
+
 describe('base32 infohashes', () => {
   // Opt-in, so every case here enables it. Off, a 32-character base32
   // string is just text — which is the point of the switch.

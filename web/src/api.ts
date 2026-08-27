@@ -427,6 +427,8 @@ export interface GeneralSettings {
   /** Accept a bare 32-character base32 infohash as a torrent. Off by
    *  default; see the Settings copy for what it costs. */
   base32_infohashes: boolean
+  /** Unwrap base64-wrapped links in the add form. On by default. */
+  decode_base64_links: boolean
   backup_interval_hours: number
   backup_keep: number
 }
@@ -472,6 +474,8 @@ export interface GeneralUpdateInput {
   /** Accept a bare 32-character base32 infohash as a torrent. Off by
    *  default; see the Settings copy for what it costs. */
   base32_infohashes: boolean
+  /** Unwrap base64-wrapped links in the add form. On by default. */
+  decode_base64_links: boolean
   backup_interval_hours: number
   backup_keep: number
 }

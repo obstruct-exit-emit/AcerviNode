@@ -126,6 +126,7 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
         managed_add_delete_after_fetch: g.managed_add_delete_after_fetch,
         managed_add_keep_files: g.managed_add_keep_files,
         base32_infohashes: g.base32_infohashes,
+        decode_base64_links: g.decode_base64_links,
           backup_interval_hours: g.backup_interval_hours,
           backup_keep: g.backup_keep,
         })

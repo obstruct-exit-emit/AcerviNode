@@ -287,8 +287,14 @@ paste — text copied out of a truncated terminal line, say — is not valid
 base64, fails the length check, and is left in the field exactly as pasted
 rather than being half-decoded into something worse.
 
-Percent-encoding is peeled the same way, and can be mixed with base64 in the
-same paste or stacked on top of it: `https%3A%2F%2Fhost%2Ffile.zip` is what a
+Base64 unwrapping can be switched off entirely with `decode_base64_links`
+(on by default), for anyone who would rather nothing they paste is rewritten.
+It is a browser-side convenience only — nothing on the server or at a provider
+base64-decodes an add either way.
+
+Percent-encoding is peeled the same way, and keeps working even with base64
+switched off: an escape only turns a link back into the link it already was.
+It can be mixed with base64 in the same paste or stacked on top of it: `https%3A%2F%2Fhost%2Ffile.zip` is what a
 link looks like when it has been copied out of a redirect or tracking URL.
 
 This is safe only because anything already usable is returned *before* the
