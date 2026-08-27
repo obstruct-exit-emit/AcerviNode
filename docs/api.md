@@ -327,6 +327,30 @@ The file picker takes multiple files the same way, each identified from its own
 leading bytes rather than its name, so one upload can mix `.torrent` and `.nzb`.
 Files that are neither are skipped and named, rather than blocking the rest.
 
+**Batch file** is a third mode, for a file that *lists* downloads rather than
+being one. It reads the file and adds its contents, so a `.txt` of links behaves
+exactly like pasting them — prose, bullets, numbering, per-line base64 and
+percent-encoding all handled identically, because it is the same extraction.
+
+It only opens what it is meant to: a `.txt`, or a file with **no extension at
+all**. That restriction is the point of the mode being separate — a batch file
+gets opened and everything inside it queued, so "anything that might contain a
+link" is the wrong bar. The list grows as formats are actually parsed;
+jDownloader's `.crawljob` and `.dlc` are the obvious next entries.
+
+Extensionless files are why the picker sets no `accept` filter in this mode —
+"no extension" cannot be expressed in one — so the limit is enforced on the
+filename after selection instead. Put a torrent in Batch file mode (or a list in
+File(s) mode) and it says which mode to switch to rather than just refusing;
+the same selection is re-judged when you switch, so nothing has to be picked
+again.
+
+Reading is content-based and defensive: strict UTF-8 decoding rejects binary
+before anything looks for links in it, a UTF-8 BOM is handled, a UTF-16 file is
+refused rather than half-read, and at most 512 KB is read. Links are deduped
+and capped across all uploaded lists together, so several files cannot get past
+the 100-item limit a single paste has.
+
 **This adds no API surface.** A batch is N calls to the three endpoints above,
 made by the browser, three at a time. On a provider 429 the remaining items are
 abandoned rather than piled on, and reported as not attempted. A partial result

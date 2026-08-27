@@ -87,29 +87,101 @@ function pathOf(link: string): string {
   }
 }
 
-// detectFromFile decides a kind from an uploaded file's contents.
+/** What an uploaded file turned out to be.
+ *
+ *  Two outcomes, because a file can be either a download in its own right or
+ *  a *list* of them. A .torrent or .nzb is uploaded to the provider as a file;
+ *  a text file of links is only a container, and what gets added is its
+ *  contents, exactly as if they had been pasted. */
+export type FileContent =
+  | { type: 'file'; kind: Kind }
+  | { type: 'links'; items: BatchItem[] }
+
+/** Extensions the batch-file mode will read.
+ *
+ *  Deliberately tiny, and the point of the mode existing. A batch file is
+ *  opened and everything inside it queued, so widening this to "anything that
+ *  happens to contain a link" would mean reading files nobody meant to hand
+ *  over. jDownloader's .crawljob and .dlc are the obvious next entries, and
+ *  belong here once they are actually parsed rather than merely tolerated. */
+const LIST_FILE_EXTENSIONS = new Set(['txt'])
+
+// isListFilename reports whether a file is one the batch-file mode will open.
+//
+// No extension counts, and that is half the point: the lists people actually
+// keep are as often "links" as "links.txt".
+export function isListFilename(name: string): boolean {
+  const base = name.slice(name.lastIndexOf('/') + 1)
+  const dot = base.lastIndexOf('.')
+  // dot <= 0 covers "links" and a dotfile like ".links" alike — neither has
+  // an extension in any useful sense.
+  if (dot <= 0) return true
+  return LIST_FILE_EXTENSIONS.has(base.slice(dot + 1).toLowerCase())
+}
+
+/** How much of a file to read when looking for a list of links. Generous — a
+ *  hundred links is a few kilobytes — while still refusing to pull a video
+ *  into memory because it happened to be selected. */
+const MAX_LIST_BYTES = 512 * 1024
+
+// detectFromFile decides what an uploaded file is from its contents.
 //
 // Content, not filename: a browser will happily hand over "download.torrent"
 // containing XML, and the extension is the least reliable thing about an
-// uploaded file. Returns null when it is neither format, which the caller
-// surfaces as a rejection — there is no third file type to fall back to,
-// since web downloads have no file-upload variant at all.
-export async function detectFromFile(file: File): Promise<Detection | null> {
+// uploaded file. That is also why a link list needs no extension rule — a
+// .txt, a .list and a file with no extension at all are the same thing here,
+// which is precisely the case that motivated this.
+//
+// Returns null when the file is none of them, which the caller surfaces as a
+// rejection.
+export async function detectFromFile(file: File): Promise<FileContent | null> {
   const head = await readHead(file, SNIFF_BYTES)
 
   // Bencode: a .torrent is a dictionary, so it opens with 'd', and every
   // real one carries an "announce" or "info" key near the front.
   if (head.startsWith('d') && (head.includes('announce') || head.includes('4:info'))) {
-    return { kind: 'torrent', certain: true }
+    return { type: 'file', kind: 'torrent' }
   }
 
   // NZB is XML with an <nzb> root. Checked before the generic XML test so a
-  // stray XML file is not silently treated as usenet.
+  // stray XML file is not silently treated as usenet — and before the link
+  // scan below, since an NZB is text and would otherwise be searched for
+  // links and come back empty.
   if (/<nzb[\s>]/i.test(head)) {
-    return { kind: 'usenet', certain: true }
+    return { type: 'file', kind: 'usenet' }
   }
 
-  return null
+  // Anything else that reads as text: scan it for links. This is the same
+  // extraction a paste gets, so prose, bullets, numbering and per-line base64
+  // are all handled identically — a file is just a bigger clipboard.
+  const text = await readText(file, MAX_LIST_BYTES)
+  if (text === null) return null
+  const items = sanitizeBatch(text)
+  return items.length > 0 ? { type: 'links', items } : null
+}
+
+// readText decodes a file as UTF-8, returning null when it is not text.
+//
+// Strict decoding is the binary check: an image, a video or a .torrent fails
+// here long before anything tries to find links in it. CONTROL_CHARS catches
+// the remainder — bytes that happen to decode but were never text.
+async function readText(file: File, maxBytes: number): Promise<string | null> {
+  let bytes = new Uint8Array(await file.slice(0, maxBytes).arrayBuffer())
+  if (file.size > maxBytes) {
+    // Trim back to the last newline. 0x0A never appears inside a multi-byte
+    // UTF-8 sequence, so it is a safe cut point — slicing mid-character would
+    // fail the strict decode and reject the whole file. It also drops a final
+    // line that the truncation had already ruined.
+    const lastNewline = bytes.lastIndexOf(0x0a)
+    if (lastNewline < 0) return null
+    bytes = bytes.subarray(0, lastNewline)
+  }
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return CONTROL_CHARS.test(text) ? null : text
+  } catch {
+    return null
+  }
 }
 
 // readHead reads the first n bytes of a file as latin1-ish text. Deliberately
@@ -436,6 +508,24 @@ export function detectField(text: string): FieldDetection {
 /** The text a batch occupies: one link per line, in the order pasted. */
 export function batchText(items: BatchItem[]): string {
   return items.map((item) => item.link).join('\n')
+}
+
+// mergeBatches folds several batches into one, deduping across them and
+// applying the same cap a single paste gets — uploading five list files must
+// not be a way around the limit.
+export function mergeBatches(lists: BatchItem[][]): BatchItem[] {
+  const out: BatchItem[] = []
+  const seen = new Set<string>()
+  for (const list of lists) {
+    for (const item of list) {
+      if (out.length >= MAX_BATCH_ITEMS) return out
+      const key = item.link.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(item)
+    }
+  }
+  return out
 }
 
 /** Counts per kind, in the order the chips use, skipping kinds not present. */

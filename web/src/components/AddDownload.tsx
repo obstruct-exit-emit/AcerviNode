@@ -26,7 +26,9 @@ import {
   detectField,
   detectFromFile,
   kindLabel,
+  isListFilename,
   kindPlural,
+  mergeBatches,
   noDecode,
   stepDecode,
   stepSanitize,
@@ -38,7 +40,7 @@ import {
 import { formatBytes } from '../format'
 
 type Protocol = 'torrent' | 'usenet' | 'webdl'
-type InputMode = 'link' | 'file'
+type InputMode = 'link' | 'file' | 'batchfile'
 
 /** How many adds run at once. Each one hits the provider, and twenty at a
  *  time invites the 429 we would then have to explain; on the first one the
@@ -105,8 +107,13 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   const [mode, setMode] = useState<InputMode>('link')
   const [link, setLink] = useState('')
   const [files, setFiles] = useState<File[]>([])
-  // Kinds for an upload, resolved by sniffing each file's leading bytes.
+  // Uploads that are downloads in their own right: a .torrent or .nzb, sent
+  // to the provider as a file.
   const [fileItems, setFileItems] = useState<{ file: File; kind: Kind }[]>([])
+  // Links pulled out of an uploaded text file. These are added as links, not
+  // uploaded — the file was only ever a container for them.
+  const [fileLinks, setFileLinks] = useState<BatchItem[]>([])
+  const [fileNotice, setFileNotice] = useState('')
   // Set by the input's onPaste and consumed by the effect below. Only a paste
   // triggers the aggressive multi-link clean-up: running it per keystroke
   // would eat a link halfway through being typed on a second line.
@@ -120,14 +127,23 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // because it re-parses the entire paste, and this renders on every keystroke.
   const field = useMemo(() => detectField(link), [link])
   const isBatch = mode === 'link' && field.batch
+  // Both file modes share one picker and one detection pass; they differ in
+  // what they will accept from it.
+  const isFileMode = mode === 'file' || mode === 'batchfile'
+  // Everything an upload will produce, uploads and extracted links alike,
+  // described uniformly so the chips and counts do not care which is which.
+  const fileBatch: BatchItem[] = [
+    ...fileItems.map((f) => ({ link: f.file.name, kind: f.kind, certain: true, layers: 0 })),
+    ...fileLinks,
+  ]
   // A batch of either kind, described the same way for the summary chips.
   const summaryItems: BatchItem[] | null = isBatch
     ? field.items
-    : mode === 'file' && fileItems.length > 1
-      ? fileItems.map((f) => ({ link: f.file.name, kind: f.kind, certain: true, layers: 0 }))
+    : isFileMode && fileBatch.length > 1
+      ? fileBatch
       : null
   const detected: Detection =
-    mode === 'file'
+    isFileMode
       ? fileDetected
       : field.batch
         ? { kind: 'torrent', certain: false } // unused: a batch has no one kind
@@ -312,7 +328,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   async function handleSubmit(e: FormEvent | ReactKeyboardEvent<HTMLTextAreaElement>) {
     e.preventDefault()
     if (mode === 'link' && !link.trim()) return
-    if (mode === 'file' && fileItems.length === 0) return
+    if (isFileMode && fileBatch.length === 0) return
 
     setStatus({ kind: 'saving' })
     setBatchErrors([])
@@ -336,18 +352,26 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         keepFiles: managed ? keepFiles : undefined,
       }
 
-      if (mode === 'file') {
-        const failures = await runBatch(
-          fileItems.map((item) => ({
+      if (isFileMode) {
+        // Uploads and extracted links go out together in one batch. A .torrent
+        // is sent as a file; a link that came out of a list file is added as a
+        // link, exactly as if it had been pasted.
+        const tasks = [
+          ...fileItems.map((item) => ({
             label: item.file.name,
             run: () =>
               item.kind === 'usenet'
                 ? addUsenet(apiKey, { file: item.file, ...common })
                 : addTorrent(apiKey, { file: item.file, ...common }),
           })),
-        )
+          ...fileLinks.map((item) => ({
+            label: item.link,
+            run: () => addOne(item.kind, item.link, common),
+          })),
+        ]
+        const failures = await runBatch(tasks)
         if (failures.length > 0) {
-          reportPartial(fileItems.length, failures)
+          reportPartial(tasks.length, failures)
           return
         }
       } else if (field.batch) {
@@ -432,41 +456,97 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // A file is identified by its first bytes rather than its name: a browser
   // will hand over "x.torrent" containing anything at all.
   useEffect(() => {
-    if (mode !== 'file' || files.length === 0) {
+    if (!isFileMode || files.length === 0) {
       setFileItems([])
+      setFileLinks([])
       setFileError('')
+      setFileNotice('')
       return
     }
     let cancelled = false
     setOverride(null)
     setFileError('')
+    setFileNotice('')
     Promise.all(
-      files.map(async (f) => ({ file: f, detected: await detectFromFile(f) })),
+      files.map(async (f) => ({ file: f, content: await detectFromFile(f) })),
     ).then((results) => {
       if (cancelled) return
-      const good: { file: File; kind: Kind }[] = []
+      const uploads: { file: File; kind: Kind }[] = []
+      const lists: BatchItem[][] = []
+      const listNames: string[] = []
       const bad: File[] = []
+      // Files the other mode would have taken. Called out specifically rather
+      // than lumped in with "unreadable", because the fix is one radio button
+      // away and saying so is more use than saying no.
+      const wrongMode: File[] = []
+      // Batch file only opens what LIST_FILE_EXTENSIONS allows. Checked on the
+      // name, before content: the restriction is about not reading files that
+      // were never offered, so finding links inside one is not a reason to.
+      const notAList: File[] = []
       for (const result of results) {
-        if (result.detected) good.push({ file: result.file, kind: result.detected.kind })
-        else bad.push(result.file)
+        if (mode === 'batchfile') {
+          if (!isListFilename(result.file.name)) notAList.push(result.file)
+          else if (result.content?.type === 'links') {
+            lists.push(result.content.items)
+            listNames.push(result.file.name)
+          } else if (result.content?.type === 'file') wrongMode.push(result.file)
+          else bad.push(result.file)
+          continue
+        }
+        if (result.content === null) {
+          bad.push(result.file)
+        } else if (result.content.type === 'file') {
+          uploads.push({ file: result.file, kind: result.content.kind })
+        } else {
+          wrongMode.push(result.file)
+        }
       }
-      setFileItems(good)
-      // Unusable files are skipped rather than blocking the rest of the
-      // upload, but they are named — silently dropping one would look like
-      // the add simply lost it.
-      if (bad.length === results.length) {
-        setFileError('Neither a .torrent nor an .nzb. Web links have no file upload — paste the link instead.')
-      } else if (bad.length > 0) {
-        setFileError(
-          `Skipping ${bad.length} file${bad.length === 1 ? '' : 's'} that ${bad.length === 1 ? 'is' : 'are'} neither a .torrent nor an .nzb: ${bad.map((f) => f.name).join(', ')}`,
+      // Deduped and capped across files together: five list files must not be
+      // a way around the limit one paste gets.
+      const links = mergeBatches(lists)
+      setFileItems(uploads)
+      setFileLinks(links)
+      if (listNames.length > 0) {
+        setFileNotice(
+          `Found ${links.length} link${links.length === 1 ? '' : 's'} in ${listNames.join(', ')}`,
         )
       }
-      if (good.length === 1) setFileDetected({ kind: good[0].kind, certain: true })
+      // Rejected files are skipped rather than blocking the rest of the
+      // upload, but they are always named — silently dropping one would look
+      // like the add simply lost it. Ordered so the most actionable message
+      // wins: wrong mode first, since that one has an obvious fix.
+      const names = (fs: File[]) => fs.map((f) => f.name).join(', ')
+      if (wrongMode.length > 0) {
+        setFileError(
+          mode === 'batchfile'
+            ? `${names(wrongMode)} is a torrent or NZB, not a list — switch to File(s) to add it.`
+            : `${names(wrongMode)} is a list of links — switch to Batch file to add it.`,
+        )
+      } else if (notAList.length > 0) {
+        setFileError(
+          `Batch file reads .txt files and files with no extension. Skipping ${names(notAList)}.`,
+        )
+      } else if (bad.length > 0) {
+        setFileError(
+          mode === 'batchfile'
+            ? `No links found in ${names(bad)}.`
+            : `Not a .torrent or an .nzb: ${names(bad)}.`,
+        )
+      }
+      // Only meaningful when the upload came to exactly one thing; a batch
+      // has no single kind and uses the summary chips instead.
+      if (uploads.length === 1 && links.length === 0) {
+        setFileDetected({ kind: uploads[0].kind, certain: true })
+      } else if (uploads.length === 0 && links.length === 1) {
+        setFileDetected({ kind: links[0].kind, certain: links[0].certain })
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [files, mode])
+    // isFileMode is derived from mode, which is already here; listed so the
+    // dependency check can see that for itself.
+  }, [files, mode, isFileMode])
 
   const kindAvailable = (kind: Kind) =>
     kind === 'torrent' ? torrentAvailable : kind === 'usenet' ? usenetAvailable : webdlAvailable
@@ -645,6 +725,14 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
                 <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
                 File(s)
               </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={mode === 'batchfile'}
+                  onChange={() => setMode('batchfile')}
+                />
+                Batch file
+              </label>
             </div>
 
             {mode === 'link' ? (
@@ -666,15 +754,30 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
                 autoFocus
               />
             ) : (
-              // accept is no longer narrowed to the detected protocol: one
-              // upload can hold both kinds, and each file's kind is decided
-              // from its own bytes regardless of what the picker allowed.
-              <input
-                type="file"
-                multiple
-                accept=".torrent,.nzb"
-                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-              />
+              <>
+                {/* One element across both file modes, with only accept
+                    changing, so switching modes does not remount it and drop
+                    the selection — the same files are simply re-judged under
+                    the new rules, which is what makes "switch to Batch file"
+                    actionable rather than a re-do.
+
+                    Batch file sets no accept: a file with no extension cannot
+                    be expressed in an accept list, and that is precisely the
+                    case it exists for. isListFilename enforces the limit
+                    after selection instead. */}
+                <input
+                  type="file"
+                  multiple
+                  accept={mode === 'file' ? '.torrent,.nzb' : undefined}
+                  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+                />
+                {mode === 'batchfile' && (
+                  <p className="settings-help">
+                    A .txt file, or one with no extension, listing links. Anything a paste
+                    accepts works here too.
+                  </p>
+                )}
+              </>
             )}
 
             {mode === 'link' && !isBatch && (previewLoading || cached !== null || torrentInfo) && (
@@ -720,7 +823,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
               type="submit"
               disabled={
                 status.kind === 'saving' ||
-                (mode === 'link' ? !link.trim() : fileItems.length === 0)
+                (mode === 'link' ? !link.trim() : fileBatch.length === 0)
               }
             >
               {status.kind === 'saving'
@@ -731,6 +834,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
                   ? `Add ${summaryItems.length}`
                   : 'Add'}
             </button>
+            {fileNotice !== '' && <p className="settings-help">{fileNotice}</p>}
             {status.kind === 'error' && (
               <p className="settings-error">
                 {batchErrors.length > 0 ? status.message : `Failed to add: ${status.message}`}

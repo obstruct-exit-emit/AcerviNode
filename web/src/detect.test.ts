@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   batchSummary,
+  isListFilename,
+  mergeBatches,
   batchText,
   detectField,
   detectFromFile,
@@ -105,14 +107,14 @@ describe('detectFromFile', () => {
   it('identifies a bencoded torrent by its leading bytes', async () => {
     const torrent = 'd8:announce35:http://tracker.example/announce4:infod4:name4:teste'
     await expect(detectFromFile(asFile(torrent))).resolves.toEqual({
+      type: 'file',
       kind: 'torrent',
-      certain: true,
     })
   })
 
   it('identifies an NZB by its root element', async () => {
     const nzb = '<?xml version="1.0"?>\n<!DOCTYPE nzb>\n<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">'
-    await expect(detectFromFile(asFile(nzb))).resolves.toEqual({ kind: 'usenet', certain: true })
+    await expect(detectFromFile(asFile(nzb))).resolves.toEqual({ type: 'file', kind: 'usenet' })
   })
 
   // Content over filename: a browser will happily supply a .torrent name for
@@ -120,8 +122,8 @@ describe('detectFromFile', () => {
   it('trusts content over the filename', async () => {
     const nzb = '<nzb><file/></nzb>'
     await expect(detectFromFile(asFile(nzb, 'actually-an-nzb.torrent'))).resolves.toEqual({
+      type: 'file',
       kind: 'usenet',
-      certain: true,
     })
   })
 
@@ -146,8 +148,8 @@ describe('detectFromFile', () => {
     // which is why the reader works byte-wise.
     const bytes = new Uint8Array([0x64, 0x38, 0x3a, 0x61, 0x6e, 0x6e, 0x6f, 0x75, 0x6e, 0x63, 0x65, 0xff, 0xfe])
     await expect(detectFromFile(new File([bytes], 'x.torrent'))).resolves.toEqual({
+      type: 'file',
       kind: 'torrent',
-      certain: true,
     })
   })
 })
@@ -626,5 +628,176 @@ describe('percent-encoded links', () => {
     for (const s of ['100% free', 'https://host.example/50%off']) {
       expect(unwrapEncoded(s).layers).toBe(0)
     }
+  })
+})
+
+describe('link-list files', () => {
+  const asFile = (body: BlobPart, name = 'list.txt') => new File([body], name)
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const NZB = 'https://indexer.example/getnzb/Some.Release.nzb'
+  const WEB = 'https://mega.nz/file/abc123#key'
+
+  it('reads a text file of links', async () => {
+    const content = await detectFromFile(asFile([MAGNET, WEB].join('\n')))
+    expect(content).toEqual({
+      type: 'links',
+      items: [
+        { link: MAGNET, kind: 'torrent', certain: true, layers: 0 },
+        { link: WEB, kind: 'webdl', certain: false, layers: 0 },
+      ],
+    })
+  })
+
+  // The case this exists for. Detection is by content, so a file with no
+  // extension at all is read exactly like a .txt.
+  it('reads a file with no extension at all', async () => {
+    const content = await detectFromFile(asFile(MAGNET + '\n' + WEB, 'links'))
+    expect(content?.type).toBe('links')
+    if (content?.type === 'links') expect(content.items).toHaveLength(2)
+  })
+
+  // A file is just a bigger clipboard: the same extraction a paste gets, so
+  // prose and list decoration fall away the same way.
+  it('pulls links out of a file full of prose', async () => {
+    const messy = `Saved from the forum:\n\n1. ${MAGNET}\n  * <${WEB}>\n\nthat's the lot`
+    const content = await detectFromFile(asFile(messy))
+    expect(content?.type).toBe('links')
+    if (content?.type === 'links') {
+      expect(content.items.map((i) => i.link)).toEqual([MAGNET, WEB])
+    }
+  })
+
+  it('keeps each kind in a mixed list', async () => {
+    const content = await detectFromFile(asFile([MAGNET, NZB, WEB].join('\n')))
+    expect(content?.type).toBe('links')
+    if (content?.type === 'links') {
+      expect(content.items.map((i) => i.kind)).toEqual(['torrent', 'usenet', 'webdl'])
+    }
+  })
+
+  it('decodes encoded entries inside the file', async () => {
+    const content = await detectFromFile(
+      asFile([b64(b64(MAGNET)), encodeURIComponent(WEB)].join('\n')),
+    )
+    expect(content?.type).toBe('links')
+    if (content?.type === 'links') {
+      expect(content.items.map((i) => i.link)).toEqual([MAGNET, WEB])
+      expect(content.items.map((i) => i.layers)).toEqual([2, 1])
+    }
+  })
+
+  it('rejects a text file holding no links', async () => {
+    await expect(detectFromFile(asFile('shopping list\nmilk\nbread'))).resolves.toBeNull()
+    await expect(detectFromFile(asFile(''))).resolves.toBeNull()
+  })
+
+  it('rejects a binary file rather than reading it as text', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01])
+    await expect(detectFromFile(new File([bytes], 'image.png'))).resolves.toBeNull()
+  })
+
+  // A UTF-8 BOM is what Windows editors have historically written, and
+  // TextDecoder strips it — without that the first line would begin with
+  // U+FEFF and fail to match anything.
+  it('handles a UTF-8 byte order mark', async () => {
+    const withBom = new Uint8Array([
+      0xef, 0xbb, 0xbf,
+      ...new TextEncoder().encode([MAGNET, WEB].join('\n')),
+    ])
+    const content = await detectFromFile(new File([withBom], 'list.txt'))
+    expect(content?.type).toBe('links')
+    if (content?.type === 'links') {
+      expect(content.items.map((i) => i.link)).toEqual([MAGNET, WEB])
+    }
+  })
+
+  // UTF-16 is valid UTF-8 as far as the strict decoder is concerned — ASCII
+  // interleaved with NULs — so it is the control-character check, not the
+  // decoder, that catches it. Rejected rather than silently half-read.
+  it('rejects a UTF-16 file rather than reading it as gibberish', async () => {
+    const ascii = MAGNET
+    const utf16 = new Uint8Array(ascii.length * 2)
+    for (let i = 0; i < ascii.length; i++) utf16[i * 2] = ascii.charCodeAt(i)
+    await expect(detectFromFile(new File([utf16], 'list.txt'))).resolves.toBeNull()
+  })
+
+  // Ordering matters: an NZB is text, so without the <nzb> check running
+  // first it would be scanned for links instead of being recognised.
+  it('still identifies an NZB, which is itself text', async () => {
+    const nzb = `<?xml version="1.0"?>\n<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">\n<!-- see ${WEB} -->\n</nzb>`
+    await expect(detectFromFile(asFile(nzb, 'release.nzb'))).resolves.toEqual({
+      type: 'file',
+      kind: 'usenet',
+    })
+  })
+})
+
+describe('mergeBatches', () => {
+  const link = (n: number) => `magnet:?xt=urn:btih:${n.toString(16).padStart(40, '0')}`
+  const item = (n: number) => ({ link: link(n), kind: 'torrent' as const, certain: true, layers: 0 })
+
+  it('concatenates in order', () => {
+    expect(mergeBatches([[item(1)], [item(2), item(3)]]).map((i) => i.link)).toEqual([
+      link(1),
+      link(2),
+      link(3),
+    ])
+  })
+
+  // Deduping has to work across files, not just inside one: the same link in
+  // two lists is still one download.
+  it('dedupes across lists, first occurrence winning', () => {
+    expect(mergeBatches([[item(1), item(2)], [item(2), item(3)]]).map((i) => i.link)).toEqual([
+      link(1),
+      link(2),
+      link(3),
+    ])
+  })
+
+  // Uploading five list files must not be a way around the cap one paste gets.
+  it('applies the same cap across all lists together', () => {
+    const lists = [
+      Array.from({ length: 60 }, (_, i) => item(i)),
+      Array.from({ length: 60 }, (_, i) => item(i + 60)),
+    ]
+    expect(mergeBatches(lists)).toHaveLength(100)
+  })
+
+  it('handles empty input', () => {
+    expect(mergeBatches([])).toEqual([])
+    expect(mergeBatches([[], []])).toEqual([])
+  })
+})
+
+describe('isListFilename', () => {
+  // The "only see what we want" rule for batch-file mode. Kept small on
+  // purpose: a batch file is opened and its contents queued, so this must not
+  // grow to cover anything that merely might contain a link.
+  it.each([
+    ['links.txt', true],
+    ['links.TXT', true],
+    ['my grabs.txt', true],
+    ['links', true],
+    ['.links', true],
+    ['a.torrent', false],
+    ['a.nzb', false],
+    ['a.csv', false],
+    ['a.html', false],
+    ['a.crawljob', false],
+  ])('%s is readable: %s', (name, want) => {
+    expect(isListFilename(name)).toBe(want)
+  })
+
+  // The extension is the last dot, not the first, or "my.txt.torrent" would
+  // sneak past as a text file.
+  it('reads the extension from the last dot', () => {
+    expect(isListFilename('my.list.txt')).toBe(true)
+    expect(isListFilename('my.txt.torrent')).toBe(false)
+  })
+
+  it('ignores any directory portion', () => {
+    expect(isListFilename('some.dir/links.txt')).toBe(true)
+    expect(isListFilename('some.dir/links')).toBe(true)
   })
 })

@@ -60,6 +60,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Batch file: add a whole list from a file.** A third mode on the add form,
+  for a file that *lists* downloads rather than being one. It reads the file and
+  queues its contents, so a `.txt` of links behaves exactly like pasting them —
+  prose, bullets, numbering, per-line base64 and percent-encoding all handled,
+  because it is literally the same extraction.
+
+  It only opens a `.txt` or a file with **no extension at all**, which is why
+  this is its own mode rather than a quiet addition to File(s). A batch file
+  gets opened and everything inside queued, so "anything that might contain a
+  link" is the wrong bar for what to read. The allow-list grows as formats are
+  actually parsed — jDownloader's `.crawljob` and `.dlc` next — rather than by
+  tolerating whatever turns up.
+
+  Extensionless files are also why the picker sets no `accept` filter here:
+  "no extension" cannot be expressed in one, and filtering would hide exactly
+  the file the mode exists for. The limit is enforced on the filename after
+  selection instead. Both file modes share one picker element, so switching
+  between them re-judges the same selection rather than clearing it — which is
+  what makes "switch to Batch file to add it" an instruction rather than a
+  restart.
+
+  Reading is defensive: strict UTF-8 decoding rejects binary before anything
+  looks for links in it, a UTF-8 BOM is handled, a UTF-16 file is refused
+  rather than half-read, at most 512 KB is read (trimmed back to a newline, so
+  a truncated read cannot land mid-character), and links are deduped and capped
+  across all uploaded lists *together* — several files are not a way around the
+  100-item limit one paste gets.
+
+  Verified end to end with a real extensionless file full of prose: three links
+  extracted by the shipping code, all three added against the live instance,
+  then cleaned up. Four rules mutation-checked — the extension allow-list, the
+  last-dot rule, NZB detection running before the link scan, and the shared cap.
+
+
 - **Base32 infohashes, and percent-encoded links.** Two more paste formats that
   previously went nowhere.
 
