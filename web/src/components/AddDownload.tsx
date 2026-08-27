@@ -639,11 +639,11 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             <div className="mode-toggle">
               <label>
                 <input type="radio" checked={mode === 'link'} onChange={() => setMode('link')} />
-                Link
+                Link(s)
               </label>
               <label>
                 <input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} />
-                Upload file
+                File(s)
               </label>
             </div>
 
