@@ -235,6 +235,13 @@ type Config struct {
 	// behaves exactly as it always has.
 	ManagedAddDeleteAfterFetch bool `yaml:"managed_add_delete_after_fetch"`
 	ManagedAddKeepFiles        bool `yaml:"managed_add_keep_files"`
+	// Base32Infohashes accepts the 32-character base32 spelling of a v1
+	// infohash as a torrent. Off by default, and deliberately so: that
+	// shape is indistinguishable from an ordinary 32-character base32
+	// string, so a TOTP secret or an API key pasted into the add form
+	// would be read as a torrent. Worth switching on only if a tracker
+	// you use still hands out base32 hashes.
+	Base32Infohashes bool `yaml:"base32_infohashes"`
 
 	// ProviderRequestTimeoutSeconds bounds how long a single call to the
 	// debrid provider's own API (list, status, add, delete, account — every
@@ -339,6 +346,9 @@ func defaults() *Config {
 		// Neither ever applies to an *arr's own adds; see the field docs.
 		ManagedAddDeleteAfterFetch: true,
 		ManagedAddKeepFiles:        true,
+		// Off: the shape collides with ordinary base32 strings, and being
+		// wrong here means treating someone's secret as a download.
+		Base32Infohashes:           false,
 	}
 }
 

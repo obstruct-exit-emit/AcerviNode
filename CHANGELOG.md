@@ -60,6 +60,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Base32 infohashes are now opt-in**, off by default, with the trade spelled
+  out in Settings. A v1 infohash has a 32-character base32 spelling that some
+  older trackers still hand out — but that shape is indistinguishable from any
+  other 32-character base32 string, so a two-factor secret or an API key pasted
+  into the add box was read as a torrent and attempted as a download. The add
+  failed at the provider rather than fetching anything, and the string went
+  nowhere else, but it was still an add nobody meant to make.
+
+  The switch is threaded as an option rather than read from a module-level
+  flag, so the detection functions stay pure and the property sweep stays
+  deterministic. Tests that rely on base32 now enable it explicitly, which
+  documents the coupling.
+
+  A member always sees the safe default: the setting is read from the same
+  admin-only call as the Managed defaults. The server decides what an add
+  actually does either way, so the worst case is a member unable to paste a
+  base32 hash, not one being mis-added.
+
+
 - **Batch file: add a whole list from a file.** A third mode on the add form,
   for a file that *lists* downloads rather than being one. It reads the file and
   queues its contents, so a `.txt` of links behaves exactly like pasting them —
@@ -686,6 +705,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **Two magnets for the same torrent counted twice.** Dedupe was on the whole
+  link string, so the same infohash with two different `&dn=` display names was
+  two batch items — the provider collapsed them, but "Add 30" then produced 29
+  rows. Dedupe now keys on the infohash when the link has one, which also
+  collapses a bare hash and a magnet for the same torrent.
+
+- **An over-sized file whose links are space-separated was refused outright.**
+  The read was cut back to the last newline, and a file with none had no safe
+  cut. It now cuts at the last whitespace of any kind. A file that is one
+  enormous token with no whitespace at all is still refused, deliberately: a
+  truncated link that still parses is worse than no link.
+
+- **Only one reason was given when files were rejected for several.** The
+  most-actionable message won and the rest went unmentioned, which made those
+  files look like the add had simply lost them. Every reason is now listed.
+
 
 - **Six bugs from a hunt over the day's own changes.** Four were regressions
   introduced today; two were latent and only became reachable because of them.

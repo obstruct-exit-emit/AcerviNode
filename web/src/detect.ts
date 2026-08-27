@@ -13,6 +13,18 @@
 
 export type Kind = 'torrent' | 'usenet' | 'webdl'
 
+/** Detection behaviour that is a user preference rather than a fact. */
+export interface DetectOptions {
+  /** Accept the 32-character base32 spelling of a v1 infohash as a torrent.
+   *
+   *  Off unless asked for, and threaded rather than read from a module-level
+   *  flag so the functions here stay pure. That shape is indistinguishable
+   *  from any other 32-character base32 string — a TOTP secret, an API key —
+   *  so accepting it unconditionally turns a pasted secret into an add. Worth
+   *  switching on only for a tracker that still hands out base32 hashes. */
+  base32Infohashes?: boolean
+}
+
 export interface Detection {
   kind: Kind
   /** false when the kind was assumed from a URL that could be anything. */
@@ -45,7 +57,7 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000e-\u001f\u007f]/
 const SNIFF_BYTES = 512
 
 // detectFromLink decides a kind from a pasted link.
-export function detectFromLink(raw: string): Detection {
+export function detectFromLink(raw: string, opts: DetectOptions = {}): Detection {
   const link = raw.trim()
   if (link === '') return { kind: 'webdl', certain: false }
 
@@ -61,7 +73,9 @@ export function detectFromLink(raw: string): Detection {
   }
   // The same hash spelled in base32. The add endpoint converts it to hex, so
   // the two spellings of one torrent end up as a single canonical magnet.
-  if (BASE32_INFOHASH.test(link)) return { kind: 'torrent', certain: true }
+  if (opts.base32Infohashes === true && BASE32_INFOHASH.test(link)) {
+    return { kind: 'torrent', certain: true }
+  }
 
   // Extension, taken from the path only: a hoster link may well carry
   // ".torrent" inside a query parameter (a filename, a redirect target)
@@ -138,7 +152,10 @@ const MAX_LIST_BYTES = 512 * 1024
 //
 // Returns null when the file is none of them, which the caller surfaces as a
 // rejection.
-export async function detectFromFile(file: File): Promise<FileContent | null> {
+export async function detectFromFile(
+  file: File,
+  opts: DetectOptions = {},
+): Promise<FileContent | null> {
   const head = await readHead(file, SNIFF_BYTES)
 
   // Bencode: a .torrent is a dictionary, so it opens with 'd', and every
@@ -169,7 +186,7 @@ export async function detectFromFile(file: File): Promise<FileContent | null> {
   // file that is not valid UTF-8, which this one cannot.
   if (NZB_ROOT.test(text)) return { type: 'file', kind: 'usenet' }
 
-  const items = sanitizeBatch(text)
+  const items = sanitizeBatch(text, opts)
   return items.length > 0 ? { type: 'links', items } : null
 }
 
@@ -185,9 +202,24 @@ async function readText(file: File, maxBytes: number): Promise<string | null> {
     // UTF-8 sequence, so it is a safe cut point — slicing mid-character would
     // fail the strict decode and reject the whole file. It also drops a final
     // line that the truncation had already ruined.
-    const lastNewline = bytes.lastIndexOf(0x0a)
-    if (lastNewline < 0) return null
-    bytes = bytes.subarray(0, lastNewline)
+    // Cut at the last whitespace, not only the last newline: a file whose
+    // links are separated by spaces has no newline to cut at and used to be
+    // refused outright. Any whitespace byte is a safe boundary — none of them
+    // appear inside a multi-byte UTF-8 sequence — and cutting there also
+    // discards the final token, which the truncation had already ruined.
+    let cut = -1
+    for (let i = bytes.length - 1; i >= 0; i--) {
+      const b = bytes[i]
+      if (b === 0x0a || b === 0x0d || b === 0x20 || b === 0x09) {
+        cut = i
+        break
+      }
+    }
+    // No whitespace at all means the file is one token the read has already
+    // severed. Nothing complete survives, and a truncated link that still
+    // parses is far worse than no link — so this one is still refused.
+    if (cut < 0) return null
+    bytes = bytes.subarray(0, cut)
   }
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
@@ -226,14 +258,14 @@ export interface Unwrapped {
 // This is the stopping condition for unwrapEncoded, and also its safety
 // check — see there for why landing on one of these is what makes a decode
 // safe to accept.
-function isRecognisable(s: string): boolean {
+function isRecognisable(s: string, opts: DetectOptions): boolean {
   // One value, not a list. The scheme tests below only anchor at the start,
   // so without this a decoded list beginning with a magnet would be taken
   // whole as a single enormous link.
   if (/\s/.test(s)) return false
   if (/^magnet:/i.test(s)) return true
   if (/^[0-9a-f]{40}$/i.test(s) || /^[0-9a-f]{64}$/i.test(s)) return true
-  if (BASE32_INFOHASH.test(s)) return true
+  if (opts.base32Infohashes === true && BASE32_INFOHASH.test(s)) return true
   return /^https?:\/\//i.test(s)
 }
 
@@ -317,11 +349,11 @@ function decodeBase64Once(s: string): string | null {
 // weaken the rule that keeps a bare infohash intact — that protection lives in
 // decodeOnce, which rejects the binary a hash decodes into long before landing
 // is considered.
-function hasLanded(s: string): boolean {
-  if (isRecognisable(s)) return true
+function hasLanded(s: string, opts: DetectOptions): boolean {
+  if (isRecognisable(s, opts)) return true
   let found = 0
   for (const token of s.split(/\s+/)) {
-    if (isRecognisable(cleanToken(token))) {
+    if (isRecognisable(cleanToken(token), opts)) {
       found++
       if (found >= 2) return true
     }
@@ -401,16 +433,16 @@ function unwrapPairs(input: string): string {
 //
 // "Somewhere" includes a list of two or more, so one blob can carry a whole
 // batch — see hasLanded.
-export function unwrapEncoded(raw: string): Unwrapped {
+export function unwrapEncoded(raw: string, opts: DetectOptions = {}): Unwrapped {
   const input = raw.trim()
-  if (input === '' || isRecognisable(input)) return { value: input, layers: 0 }
+  if (input === '' || isRecognisable(input, opts)) return { value: input, layers: 0 }
 
   let current = input
   for (let depth = 1; depth <= MAX_DECODE_DEPTH; depth++) {
     const next = decodeOnce(current)
     if (next === null) break
     current = next
-    if (hasLanded(current)) return { value: current, layers: depth }
+    if (hasLanded(current, opts)) return { value: current, layers: depth }
   }
   // Decoded into nothing meaningful, so it probably was not encoded at all.
   return { value: input, layers: 0 }
@@ -450,11 +482,15 @@ export interface DecodeStep {
 }
 
 // stepDecode computes the next field value and decode state for an input.
-export function stepDecode(link: string, prev: DecodeState): DecodeStep {
+export function stepDecode(
+  link: string,
+  prev: DecodeState,
+  opts: DetectOptions = {},
+): DecodeStep {
   // Pinned input is left strictly alone; this is what makes undo stick.
   if (link === prev.pinned) return { link, state: prev }
 
-  const unwrapped = unwrapEncoded(link)
+  const unwrapped = unwrapEncoded(link, opts)
   if (unwrapped.layers > 0 && unwrapped.value !== link) {
     return {
       link: unwrapped.value,
@@ -513,32 +549,36 @@ export type FieldDetection =
 //
 // Each token is unwrapped independently, so one line five layers deep and
 // another in clear text both come out right in the same paste.
-export function sanitizeBatch(text: string): BatchItem[] {
+export function sanitizeBatch(text: string, opts: DetectOptions = {}): BatchItem[] {
   const out: BatchItem[] = []
-  collectLinks(text, out, new Set<string>(), 0)
+  collectLinks(text, out, new Set<string>(), 0, opts)
   return out
 }
 
-function collectLinks(text: string, out: BatchItem[], seen: Set<string>, depth: number): void {
+function collectLinks(
+  text: string,
+  out: BatchItem[],
+  seen: Set<string>,
+  depth: number,
+  opts: DetectOptions,
+): void {
   if (depth > MAX_BATCH_NESTING) return
   for (const token of text.split(/\s+/)) {
     if (out.length >= MAX_BATCH_ITEMS) return
     const cleaned = cleanToken(token)
     if (cleaned === '') continue
-    const unwrapped = unwrapEncoded(cleaned)
+    const unwrapped = unwrapEncoded(cleaned, opts)
     // A decoded value re-enters as though it had been pasted: same cleaning,
     // same rules. Without this a trailing separator carried inside the encoded
     // payload survived the first pass and vanished on the next one, so the
     // link left in the field was not the link a re-parse produced. Found by
     // the idempotence property, not by hand.
     const value = unwrapped.layers > 0 ? cleanToken(unwrapped.value) : unwrapped.value
-    if (isRecognisable(value)) {
-      // Deduped case-insensitively: the same magnet twice, or once upper- and
-      // once lower-cased, is one download either way.
-      const key = value.toLowerCase()
+    if (isRecognisable(value, opts)) {
+      const key = dedupeKey(value)
       if (seen.has(key)) continue
       seen.add(key)
-      const detected = detectFromLink(value)
+      const detected = detectFromLink(value, opts)
       out.push({
         link: value,
         kind: detected.kind,
@@ -549,8 +589,19 @@ function collectLinks(text: string, out: BatchItem[], seen: Set<string>, depth: 
     }
     // Decoded to something that was not one link but held several: a single
     // blob carrying a whole list. Recurse into what came out of it.
-    if (unwrapped.layers > 0) collectLinks(unwrapped.value, out, seen, depth + 1)
+    if (unwrapped.layers > 0) collectLinks(unwrapped.value, out, seen, depth + 1, opts)
   }
+}
+
+/** The key one link is deduped on.
+ *
+ *  A magnet's infohash when it has one, so the same torrent listed twice with
+ *  different display names counts once — and a bare hash and a magnet for the
+ *  same torrent collapse together too. Anything else dedupes on the whole
+ *  link, lower-cased, since nothing smaller identifies it. */
+function dedupeKey(link: string): string {
+  const infohash = /xt=urn:btih:([0-9a-f]{40}|[0-9a-f]{64})/i.exec(link)
+  return infohash ? infohash[1].toLowerCase() : link.toLowerCase()
 }
 
 // detectField decides what the field holds as a whole.
@@ -559,11 +610,11 @@ function collectLinks(text: string, out: BatchItem[], seen: Set<string>, depth: 
 // which means a lone link pasted with a title around it now gets cleaned up
 // too. Zero falls back to detecting the raw text, so something that is not a
 // link at all still reports as an assumed web link rather than vanishing.
-export function detectField(text: string): FieldDetection {
-  const items = sanitizeBatch(text)
+export function detectField(text: string, opts: DetectOptions = {}): FieldDetection {
+  const items = sanitizeBatch(text, opts)
   if (items.length >= 2) return { batch: true, items }
   if (items.length === 1) return { batch: false, kind: items[0].kind, certain: items[0].certain }
-  const detected = detectFromLink(text)
+  const detected = detectFromLink(text, opts)
   return { batch: false, kind: detected.kind, certain: detected.certain }
 }
 
@@ -611,14 +662,18 @@ export function kindPlural(kind: Kind, count: number): string {
 //
 // Only a paste triggers this. Running it on every keystroke would eat a link
 // halfway through being typed on a second line.
-export function stepSanitize(link: string, prev: DecodeState): DecodeStep {
+export function stepSanitize(
+  link: string,
+  prev: DecodeState,
+  opts: DetectOptions = {},
+): DecodeStep {
   if (link === prev.pinned) return { link, state: prev }
-  const items = sanitizeBatch(link)
+  const items = sanitizeBatch(link, opts)
   // Nothing recognisable at all: leave the text alone and let the single path
   // have its say, so junk still reports as an assumed web link.
-  if (items.length === 0) return stepDecode(link, prev)
+  if (items.length === 0) return stepDecode(link, prev, opts)
   const cleaned = batchText(items)
-  if (cleaned === link) return stepDecode(link, prev)
+  if (cleaned === link) return stepDecode(link, prev, opts)
   const layers = items.reduce((most, item) => Math.max(most, item.layers), 0)
   return {
     link: cleaned,

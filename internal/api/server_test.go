@@ -172,6 +172,7 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
+	base32Infohashes   bool
 	managedAddDefaults ManagedAddOptions
 	resetProviders     []string
 	resetErr           error
@@ -395,6 +396,8 @@ func (f *fakeSettings) ProviderSupportedKinds(string) map[string]bool {
 
 // managedAddDefaults lets a test set what the add form would pre-fill.
 func (f *fakeSettings) ManagedAddDefaults() ManagedAddOptions { return f.managedAddDefaults }
+
+func (f *fakeSettings) Base32InfohashesEnabled() bool { return f.base32Infohashes }
 
 func (f *fakeSettings) ResetProvider(_ context.Context, name string) error {
 	if f.resetErr != nil {

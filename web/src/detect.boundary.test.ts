@@ -184,9 +184,10 @@ describe('B07/B08 infohash lengths', () => {
 
 describe('B09 base32 infohash = 32 uppercase', () => {
   const B32 = 'BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ'
+  const ON = { base32Infohashes: true }
 
   it('accepts exactly 32 uppercase base32 characters', () => {
-    expect(detectFromLink(B32)).toEqual({ kind: 'torrent', certain: true })
+    expect(detectFromLink(B32, ON)).toEqual({ kind: 'torrent', certain: true })
   })
 
   it.each([
@@ -196,6 +197,6 @@ describe('B09 base32 infohash = 32 uppercase', () => {
     ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01', 'contains 0 and 1'],
     ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW89', 'contains 8 and 9'],
   ])('rejects %s (%s)', (input) => {
-    expect(detectFromLink(input).kind).not.toBe('torrent')
+    expect(detectFromLink(input, ON).kind).not.toBe('torrent')
   })
 })

@@ -96,7 +96,10 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // asynchronously. A link's kind is derived from the field itself, below.
   const [fileDetected, setFileDetected] = useState<Detection>({ kind: 'torrent', certain: false })
   const [override, setOverride] = useState<Kind | null>(null)
-  const [fileError, setFileError] = useState('')
+  // A list, not one string: a selection can be rejected for several
+  // different reasons at once, and naming only the most actionable of
+  // them leaves the others looking like files that silently vanished.
+  const [fileErrors, setFileErrors] = useState<string[]>([])
   // What was decoded away, so the transformation is visible and reversible.
   // The whole transition lives in stepDecode/undoDecode — see detect.ts for
   // why this needs to be a state machine and not a single call.
@@ -123,9 +126,17 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   const [batchErrors, setBatchErrors] = useState<{ link: string; message: string }[]>([])
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
+  // Whether a bare base32 string counts as an infohash. Read from the
+  // same admin-only settings call as the Managed defaults, so a member
+  // always sees the safe default of off — the server still decides what
+  // an add actually does, so the worst case is a member not being able
+  // to paste a base32 hash, not one being mis-added.
+  const [base32Infohashes, setBase32Infohashes] = useState(false)
+  const detectOpts = useMemo(() => ({ base32Infohashes }), [base32Infohashes])
+
   // What the field holds as a whole: one item, or a batch of them. Memoised
   // because it re-parses the entire paste, and this renders on every keystroke.
-  const field = useMemo(() => detectField(link), [link])
+  const field = useMemo(() => detectField(link, detectOpts), [link, detectOpts])
   const isBatch = mode === 'link' && field.batch
   // Both file modes share one picker and one detection pass; they differ in
   // what they will accept from it.
@@ -188,6 +199,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         if (cancelled) return
         setDeleteAfterFetch(g.managed_add_delete_after_fetch)
         setKeepFiles(g.managed_add_keep_files)
+        setBase32Infohashes(g.base32_infohashes)
         setDefaultsLoaded(true)
       })
       .catch(() => {
@@ -442,7 +454,9 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     // decoder, so a link being typed on a second line is left alone.
     const wasPasted = pasted.current
     pasted.current = false
-    const step = wasPasted ? stepSanitize(link, decode) : stepDecode(link, decode)
+    const step = wasPasted
+      ? stepSanitize(link, decode, detectOpts)
+      : stepDecode(link, decode, detectOpts)
     if (step.state !== decode) setDecode(step.state)
     if (step.link !== link) {
       setLink(step.link)
@@ -479,16 +493,16 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     if (!isFileMode || files.length === 0) {
       setFileItems([])
       setFileLinks([])
-      setFileError('')
+      setFileErrors([])
       setFileNotice('')
       return
     }
     let cancelled = false
     setOverride(null)
-    setFileError('')
+    setFileErrors([])
     setFileNotice('')
     Promise.all(
-      files.map(async (f) => ({ file: f, content: await detectFromFile(f) })),
+      files.map(async (f) => ({ file: f, content: await detectFromFile(f, detectOpts) })),
     ).then((results) => {
       if (cancelled) return
       const uploads: { file: File; kind: Kind }[] = []
@@ -532,33 +546,38 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
         )
       }
       // Rejected files are skipped rather than blocking the rest of the
-      // upload, but they are always named — silently dropping one would look
-      // like the add simply lost it. Ordered so the most actionable message
-      // wins: wrong mode first, since that one has an obvious fix.
+      // upload, and every reason is reported. Naming only the most actionable
+      // one left the other files looking like the add had simply lost them.
       const names = (fs: File[]) => fs.map((f) => f.name).join(', ')
+      const problems: string[] = []
       if (wrongMode.length > 0) {
-        setFileError(
-          mode === 'batchfile'
-            ? `${names(wrongMode)} is a torrent or NZB, not a list — switch to File(s) to add it.`
-            : // Only send them to Batch file if Batch file would take it.
-              // A list of links named "x.torrent" is refused by both modes,
-              // and telling someone to switch to one that will also say no is
-              // worse than saying so outright.
-              wrongMode.every((f) => isListFilename(f.name))
-              ? `${names(wrongMode)} is a list of links — switch to Batch file to add it.`
-              : `${names(wrongMode)} looks like a list of links, but Batch file only reads .txt files and files with no extension.`,
-        )
-      } else if (notAList.length > 0) {
-        setFileError(
-          `Batch file reads .txt files and files with no extension. Skipping ${names(notAList)}.`,
-        )
-      } else if (bad.length > 0) {
-        setFileError(
+        if (mode === 'batchfile') {
+          problems.push(`${names(wrongMode)} is a torrent or NZB, not a list — switch to File(s) to add it.`)
+        } else {
+          // Only send them to Batch file if Batch file would take it. A list
+          // named "x.torrent" is refused by both modes, and pointing at one
+          // that will also say no is worse than saying so outright.
+          const readable = wrongMode.filter((f) => isListFilename(f.name))
+          const unreadable = wrongMode.filter((f) => !isListFilename(f.name))
+          if (readable.length > 0) {
+            problems.push(`${names(readable)} is a list of links — switch to Batch file to add it.`)
+          }
+          if (unreadable.length > 0) {
+            problems.push(`${names(unreadable)} looks like a list of links, but Batch file only reads .txt files and files with no extension.`)
+          }
+        }
+      }
+      if (notAList.length > 0) {
+        problems.push(`Batch file reads .txt files and files with no extension. Skipping ${names(notAList)}.`)
+      }
+      if (bad.length > 0) {
+        problems.push(
           mode === 'batchfile'
             ? `No links found in ${names(bad)}.`
             : `Not a .torrent or an .nzb: ${names(bad)}.`,
         )
       }
+      setFileErrors(problems)
       // Only meaningful when the upload came to exactly one thing; a batch
       // has no single kind and uses the summary chips instead.
       if (uploads.length === 1 && links.length === 0) {
@@ -572,7 +591,7 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
     }
     // isFileMode is derived from mode, which is already here; listed so the
     // dependency check can see that for itself.
-  }, [files, mode, isFileMode])
+  }, [files, mode, isFileMode, detectOpts])
 
   const kindAvailable = (kind: Kind) =>
     kind === 'torrent' ? torrentAvailable : kind === 'usenet' ? usenetAvailable : webdlAvailable
@@ -713,7 +732,11 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             </button>
           </p>
         )}
-        {fileError && <p className="settings-error">{fileError}</p>}
+        {fileErrors.map((message) => (
+          <p className="settings-error" key={message}>
+            {message}
+          </p>
+        ))}
 
         {/* Only shown when more than one provider can handle the selected
             protocol — otherwise there is nothing to choose between, and a

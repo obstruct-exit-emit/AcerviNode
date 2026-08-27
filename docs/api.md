@@ -384,12 +384,17 @@ JavaScript, and a parser reading the path finds nothing there — so the legacy
 form has to be converted before it is handed over. The key is identical in both;
 only the shape changes.
 
-The `torrent` endpoint normalises too: a v1 infohash has a base32 spelling
-(32 characters rather than 40) that older trackers still hand out, and it is
-converted to hex so the same torrent pasted either way becomes one canonical
-magnet. Uppercase only — 32 mixed-case alphanumerics is the shape of every API
-key, session token and TOTP secret going, and treating those as torrents would
-be worse than missing the odd lowercase hash.
+The `torrent` endpoint normalises too, but only when asked. A v1 infohash has
+a base32 spelling (32 characters rather than 40) that older trackers still hand
+out, and with `base32_infohashes` switched on it is converted to hex so the
+same torrent pasted either way becomes one canonical magnet.
+
+**Off by default.** Uppercase 32-character base32 is exactly the shape of a
+TOTP secret, an API key or a share code, and nothing distinguishes them — so
+with it on, pasting one of those is read as a torrent and attempted. The add
+fails at the provider rather than fetching anything, but it is still an add
+nobody intended. Turn it on only for a tracker that actually gives you base32
+hashes.
 
 This runs on **both** `POST /api/v1/downloads/webdl` and
 `GET /api/v1/downloads/webdl/check-cached`, and has to: TorBox keys a web

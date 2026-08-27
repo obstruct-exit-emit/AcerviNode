@@ -343,13 +343,13 @@ func TestNormalizeMagnet(t *testing.T) {
 	v2 := strings.Repeat("a", 64)
 
 	t.Run("wraps a bare infohash", func(t *testing.T) {
-		if got := normalizeMagnet(v1); got != "magnet:?xt=urn:btih:"+v1 {
+		if got := normalizeMagnet(v1, false); got != "magnet:?xt=urn:btih:"+v1 {
 			t.Errorf("normalizeMagnet(v1) = %q", got)
 		}
-		if got := normalizeMagnet(strings.ToUpper(v1)); got != "magnet:?xt=urn:btih:"+v1 {
+		if got := normalizeMagnet(strings.ToUpper(v1), false); got != "magnet:?xt=urn:btih:"+v1 {
 			t.Errorf("uppercase hash not lowercased: %q", got)
 		}
-		if got := normalizeMagnet(v2); got != "magnet:?xt=urn:btih:"+v2 {
+		if got := normalizeMagnet(v2, false); got != "magnet:?xt=urn:btih:"+v2 {
 			t.Errorf("normalizeMagnet(v2) = %q", got)
 		}
 	})
@@ -364,7 +364,7 @@ func TestNormalizeMagnet(t *testing.T) {
 			{"3WBFL3G4PSSV7MF37AJSHWDQMLNR63I4", "dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c"},
 		} {
 			want := "magnet:?xt=urn:btih:" + tc.hex
-			if got := normalizeMagnet(tc.base32); got != want {
+			if got := normalizeMagnet(tc.base32, true); got != want {
 				t.Errorf("normalizeMagnet(%q) = %q, want %q", tc.base32, got, want)
 			}
 		}
@@ -373,8 +373,20 @@ func TestNormalizeMagnet(t *testing.T) {
 	// Both spellings of one torrent must produce the same magnet, which is
 	// the point of converting rather than passing base32 through.
 	t.Run("both spellings converge on the same magnet", func(t *testing.T) {
-		if normalizeMagnet("BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ") != normalizeMagnet(v1) {
+		if normalizeMagnet("BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ", true) != normalizeMagnet(v1, true) {
 			t.Error("base32 and hex spellings of the same hash produced different magnets")
+		}
+	})
+
+	// Off by default, and the reason is the whole point of the switch: 32
+	// uppercase base32 characters is exactly the shape of a TOTP secret or an
+	// API key, so accepting it unconditionally turns a pasted secret into an
+	// add attempt. Disabled, such a string is left alone and refused by the
+	// provider as an invalid magnet.
+	t.Run("leaves a base32 hash alone when the switch is off", func(t *testing.T) {
+		const b32 = "BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ"
+		if got := normalizeMagnet(b32, false); got != b32 {
+			t.Errorf("normalizeMagnet(%q, false) = %q, want it unchanged", b32, got)
 		}
 	})
 
@@ -397,7 +409,7 @@ func TestNormalizeMagnet(t *testing.T) {
 			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQA", // 33, one long
 			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01",  // 0 and 1 are not base32
 		} {
-			if got := normalizeMagnet(in); got != in {
+			if got := normalizeMagnet(in, true); got != in {
 				t.Errorf("normalizeMagnet(%q) = %q, want it unchanged", in, got)
 			}
 		}

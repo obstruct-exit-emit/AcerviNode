@@ -238,7 +238,7 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 	deleteAfterFetch, keepFiles := s.resolveManagedOptions(r, addedVia)
 	ctx := r.Context()
 	category := r.FormValue("category")
-	magnet := normalizeMagnet(strings.TrimSpace(r.FormValue("magnet")))
+	magnet := normalizeMagnet(strings.TrimSpace(r.FormValue("magnet")), s.settings.Base32InfohashesEnabled())
 	header := formFile(r, "file")
 
 	if magnet == "" && header == nil {
@@ -1010,15 +1010,21 @@ func md5Hex(s string) string {
 // older trackers and some indexers still hand out. That is converted to hex
 // rather than passed through, so the same torrent pasted either way ends up
 // as one canonical magnet.
-func normalizeMagnet(in string) string {
+func normalizeMagnet(in string, allowBase32 bool) string {
 	if in == "" {
 		return in
 	}
 	if bareInfohash.MatchString(in) {
 		return "magnet:?xt=urn:btih:" + strings.ToLower(in)
 	}
-	if hash, ok := base32InfohashToHex(in); ok {
-		return "magnet:?xt=urn:btih:" + hash
+	// Opt-in, because the base32 spelling is indistinguishable from any
+	// other 32-character base32 string -- a TOTP secret, an API key. Off,
+	// such a string is left alone and refused as an invalid magnet, which
+	// is the right answer far more often than treating it as a download.
+	if allowBase32 {
+		if hash, ok := base32InfohashToHex(in); ok {
+			return "magnet:?xt=urn:btih:" + hash
+		}
 	}
 	return in
 }

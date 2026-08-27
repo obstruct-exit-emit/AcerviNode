@@ -583,6 +583,10 @@ describe('stepSanitize', () => {
 })
 
 describe('base32 infohashes', () => {
+  // Opt-in, so every case here enables it. Off, a 32-character base32
+  // string is just text — which is the point of the switch.
+  const ON = { base32Infohashes: true }
+
   // Real pairs: the base32 and hex spellings of the same three torrents.
   const PAIRS: [string, string][] = [
     ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ', '08ada5a7a6183aae1e09d831df6748d566095a10'],
@@ -590,20 +594,28 @@ describe('base32 infohashes', () => {
     ['3WBFL3G4PSSV7MF37AJSHWDQMLNR63I4', 'dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'],
   ]
 
-  it.each(PAIRS)('detects %s as a torrent', (base32) => {
-    expect(detectFromLink(base32)).toEqual({ kind: 'torrent', certain: true })
+  it.each(PAIRS)('detects %s as a torrent when enabled', (base32) => {
+    expect(detectFromLink(base32, ON)).toEqual({ kind: 'torrent', certain: true })
+  })
+
+  // The default. A pasted TOTP secret or API key is text, not a download.
+  it.each(PAIRS)('is not a torrent by default (%s)', (base32) => {
+    expect(detectFromLink(base32).kind).not.toBe('torrent')
   })
 
   // 32 characters, a multiple of four, and entirely within base64's alphabet
   // — so without the recognisable-first rule this would be fed to atob and
   // mangled into binary. Exactly the trap the hex spelling already sets.
   it.each(PAIRS)('is never decoded as base64 (%s)', (base32) => {
+    expect(unwrapEncoded(base32, ON)).toEqual({ value: base32, layers: 0 })
+    // Protected twice over: also left alone with the switch off, because
+    // the decode produces control characters and is refused anyway.
     expect(unwrapEncoded(base32)).toEqual({ value: base32, layers: 0 })
   })
 
   it('survives a batch alongside other kinds', () => {
     const text = ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ', 'https://mega.nz/file/abc#k'].join('\n')
-    const items = sanitizeBatch(text)
+    const items = sanitizeBatch(text, ON)
     expect(items.map((i) => i.link)).toEqual([
       'BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ',
       'https://mega.nz/file/abc#k',
@@ -619,7 +631,8 @@ describe('base32 infohashes', () => {
     ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQA', '33 characters'],
     ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01', 'contains 0 and 1, not base32'],
   ])('does not treat %s as an infohash (%s)', (notHash) => {
-    expect(detectFromLink(notHash).kind).not.toBe('torrent')
+    // Rejected on shape even with the switch on.
+    expect(detectFromLink(notHash, ON).kind).not.toBe('torrent')
   })
 })
 

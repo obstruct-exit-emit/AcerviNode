@@ -424,6 +424,9 @@ export interface GeneralSettings {
   // to an *arr app's own adds.
   managed_add_delete_after_fetch: boolean
   managed_add_keep_files: boolean
+  /** Accept a bare 32-character base32 infohash as a torrent. Off by
+   *  default; see the Settings copy for what it costs. */
+  base32_infohashes: boolean
   backup_interval_hours: number
   backup_keep: number
 }
@@ -466,6 +469,9 @@ export interface GeneralUpdateInput {
   // to an *arr app's own adds.
   managed_add_delete_after_fetch: boolean
   managed_add_keep_files: boolean
+  /** Accept a bare 32-character base32 infohash as a torrent. Off by
+   *  default; see the Settings copy for what it costs. */
+  base32_infohashes: boolean
   backup_interval_hours: number
   backup_keep: number
 }

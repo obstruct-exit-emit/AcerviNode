@@ -265,6 +265,8 @@ type GeneralInfo struct {
 	CleanupErrorAfterDays       int  `json:"cleanup_error_after_days"`
 	ManagedAddDeleteAfterFetch  bool `json:"managed_add_delete_after_fetch"`
 	ManagedAddKeepFiles         bool `json:"managed_add_keep_files"`
+	// Base32Infohashes mirrors config.Config's own field.
+	Base32Infohashes bool `json:"base32_infohashes"`
 	// BackupIntervalHours/BackupKeep mirror config's own fields — see
 	// internal/backup.
 	BackupIntervalHours int `json:"backup_interval_hours"`
@@ -302,6 +304,7 @@ type GeneralUpdate struct {
 	CleanupErrorAfterDays         int    `json:"cleanup_error_after_days"`
 	ManagedAddDeleteAfterFetch    bool   `json:"managed_add_delete_after_fetch"`
 	ManagedAddKeepFiles           bool   `json:"managed_add_keep_files"`
+	Base32Infohashes              bool   `json:"base32_infohashes"`
 	BackupIntervalHours           int    `json:"backup_interval_hours"`
 	BackupKeep                    int    `json:"backup_keep"`
 }
@@ -321,6 +324,11 @@ type Settings interface {
 	// choices offered when adding a Managed download through this API — the
 	// add form pre-fills from them and may override either per download.
 	ManagedAddDefaults() ManagedAddOptions
+	// Base32InfohashesEnabled reports whether a bare 32-character base32
+	// string should be accepted as a v1 infohash. Off by default: the
+	// shape is identical to any other base32 string, so treating it as a
+	// torrent turns a pasted secret into an add attempt.
+	Base32InfohashesEnabled() bool
 	// ProviderSupportedKinds reports which kinds the provider's *service*
 	// can do at all, regardless of whether they are switched on. Distinct
 	// from what the registry holds, which is the intersection of supported

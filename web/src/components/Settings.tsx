@@ -288,6 +288,7 @@ export function Settings({ apiKey }: Props) {
         cleanup_error_after_days: generalSettings.cleanup_error_after_days,
         managed_add_delete_after_fetch: generalSettings.managed_add_delete_after_fetch,
         managed_add_keep_files: generalSettings.managed_add_keep_files,
+        base32_infohashes: generalSettings.base32_infohashes,
         backup_interval_hours: generalSettings.backup_interval_hours,
         backup_keep: generalSettings.backup_keep,
       })
@@ -783,6 +784,27 @@ export function Settings({ apiKey }: Props) {
               </Section>
 
               <div className="general-form">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={form.base32_infohashes}
+                    onChange={(e) => setForm({ ...form, base32_infohashes: e.target.checked })}
+                  />
+                  Accept base32 infohashes
+                </label>
+                <p className="settings-help">
+                  A torrent&apos;s infohash has a second spelling: 32 uppercase letters and digits
+                  instead of the usual 40 hex characters. Some older trackers still hand these out,
+                  and with this on you can paste one straight into the add box.
+                </p>
+                <p className="settings-help">
+                  <strong>What it costs.</strong> That shape is indistinguishable from any other
+                  32-character base32 string &mdash; a two-factor secret, an API key, a share code.
+                  With this on, pasting one of those into the add box reads it as a torrent and
+                  tries to download it. The add fails at the provider rather than fetching anything,
+                  and the string goes nowhere else, but it is still an add you did not mean to make.
+                  Leave this off unless a tracker you actually use gives you base32 hashes.
+                </p>
                 <button type="submit" disabled={generalStatus.kind === 'saving'}>
                   {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
                 </button>

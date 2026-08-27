@@ -415,6 +415,7 @@ func (s *liveSettings) General() api.GeneralInfo {
 		CleanupErrorAfterDays:         s.cfg.CleanupErrorAfterDays,
 		ManagedAddDeleteAfterFetch:    s.cfg.ManagedAddDeleteAfterFetch,
 		ManagedAddKeepFiles:           s.cfg.ManagedAddKeepFiles,
+		Base32Infohashes:              s.cfg.Base32Infohashes,
 		BackupIntervalHours:           s.cfg.BackupIntervalHours,
 		BackupKeep:                    s.cfg.BackupKeep,
 	}
@@ -479,6 +480,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.CleanupErrorAfterDays = update.CleanupErrorAfterDays
 	candidate.ManagedAddDeleteAfterFetch = update.ManagedAddDeleteAfterFetch
 	candidate.ManagedAddKeepFiles = update.ManagedAddKeepFiles
+	candidate.Base32Infohashes = update.Base32Infohashes
 	candidate.BackupIntervalHours = update.BackupIntervalHours
 	candidate.BackupKeep = update.BackupKeep
 	if err := candidate.Validate(); err != nil {
@@ -863,6 +865,13 @@ func (s *liveSettings) ManagedAddDefaults() api.ManagedAddOptions {
 		DeleteAfterFetch: s.cfg.ManagedAddDeleteAfterFetch,
 		KeepFiles:        s.cfg.ManagedAddKeepFiles,
 	}
+}
+
+// Base32InfohashesEnabled implements api.Settings.
+func (s *liveSettings) Base32InfohashesEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Base32Infohashes
 }
 
 // ProviderSupportedKinds reports which kinds this entry's *service* can do,

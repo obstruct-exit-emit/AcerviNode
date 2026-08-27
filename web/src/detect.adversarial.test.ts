@@ -156,12 +156,21 @@ describe('A11 schemes that are not ours', () => {
 })
 
 describe('A12/A13 things that look like hashes but are not', () => {
-  it('treats a base32 TOTP secret as a torrent — known and bounded', () => {
+  it('reads a base32 TOTP secret as text by default', () => {
+    // The whole reason the switch exists and defaults off: this shape is
+    // exactly an infohash's, so accepting it unconditionally turned a
+    // pasted secret into an add attempt.
+    expect(detectFromLink('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP').kind).not.toBe('torrent')
+  })
+
+  it('treats a base32 TOTP secret as a torrent once enabled — the trade', () => {
     // 32 uppercase base32 characters is exactly an infohash's shape. This is
     // a documented false positive: it can only fire when such a string is
     // pasted alone or on its own line, and the add then fails at the
     // provider rather than fetching anything wrong.
-    expect(detectFromLink('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP').kind).toBe('torrent')
+    expect(
+      detectFromLink('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', { base32Infohashes: true }).kind,
+    ).toBe('torrent')
   })
 
   it('does not treat a 32-character MD5 as a hash of any kind', () => {
@@ -173,7 +182,9 @@ describe('A12/A13 things that look like hashes but are not', () => {
     // ABCDEF-only uppercase hex is a legal base32 string. Nothing can tell
     // them apart; the shape is genuinely ambiguous. Pinned so a change here
     // is a decision rather than a surprise.
-    expect(detectFromLink('ABCDEFABCDEFABCDEFABCDEFABCDEFAB').kind).toBe('torrent')
+    expect(
+      detectFromLink('ABCDEFABCDEFABCDEFABCDEFABCDEFAB', { base32Infohashes: true }).kind,
+    ).toBe('torrent')
   })
 })
 
@@ -181,10 +192,15 @@ describe('A14 same torrent, different display name', () => {
   // Dedupe is by the whole link string, so these are two items. The provider
   // collapses them to one download, but the count shown before submitting is
   // higher than the number of rows that result.
-  it('counts one infohash twice when the display names differ', () => {
+  it('counts one infohash once, whatever the display names say', () => {
     const got = sanitizeBatch([`${MAGNET}&dn=A`, `${MAGNET}&dn=B`].join(LF))
-    expect(got).toHaveLength(2)
-    expect(got[0].link).not.toBe(got[1].link)
+    expect(got).toHaveLength(1)
+    expect(got[0].link).toBe(`${MAGNET}&dn=A`)
+  })
+
+  it('collapses a bare hash and a magnet for the same torrent', () => {
+    const bare = 'c9e15763f722f23e98a29decdfae341b98d53056'
+    expect(sanitizeBatch([bare, MAGNET].join(LF))).toHaveLength(1)
   })
 
   it('does dedupe when the links are identical but differently cased', () => {
