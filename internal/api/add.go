@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/md5"
+	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1004,15 +1005,54 @@ func md5Hex(s string) string {
 // 40 hex characters is a v1 (SHA-1) infohash, 64 a v2 (SHA-256) one.
 // Nothing else arriving in this field looks like either, so the test is
 // safe to apply before deciding the input is a magnet at all.
+//
+// A v1 hash also has a base32 spelling — 32 characters rather than 40, which
+// older trackers and some indexers still hand out. That is converted to hex
+// rather than passed through, so the same torrent pasted either way ends up
+// as one canonical magnet.
 func normalizeMagnet(in string) string {
-	if in == "" || !bareInfohash.MatchString(in) {
+	if in == "" {
 		return in
 	}
-	return "magnet:?xt=urn:btih:" + strings.ToLower(in)
+	if bareInfohash.MatchString(in) {
+		return "magnet:?xt=urn:btih:" + strings.ToLower(in)
+	}
+	if hash, ok := base32InfohashToHex(in); ok {
+		return "magnet:?xt=urn:btih:" + hash
+	}
+	return in
+}
+
+// base32InfohashToHex converts a base32-spelled v1 infohash to hex, reporting
+// whether the input was one at all.
+//
+// Uppercase only, deliberately. 32 characters of mixed-case alphanumerics is
+// an extremely common shape — API keys, session tokens, TOTP secrets — and
+// treating every one of them as a torrent would be worse than missing the
+// occasional lowercase hash. BitTorrent presents base32 infohashes in
+// uppercase, which is what a tracker page hands you.
+//
+// The length check is not belt-and-braces: 32 base32 characters is exactly
+// 160 bits, so anything matching the pattern decodes to precisely the 20
+// bytes a v1 infohash needs. The check guards against the pattern and the
+// decoder ever disagreeing.
+func base32InfohashToHex(in string) (string, bool) {
+	if !bareBase32Infohash.MatchString(in) {
+		return "", false
+	}
+	raw, err := base32.StdEncoding.DecodeString(in)
+	if err != nil || len(raw) != 20 {
+		return "", false
+	}
+	return hex.EncodeToString(raw), true
 }
 
 // bareInfohash matches a v1 or v2 infohash with nothing around it.
 var bareInfohash = regexp.MustCompile(`^(?i)([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// bareBase32Infohash matches the base32 spelling of a v1 infohash. See
+// base32InfohashToHex for why this is uppercase-only.
+var bareBase32Infohash = regexp.MustCompile(`^[A-Z2-7]{32}$`)
 
 // magnetHash extracts the infohash from a magnet URI's xt=urn:btih:HASH
 // parameter, lowercased. A small, self-contained duplicate of

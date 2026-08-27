@@ -530,3 +530,101 @@ describe('stepSanitize', () => {
     expect(step.state).toBe(noDecode)
   })
 })
+
+describe('base32 infohashes', () => {
+  // Real pairs: the base32 and hex spellings of the same three torrents.
+  const PAIRS: [string, string][] = [
+    ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ', '08ada5a7a6183aae1e09d831df6748d566095a10'],
+    ['ZHQVOY7XELZD5GFCTXWN7LRUDOMNKMCW', 'c9e15763f722f23e98a29decdfae341b98d53056'],
+    ['3WBFL3G4PSSV7MF37AJSHWDQMLNR63I4', 'dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c'],
+  ]
+
+  it.each(PAIRS)('detects %s as a torrent', (base32) => {
+    expect(detectFromLink(base32)).toEqual({ kind: 'torrent', certain: true })
+  })
+
+  // 32 characters, a multiple of four, and entirely within base64's alphabet
+  // — so without the recognisable-first rule this would be fed to atob and
+  // mangled into binary. Exactly the trap the hex spelling already sets.
+  it.each(PAIRS)('is never decoded as base64 (%s)', (base32) => {
+    expect(unwrapEncoded(base32)).toEqual({ value: base32, layers: 0 })
+  })
+
+  it('survives a batch alongside other kinds', () => {
+    const text = ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ', 'https://mega.nz/file/abc#k'].join('\n')
+    const items = sanitizeBatch(text)
+    expect(items.map((i) => i.link)).toEqual([
+      'BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ',
+      'https://mega.nz/file/abc#k',
+    ])
+    expect(items[0].kind).toBe('torrent')
+  })
+
+  // Uppercase only. 32 mixed-case alphanumerics is the shape of every API key
+  // going, and claiming those are torrents is worse than missing a hash.
+  it.each([
+    ['bcw2lj5gda5k4hqj3ay56z2i2vtaswqq', 'lowercase'],
+    ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQ', '31 characters'],
+    ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQA', '33 characters'],
+    ['BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01', 'contains 0 and 1, not base32'],
+  ])('does not treat %s as an infohash (%s)', (notHash) => {
+    expect(detectFromLink(notHash).kind).not.toBe('torrent')
+  })
+})
+
+describe('percent-encoded links', () => {
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056&dn=Big+Buck'
+  const WEB = 'https://mega.nz/file/abc123#somekey'
+
+  it('unwraps a link copied out of a redirect URL', () => {
+    expect(unwrapEncoded(encodeURIComponent(WEB))).toEqual({ value: WEB, layers: 1 })
+  })
+
+  it('unwraps a doubly-encoded link', () => {
+    const twice = encodeURIComponent(encodeURIComponent(WEB))
+    expect(unwrapEncoded(twice)).toEqual({ value: WEB, layers: 2 })
+  })
+
+  // A magnet's dn= uses "+" for spaces, and decodeURIComponent leaves "+"
+  // alone. Turning it into a space would corrupt the display name.
+  it('preserves + in a decoded magnet', () => {
+    expect(unwrapEncoded(encodeURIComponent(MAGNET))).toEqual({ value: MAGNET, layers: 1 })
+  })
+
+  // The rule that makes percent-decoding safe at all: anything already usable
+  // is returned before the decoder is consulted, so a legitimate %20 in a
+  // filename is never turned into a raw space.
+  it('leaves a normal URL containing a real escape alone', () => {
+    const withSpace = 'https://host.example/My%20File%20(2024).zip'
+    expect(unwrapEncoded(withSpace)).toEqual({ value: withSpace, layers: 0 })
+    expect(detectFromLink(withSpace)).toEqual({ kind: 'webdl', certain: false })
+  })
+
+  it('mixes with base64 in one batch, each item to its own depth', () => {
+    const b64 = (v: string) => btoa(String.fromCharCode(...new TextEncoder().encode(v)))
+    const text = [encodeURIComponent(WEB), b64(MAGNET), WEB.replace('abc123', 'plain')].join('\n')
+    const items = sanitizeBatch(text)
+    expect(items.map((i) => i.link)).toEqual([WEB, MAGNET, WEB.replace('abc123', 'plain')])
+    expect(items.map((i) => i.layers)).toEqual([1, 1, 0])
+  })
+
+  // The rule that makes percent-decoding safe, pinned properly. %2F is an
+  // ENCODED slash and is not the same character as a path separator, so
+  // decoding it produces a different URL that still looks perfectly valid —
+  // no whitespace, right scheme — and would therefore be accepted. Only
+  // returning early on already-usable input prevents that. The %20 case above
+  // does not catch this: a raw space makes the result unrecognisable, so the
+  // landing rule rejects it anyway.
+  it('does not decode escapes inside an already-usable URL', () => {
+    const encodedSlash = 'https://host.example/get?path=folder%2Ffile.zip'
+    expect(unwrapEncoded(encodedSlash)).toEqual({ value: encodedSlash, layers: 0 })
+    const encodedQuestion = 'https://host.example/go?next=a%3Fb%3Dc'
+    expect(unwrapEncoded(encodedQuestion)).toEqual({ value: encodedQuestion, layers: 0 })
+  })
+
+  it('leaves a stray percent sign alone', () => {
+    for (const s of ['100% free', 'https://host.example/50%off']) {
+      expect(unwrapEncoded(s).layers).toBe(0)
+    }
+  })
+})

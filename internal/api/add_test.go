@@ -354,6 +354,30 @@ func TestNormalizeMagnet(t *testing.T) {
 		}
 	})
 
+	// The base32 spelling of a v1 hash: 32 characters rather than 40, still
+	// handed out by older trackers. Converted to hex so the same torrent
+	// pasted either way lands on one canonical magnet.
+	t.Run("converts a base32 v1 infohash to hex", func(t *testing.T) {
+		for _, tc := range []struct{ base32, hex string }{
+			{"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ", "08ada5a7a6183aae1e09d831df6748d566095a10"},
+			{"ZHQVOY7XELZD5GFCTXWN7LRUDOMNKMCW", "c9e15763f722f23e98a29decdfae341b98d53056"},
+			{"3WBFL3G4PSSV7MF37AJSHWDQMLNR63I4", "dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c"},
+		} {
+			want := "magnet:?xt=urn:btih:" + tc.hex
+			if got := normalizeMagnet(tc.base32); got != want {
+				t.Errorf("normalizeMagnet(%q) = %q, want %q", tc.base32, got, want)
+			}
+		}
+	})
+
+	// Both spellings of one torrent must produce the same magnet, which is
+	// the point of converting rather than passing base32 through.
+	t.Run("both spellings converge on the same magnet", func(t *testing.T) {
+		if normalizeMagnet("BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQ") != normalizeMagnet(v1) {
+			t.Error("base32 and hex spellings of the same hash produced different magnets")
+		}
+	})
+
 	// Anything already a magnet, or plainly not a hash, has to pass through
 	// untouched — this runs on every torrent add, including file uploads
 	// where the field is empty.
@@ -365,6 +389,13 @@ func TestNormalizeMagnet(t *testing.T) {
 			v1[:39],  // one short
 			v1 + "a", // one long
 			"08ada5a7a6183aae1e09d831df6748d566095g10", // non-hex
+			// Lowercase base32 is not accepted: 32 mixed-case alphanumerics
+			// is the shape of every API key and session token going, and
+			// treating those as torrents is worse than missing a hash.
+			"bcw2lj5gda5k4hqj3ay56z2i2vtaswqq",
+			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQ",  // 31, one short
+			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQA", // 33, one long
+			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01",  // 0 and 1 are not base32
 		} {
 			if got := normalizeMagnet(in); got != in {
 				t.Errorf("normalizeMagnet(%q) = %q, want it unchanged", in, got)

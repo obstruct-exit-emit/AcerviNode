@@ -45,7 +45,7 @@ necessarily exist yet: `GET /api/v1/health`, `GET /api/v1/auth/status`,
 | `GET` | `/api/v1/providers` | `[{"name": "...", "torrent_capable": bool, "usenet_capable": bool, "webdl_capable": bool}]` — the providers you can actually use right now, in registration order. A provider holding no credentials is omitted entirely; contrast `GET /api/v1/settings/providers` below, which lists every registered provider whether configured or not. Capabilities are per provider, so a torrent-only one reports `usenet_capable: false` and never receives a usenet add |
 | `GET` | `/api/v1/status` | `internal/importer`'s own health signals — meant for an external monitor (Uptime Kuma, Healthchecks.io, ...) to poll and alert on, not for the web UI. `{"last_tick_at"?: "...", "kinds": {"torrent"\|"usenet"\|"webdl": {"last_successful_list_at"?: "...", "rate_limited_until"?: "...", "error_count": N}}, "providers": [{"provider": "...", "kind": "...", "last_successful_list_at"?: "...", "rate_limited_until"?: "...", "listing_anomalous_since"?: "..."}]}`. `last_tick_at` proves the background tick loop itself hasn't stalled/crashed, regardless of what any one kind found; each kind's `last_successful_list_at` is when that kind's provider last answered a bulk listing call without erroring (a kind can look "stuck" — no state changes — while this keeps advancing just fine, e.g. TorBox's `cooldown_until`, see [Providers](providers.md#cooldown_until--a-real-undocumented-account-restriction) — this endpoint answers a different question, "is polling itself working," not "is the provider account restricted"); `providers` breaks the same signals down per provider/kind pair actually polled, which the `kinds` aggregate cannot do — with two configured, one failing every list while the other succeeds still leaves the kind looking healthy, because the healthy one keeps the timestamp moving. Added alongside `kinds` rather than replacing it, so existing monitors keep working. `listing_anomalous_since` is present only while that provider/kind's listing is being **disbelieved** by the mass-vanish guard — it came back successful, but empty enough that acting on it would flag every tracked download as gone. This is the one state worth alerting on that nothing else here reveals: lists are succeeding and there's no rate limit, yet nothing is reconciling. It clears either when the listing recovers or, after a grace period, when the guard concludes the listing was right all along — see [Providers](providers.md#mass-vanish-circuit-breaker); `rate_limited_until` mirrors the same per-kind backoff the importer's logs already show; `error_count` is how many downloads of that kind currently sit in local `error` state. Distinct from `GET /api/v1/settings/account`'s `cooldown_until` (the provider's own account state) and `GET /api/v1/providers` (what's configured) — see [Providers](providers.md#status-monitoring-get-apiv1status) . Also reports `goroutines` — `runtime.NumGoroutine()` at request time, which is the one number that reliably exposes a leak in a Go service: memory can sit flat while goroutines accumulate against a wedged provider call. A count that climbs and never falls is the signal. Deliberately a single gauge rather than mounting `net/http/pprof`, which would expose full stacks and heap contents on a service holding provider credentials|
 | `GET` | `/api/v1/downloads` | Every download — torrent, usenet, or web download — most recently added first. Optional `?added_via=arr\|manual` scopes to just the web UI's Managed or Manual tab (see [Providers](providers.md#managed-vs-manual)); omitted or unrecognized returns everything |
-| `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category` and `added_via` (admin-only, see below). Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) . `magnet` also accepts a **bare infohash** — 40 hex characters for v1, 64 for v2 — which is wrapped into a magnet URI before it reaches a provider. A hash on its own is what an indexer or another client often shows you, and `GET .../torrent/info` already previewed one directly, so previewing by hash worked while adding the same hash was refused by the provider as an invalid magnet|
+| `POST` | `/api/v1/downloads/torrent` | Adds a torrent directly — `multipart/form-data` with either `magnet` or an uploaded `file` (a `.torrent`), plus optional `category` and `added_via` (admin-only, see below). Returns the created download, 201 (or 200 if the provider deduped it to one already tracked — see below) . `magnet` also accepts a **bare infohash** — 40 hex characters for v1, 64 for v2, or the 32-character base32 spelling of a v1 hash (uppercase), which is converted to hex — wrapped into a magnet URI before it reaches a provider. A hash on its own is what an indexer or another client often shows you, and `GET .../torrent/info` already previewed one directly, so previewing by hash worked while adding the same hash was refused by the provider as an invalid magnet|
 | `POST` | `/api/v1/downloads/usenet` | Adds an NZB directly — `multipart/form-data` with either `url` or an uploaded `file` (a `.nzb`), plus optional `category` and `added_via`. Same response shape/status codes as the torrent endpoint |
 | `POST` | `/api/v1/downloads/webdl` | Adds a direct hoster link (Mega, 1Fichier, Mediafire, and ~160 others — see [Providers](providers.md#web-downloads)) — `application/x-www-form-urlencoded` body with `link` (required) and optional `category`/`added_via`. Link-only, no file-upload variant. Same response shape/status codes as the other two add endpoints |
 | `GET` | `/api/v1/downloads/{id}` | One download's detail plus its file list — backs the web UI's per-download detail view. Files are queried live from the provider on every call, not cached locally (see below) |
@@ -287,6 +287,17 @@ paste — text copied out of a truncated terminal line, say — is not valid
 base64, fails the length check, and is left in the field exactly as pasted
 rather than being half-decoded into something worse.
 
+Percent-encoding is peeled the same way, and can be mixed with base64 in the
+same paste or stacked on top of it: `https%3A%2F%2Fhost%2Ffile.zip` is what a
+link looks like when it has been copied out of a redirect or tracking URL.
+
+This is safe only because anything already usable is returned *before* the
+decoder is consulted. An ordinary URL carrying a legitimate escape is never
+touched — which matters more than it first appears: `%2F` is an encoded slash
+and is **not** the same character as a path separator, so decoding it would
+produce a different URL that still looks perfectly valid. That rule is what
+prevents it, and there is a test pinning exactly that.
+
 The transformation is shown, not silent, and one click restores what was
 pasted, which then stays restored rather than being decoded straight back.
 Again this is the web UI only; the endpoints receive whatever the caller
@@ -348,6 +359,13 @@ shape client-side. A debrid provider parses the URL instead of running that
 JavaScript, and a parser reading the path finds nothing there — so the legacy
 form has to be converted before it is handed over. The key is identical in both;
 only the shape changes.
+
+The `torrent` endpoint normalises too: a v1 infohash has a base32 spelling
+(32 characters rather than 40) that older trackers still hand out, and it is
+converted to hex so the same torrent pasted either way becomes one canonical
+magnet. Uppercase only — 32 mixed-case alphanumerics is the shape of every API
+key, session token and TOTP secret going, and treating those as torrents would
+be worse than missing the odd lowercase hash.
 
 This runs on **both** `POST /api/v1/downloads/webdl` and
 `GET /api/v1/downloads/webdl/check-cached`, and has to: TorBox keys a web

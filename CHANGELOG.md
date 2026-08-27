@@ -60,6 +60,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Base32 infohashes, and percent-encoded links.** Two more paste formats that
+  previously went nowhere.
+
+  A v1 infohash has a base32 spelling — 32 characters rather than 40 — that
+  older trackers still hand out, and it was not recognised as a torrent at all,
+  in the UI or the API. It is now converted to hex server-side, so the same
+  torrent pasted either way lands on one canonical magnet. Uppercase only: 32
+  mixed-case alphanumerics is the shape of every API key, session token and
+  TOTP secret going, and claiming those are torrents would be worse than
+  missing the odd lowercase hash. Verified live — adding Sintel by its base32
+  hash returns the hex hash from TorBox.
+
+  Percent-encoded links (`https%3A%2F%2Fhost%2Ffile.zip`, what you get copying
+  out of a redirect URL) now unwrap the same way base64 does, including when
+  the two are stacked or mixed in one batch.
+
+  That second one is safe only because unwrapEncoded returns early on anything
+  already usable, and mutation testing caught that this was **not actually
+  pinned by a test**. The `%20` case that was covered passes either way — a
+  raw space makes the result unrecognisable, so the landing rule rejects it
+  regardless. `%2F` is the case that matters: an encoded slash is not a path
+  separator, so decoding it yields a different URL that still looks valid and
+  would have been accepted. There is now a test for precisely that.
+
+  While in there, the control-character regex moved from literal control bytes
+  to escapes, so `detect.ts` is no longer treated as a binary file by grep.
+  Worth noting the lint warning this surfaced was pre-existing and merely
+  invisible: the rule never saw the raw bytes. It is now suppressed explicitly,
+  with the reason written down — matching control characters is the entire job
+  there, since that is what tells a decode that produced binary from one that
+  produced text.
+
+
 - **The add form takes a whole list, and multiple files.** Paste a batch and it
   is cleaned to the links it holds, one per line, and the field grows to show
   them; paste a single link and the field is exactly what it was. Kinds are
