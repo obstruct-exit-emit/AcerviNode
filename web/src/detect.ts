@@ -327,10 +327,19 @@ function cleanToken(raw: string): string {
   if (markdown) out = markdown[1]
   out = out.replace(/^[>\-*•]+/, '')
   out = out.replace(/^\d+[.)]/, '')
-  // Sentence punctuation comes off before the brackets, so "(url)." can
-  // still unwrap instead of leaving the closing paren stranded.
-  out = out.replace(/[,;.]+$/, '')
-  return unwrapPairs(out).trim()
+  // Alternate until stable. A separator can hide inside a wrapper -- "(url.)"
+  // -- and a wrapper can hide behind a separator -- "(url)." -- so a single
+  // pass in either fixed order always leaves one of the two behind. Looping
+  // makes the result idempotent by construction, which is not cosmetic: the
+  // input field is rewritten with this function's own output, so a value that
+  // changes again on the next pass is a link that differs from the one shown.
+  let previous: string
+  do {
+    previous = out
+    out = out.replace(/[,;.]+$/, '')
+    out = unwrapPairs(out)
+  } while (out !== previous)
+  return out.trim()
 }
 
 /** Openers that wrap a written-down link, and what closes each. */
@@ -498,15 +507,21 @@ function collectLinks(text: string, out: BatchItem[], seen: Set<string>, depth: 
     const cleaned = cleanToken(token)
     if (cleaned === '') continue
     const unwrapped = unwrapEncoded(cleaned)
-    if (isRecognisable(unwrapped.value)) {
+    // A decoded value re-enters as though it had been pasted: same cleaning,
+    // same rules. Without this a trailing separator carried inside the encoded
+    // payload survived the first pass and vanished on the next one, so the
+    // link left in the field was not the link a re-parse produced. Found by
+    // the idempotence property, not by hand.
+    const value = unwrapped.layers > 0 ? cleanToken(unwrapped.value) : unwrapped.value
+    if (isRecognisable(value)) {
       // Deduped case-insensitively: the same magnet twice, or once upper- and
       // once lower-cased, is one download either way.
-      const key = unwrapped.value.toLowerCase()
+      const key = value.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-      const detected = detectFromLink(unwrapped.value)
+      const detected = detectFromLink(value)
       out.push({
-        link: unwrapped.value,
+        link: value,
         kind: detected.kind,
         certain: detected.certain,
         layers: unwrapped.layers,

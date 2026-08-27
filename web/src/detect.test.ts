@@ -379,6 +379,21 @@ describe('sanitizeBatch', () => {
     expect(sanitizeBatch(open + link + close).map((i) => i.link)).toEqual([link])
   })
 
+  // Found by the property sweep, not by hand. Stripping separators before
+  // unwrapping left one hidden inside the wrapper, so "(url.)" produced a URL
+  // with a trailing dot -- a 404 -- and the value only settled on a second
+  // pass, which the field never runs.
+  it.each([
+    ['(https://host.example/file.zip.)', 'a dot inside parens'],
+    ['(https://host.example/file.zip,)', 'a comma inside parens'],
+    ['<https://host.example/file.zip;>', 'a semicolon inside angles'],
+    ['"https://host.example/file.zip."', 'a dot inside quotes'],
+  ])('strips a separator hidden inside a wrapper: %s (%s)', (wrapped) => {
+    expect(sanitizeBatch(wrapped).map((i) => i.link)).toEqual([
+      'https://host.example/file.zip',
+    ])
+  })
+
   it('unwraps a matched pair even with trailing punctuation outside it', () => {
     const link = 'https://host.example/wrapped.zip'
     expect(sanitizeBatch('(' + link + ').').map((i) => i.link)).toEqual([link])
