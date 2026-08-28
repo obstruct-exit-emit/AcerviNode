@@ -123,9 +123,9 @@ this unattended. Recommendations first.
   `backup_interval_hours` (default 24), keeping `backup_keep` (default 7),
   via SQLite's `VACUUM INTO` — consistent against a live database with no
   need to stop the service, and self-contained with no `-wal`/`-shm`
-  sidecars. This is the **only** retention setting that defaults to on:
-  every other one removes something, so doing nothing is the safe default,
-  whereas doing nothing here is the one case that has a cost.
+  sidecars. Opt-in, like every other retention setting
+  here — but the only one where doing nothing has a cost rather than
+  being the safe choice, so it is the one worth turning on deliberately.
 
   Pruning runs only after a *successful* backup (trimming first would mean a
   failed backup had also discarded a good one), `backup_keep: 0` retains

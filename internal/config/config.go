@@ -340,7 +340,11 @@ func defaults() *Config {
 		// remove things, so defaulting them off is the safe choice; this
 		// one only ever adds a copy, and the case for it is strongest
 		// precisely for someone who never went looking for the setting.
-		BackupIntervalHours: 24,
+		// Opt-in. Every other retention default here is 0 because doing
+		// nothing removes nothing; this one is 0 because a backup is a copy
+		// of every login account and session, and writing that to disk on a
+		// schedule is a decision to make deliberately rather than inherit.
+		BackupIntervalHours: 0,
 		BackupKeep:          7,
 		// Both on by default, unlike the retention knobs above, because
 		// they describe what a hand-added Managed download is *for*. You

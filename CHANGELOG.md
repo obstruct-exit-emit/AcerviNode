@@ -634,6 +634,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Backups are now opt-in.** `backup_interval_hours` defaults to `0`; set a
+  value to enable them. Previously the one retention setting that defaulted to
+  on, on the reasoning that doing nothing here is the only case with a cost —
+  losing the database loses every account, session, category and setting, and no
+  provider hands any of that back. That reasoning still holds and the docs still
+  say so; what changed is who decides. A snapshot is a copy of every login
+  account and session written to disk on a schedule, which is a decision to make
+  deliberately rather than inherit from a default.
+
+  **On upgrade this turns scheduled backups off** for any install that relied on
+  the default rather than setting the value explicitly. Set
+  `backup_interval_hours` to keep them.
+
+
 - **One add field instead of Torrent / Usenet / Web Link tabs.** The form now
   works out what an input is rather than asking first. A `magnet:` scheme, a
   `.torrent` or `.nzb` path, and an uploaded file's leading bytes are all
