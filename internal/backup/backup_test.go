@@ -215,11 +215,63 @@ func TestRun_SnapshotsOnTheInterval(t *testing.T) {
 	}
 }
 
-// TestRun_DoesNotSnapshotAtStartup pins the deliberate choice not to back up
-// the moment the process starts: a restart loop would otherwise fill the
-// directory with snapshots of a database nobody had a chance to change, and
-// push the useful older ones out of the retention window.
-func TestRun_DoesNotSnapshotAtStartup(t *testing.T) {
+// snapshotAged writes a snapshot file stamped as though it were taken age ago.
+// takenAt prefers the timestamp in the name, so this controls the schedule.
+func snapshotAged(t *testing.T, dir string, age time.Duration) {
+	t.Helper()
+	name := filePrefix + time.Now().UTC().Add(-age).Format(timeLayout) + fileSuffix
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+}
+
+// TestRun_DoesNotSnapshotWhenARecentOneExists is the guarantee that used to be
+// "never back up at startup", now stated in terms of what it was actually
+// protecting: a restart loop must not fill the directory with snapshots of a
+// database nobody had a chance to change.
+//
+// The old absolute version had an unintended consequence -- an instance
+// restarted more often than the interval never backed up at all -- so the rule
+// is now that a *recent* snapshot suppresses the next one, however many times
+// the process restarts.
+func TestRun_DoesNotSnapshotWhenARecentOneExists(t *testing.T) {
+	dir := t.TempDir()
+	snapshotAged(t, dir, 0)
+	db := &countingDB{}
+	r := New(db, dir, time.Hour, 7)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	time.Sleep(1500 * time.Millisecond) // comfortably past dueNow
+	if got := db.count(); got != 0 {
+		t.Errorf("BackupTo called %d times with a fresh snapshot on disk, want 0", got)
+	}
+}
+
+// TestRun_SnapshotsWhenOverdue is the bug this scheduling exists to fix. An
+// instance restarted more often than its interval used to restart the clock
+// every time and so never backed up; on the development box that produced
+// three days of drift while every setting in the database changed.
+func TestRun_SnapshotsWhenOverdue(t *testing.T) {
+	dir := t.TempDir()
+	snapshotAged(t, dir, 3*time.Hour) // interval long past
+	db := &countingDB{}
+	r := New(db, dir, time.Hour, 7)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	if got := waitForCount(t, db, 1, 4*time.Second); got < 1 {
+		t.Error("BackupTo never called with a snapshot older than the interval")
+	}
+}
+
+// Nothing on disk means nothing to protect, so the first snapshot is taken
+// rather than waiting out a full interval for a baseline that does not exist.
+func TestRun_SnapshotsWhenNothingOnDisk(t *testing.T) {
 	db := &countingDB{}
 	r := New(db, t.TempDir(), time.Hour, 7)
 
@@ -227,10 +279,42 @@ func TestRun_DoesNotSnapshotAtStartup(t *testing.T) {
 	defer cancel()
 	go r.Run(ctx)
 
-	time.Sleep(120 * time.Millisecond)
-	if got := db.count(); got != 0 {
-		t.Errorf("BackupTo called %d times before the first interval elapsed, want 0", got)
+	if got := waitForCount(t, db, 1, 4*time.Second); got < 1 {
+		t.Error("BackupTo never called on an empty backup directory")
 	}
+}
+
+func TestInitialDelay(t *testing.T) {
+	t.Run("disabled stays disabled", func(t *testing.T) {
+		r := New(&fakeDB{}, t.TempDir(), 0, 7)
+		// Must stay non-positive: newTimer reads that as "never fire", and
+		// returning dueNow here would back up on an install that switched
+		// backups off.
+		if got := r.initialDelay(0); got > 0 {
+			t.Errorf("initialDelay(0) = %v, want <= 0", got)
+		}
+	})
+
+	t.Run("waits out the remainder", func(t *testing.T) {
+		dir := t.TempDir()
+		snapshotAged(t, dir, 30*time.Minute)
+		r := New(&fakeDB{}, dir, time.Hour, 7)
+		got := r.initialDelay(time.Hour)
+		if got < 25*time.Minute || got > 31*time.Minute {
+			t.Errorf("initialDelay = %v, want roughly the 30 minutes remaining", got)
+		}
+	})
+
+	t.Run("a future timestamp waits at most one interval", func(t *testing.T) {
+		dir := t.TempDir()
+		snapshotAged(t, dir, -5*time.Hour) // stamped in the future
+		r := New(&fakeDB{}, dir, time.Hour, 7)
+		// A clock corrected after the fact must not park the scheduler for
+		// five hours.
+		if got := r.initialDelay(time.Hour); got > time.Hour {
+			t.Errorf("initialDelay = %v, want no more than the interval", got)
+		}
+	})
 }
 
 // TestRun_ZeroIntervalNeverFires is how backups are switched off. A zero

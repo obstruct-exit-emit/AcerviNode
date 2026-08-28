@@ -98,12 +98,11 @@ func (r *Runner) config() (time.Duration, int) {
 
 // Run takes a snapshot every interval until ctx is cancelled.
 //
-// Deliberately does *not* back up on startup: a restart loop would otherwise
-// fill the directory with snapshots of a database nobody had a chance to
-// change, and push the useful older ones out of the retention window.
+// The schedule is timed from the last snapshot on disk, not from process
+// start -- see initialDelay for why that distinction turned out to matter.
 func (r *Runner) Run(ctx context.Context) {
 	interval, _ := r.config()
-	timer := newTimer(interval)
+	timer := newTimer(r.initialDelay(interval))
 	defer timer.Stop()
 
 	for {
@@ -111,7 +110,10 @@ func (r *Runner) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case d := <-r.changed:
-			timer.Reset(d)
+			// Also timed from the last snapshot: shortening the interval to
+			// something already elapsed should back up now, not wait out the
+			// new interval as well.
+			timer.Reset(r.initialDelay(d))
 		case <-timer.C():
 			if _, err := r.RunOnce(ctx); err != nil {
 				// Logged, not fatal: a failed backup is worth knowing about
@@ -122,6 +124,52 @@ func (r *Runner) Run(ctx context.Context) {
 			cur, _ := r.config()
 			timer.Reset(cur)
 		}
+	}
+}
+
+// dueNow is the delay used when a snapshot is already overdue.
+//
+// Not zero, because newTimer reads a non-positive duration as "disabled" --
+// the one meaning that must never be confused with "immediately". A second
+// also keeps the first snapshot from racing the rest of startup.
+const dueNow = time.Second
+
+// initialDelay is how long to wait before the next snapshot: whatever remains
+// of the interval since the newest one already on disk.
+//
+// This is what makes the schedule survive restarts, and it replaces a
+// deliberate choice that turned out to be wrong in practice. Run used to wait
+// a full interval from process start and never back up at startup, so that a
+// restart loop could not fill the directory with snapshots of a database
+// nobody had touched. The unintended consequence: an instance restarted more
+// often than the interval never backed up *at all*. Three days of drift on the
+// development box before anyone noticed, across a period when every setting in
+// the database had changed.
+//
+// Timing from the last snapshot keeps the original guarantee intact for the
+// case it was written for. A restart loop still cannot produce more than one
+// snapshot per interval, because every restart sees the one the previous
+// attempt just wrote and waits out the remainder.
+func (r *Runner) initialDelay(interval time.Duration) time.Duration {
+	// Disabled stays disabled; newTimer stops on any non-positive duration.
+	if interval <= 0 {
+		return interval
+	}
+	snapshots, err := r.List()
+	if err != nil || len(snapshots) == 0 {
+		// Nothing to time from, so there is nothing to protect either.
+		return dueNow
+	}
+	remaining := interval - time.Since(snapshots[0].TakenAt)
+	switch {
+	case remaining < dueNow:
+		return dueNow
+	case remaining > interval:
+		// A snapshot stamped in the future, from a clock that has since been
+		// corrected. Wait at most one interval rather than trusting it.
+		return interval
+	default:
+		return remaining
 	}
 }
 

@@ -755,6 +755,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A frequently-restarted instance never backed up at all.** The scheduler
+  waited a full interval from *process start* and deliberately never backed up
+  at startup, so a restart loop could not fill the directory with snapshots of a
+  database nobody had touched. The unintended consequence: restart more often
+  than the interval and the clock never reaches it. Found on the development
+  box, which had gone **three days** without a snapshot across a period when
+  every setting in the database changed.
+
+  The schedule is now timed from the newest snapshot on disk rather than from
+  startup, which needs no new state — `List()` already reports when each was
+  taken. Overdue backs up within a second; otherwise it waits out the
+  remainder.
+
+  The original guarantee survives intact for the case it was written for: a
+  restart loop still cannot produce more than one snapshot per interval, because
+  every restart sees the one the previous attempt just wrote. Verified live —
+  the deploy took the overdue snapshot within seven seconds, and two further
+  restarts produced none.
+
+  A snapshot stamped in the future, from a clock corrected after the fact, waits
+  at most one interval rather than parking the scheduler for however long the
+  skew was.
+
+  One test had to be rewritten rather than kept: `TestRun_DoesNotSnapshotAtStartup`
+  asserted the absolute rule. It still passed after the change — but only by
+  accident, sleeping 120ms against a one-second delay — which is worse than
+  failing. It is now `TestRun_DoesNotSnapshotWhenARecentOneExists`, stating what
+  the rule was actually protecting.
+
+
 - **Two magnets for the same torrent counted twice.** Dedupe was on the whole
   link string, so the same infohash with two different `&dn=` display names was
   two batch items — the provider collapsed them, but "Add 30" then produced 29
