@@ -51,9 +51,33 @@ Frontend tests (vitest, no browser needed):
 cd web && npm test
 ```
 
-Currently one suite: `src/detect.test.ts`, covering the add form's type
-detection, its base64 unwrapping, the decode state machine, and batch
-sanitizing. That logic
+Four suites, all against `src/detect.ts` — the add form's type detection,
+encoding unwrapping, decode state machine and batch sanitizing:
+
+| File | What it is for |
+| --- | --- |
+| `detect.test.ts` | Example-based. Cases someone thought of. |
+| `detect.property.test.ts` | Twelve invariants over thousands of generated inputs. Found two idempotence bugs nothing hand-written would have. |
+| `detect.boundary.test.ts` | Every hard limit at the value and one either side. |
+| `detect.adversarial.test.ts` | Input built to exploit specific decisions rather than to represent anything real. |
+
+The property suite runs 4,000 inputs per invariant in CI, which keeps it
+under a second. For a deep hunt raise `N` and lift vitest's per-test
+timeout, which 40,000 comfortably exceeds:
+
+```sh
+npx vitest run detect.property --testTimeout=180000
+```
+
+Two warnings from experience. A fuzzer is only as trustworthy as its
+generators — the first two failures it produced were both bugs in the
+harness (splitting a character set with `split('')` tore an astral
+character into lone surrogates; building base64 with
+`String.fromCharCode(...bytes)` overflows the stack once nesting reaches
+megabytes), and both read exactly like product bugs. Check the generator
+before the code. And every fix here is mutation-checked: revert the fix
+alone and confirm a test fails, because a test that passes either way is
+not protecting anything. That logic
 decides which endpoint an add goes to from a pasted link or an uploaded
 file's bytes, has genuinely fiddly edges — an extension in a query string, a
 half-typed URL, XML that isn't an NZB — and is the kind of pure function unit

@@ -110,11 +110,19 @@ the storage layer.
   **Managed** (added through Sonarr/Radarr, auto-fetched to disk) and
   **Manual** (added directly, or discovered already sitting in your provider
   account — never auto-fetched, browse and grab files on demand instead) —
-  live state/progress, provider status, one-click delete, a "+ Add" button
-  to push a magnet/torrent file/NZB/hoster link straight in, a per-download
+  live state/progress, provider status, one-click delete, a per-download
   detail view (full metadata, streamed/zip/per-file downloads, retry
   status), and a Settings tab to add/change any provider's key without
   touching `config.yaml` — takes effect immediately, no restart
+- **One "+ Add" field that works out what you gave it.** No picking a type
+  first: a magnet, a bare infohash, a `.torrent`/`.nzb` URL, a hoster link
+  or an uploaded file are all identified from what they are — a file by its
+  leading bytes, never its name. Paste a whole **list** and it is cleaned to
+  the links inside it, prose, bullets, numbering and quoting stripped, mixed
+  kinds routed to their own endpoints and added a few at a time. **Batch
+  file** takes the same list from a `.txt`, or a file with no extension at
+  all. Links wrapped in base64 or percent-escapes are unwrapped however many
+  layers deep, and the field shows what it did with a one-click undo
 - A Manual download whose provider item vanishes entirely (deleted directly
   through the provider's own site, or genuinely expired) is detected proactively
   and flagged, instead of sitting stuck looking "Available" forever. Re-add
@@ -154,11 +162,13 @@ Worth reading before you install it, so nothing here is a surprise later.
 
 **What it deliberately doesn't do**
 
-- **No mount.** Every download is fetched in full to local disk before an
-  \*arr app imports it. There is no FUSE/rclone layer presenting the provider
-  as a filesystem, so **you need disk space for everything you download**, and
-  an import waits for the whole file rather than starting instantly. This is
-  the single biggest difference from decypharr, and it is a design choice —
+- **No mount, and nothing served.** Every download is fetched in full to local
+  disk before an \*arr app imports it. Nothing here presents the provider as a
+  filesystem, so **you need disk space for everything you download**, and an
+  import waits for the whole file rather than starting instantly. This is the
+  single biggest difference from decypharr — which serves its libraries
+  instead, through a virtual filesystem (its own, or rclone, or WebDAV) plus
+  read-only NFS and SMB — and it is a design choice —
   the cost is disk and latency, the benefit is no `/dev/fuse`, no `SYS_ADMIN`,
   no mount propagation, and nothing to unwedge when a mount goes stale.
 - **No Docker image.** Packaged as a Linux tarball with a systemd unit. The
