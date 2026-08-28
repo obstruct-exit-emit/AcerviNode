@@ -169,20 +169,106 @@ this unattended. Recommendations first.
 
 **Structural, blocking, and honestly big:**
 
-- ⏳ **No mount — everything fully downloads to local disk.** decypharr's
-  actual headline trick is a FUSE mount instead of a copy (Phase 2's own
-  notes call this out explicitly: "direct download over HTTP... not a FUSE
-  mount"). Fine at a few hundred GB; at a multi-TB library, disk space
-  becomes the hard limit instead of debrid quota. The single biggest
-  architectural difference from decypharr specifically.
-- ✅ **Provider breadth.** TorBox and AllDebrid, with any number of accounts
-  on either (`providers.<name>.type`). Everything routes by the provider a
-  download actually belongs to, so adding another is implementing the
-  `debrid` interfaces and nothing structural. Real-Debrid, Debrid-Link and
-  Premiumize remain unwritten purely because no account is available to
-  verify against, and this project's discipline has been "verify live, don't
-  guess" — that is now the only thing standing in the way rather than the
-  architecture.
+- ⏳ **Serving the library instead of downloading it.** The single biggest
+  architectural difference, and the one item on this list that needs a
+  redesign rather than a feature. Everything currently lands on local disk,
+  so past a few TB the disk is the limit instead of the debrid quota.
+
+  Correcting this entry's own history: it used to say decypharr's trick is a
+  FUSE mount. Their README now describes **read-only NFSv4 and SMB servers**
+  with custom virtual folders. Different mechanism, same consequence — worth
+  recording because the mechanism is exactly what is undecided here.
+
+  **The hard part is not the protocol.** Whichever is picked, the same two
+  problems arrive with it:
+
+  - **Debrid links expire.** A virtual file has to re-resolve a fresh URL on
+    access, which means a per-file URL cache with its own TTL, single-flight
+    so ten readers do not trigger ten resolves, and a sane answer when the
+    provider is rate-limiting mid-read.
+  - **\*arr wants to import, not just read.** Sonarr/Radarr hardlink or move
+    on import. Neither works from a read-only network mount, so an import
+    becomes a full copy — which is the thing this was meant to avoid. Any
+    design has to answer what \*arr actually does at import time before the
+    serving mechanism matters at all.
+
+  **Avenues, cheapest first:**
+
+  - **Symlink into an rclone mount the user already runs.** rdt-client's
+    approach. We serve nothing and write symlinks instead; rclone does the
+    hard part. Almost no new code, no new protocol surface, and it composes
+    with whatever the user already has. Costs an external dependency and a
+    setup step, and the \*arr import question above still applies.
+  - **WebDAV.** `golang.org/x/net/webdav` is in the standard extended
+    library, so this is the least new code of anything we would serve
+    ourselves. rclone can mount it, and several players read it directly.
+    Good first thing to build precisely because it is small enough to prove
+    the URL-cache and range-read machinery before committing to a protocol.
+  - **NFSv4 and/or SMB.** What decypharr does now. Mounts natively on Linux
+    and Windows with nothing extra installed, which is the real appeal. Go
+    servers for both exist but are markedly less mature than the HTTP stack
+    we rely on today, and SMB in particular is a large protocol to get subtly
+    wrong.
+  - **FUSE.** `hanwen/go-fuse`. Behaves like a real filesystem, which makes
+    the \*arr import story the easiest of the four. Ties us to a mount
+    lifecycle, needs FUSE present, and complicates the systemd unit
+    (`ReadWritePaths` already bit us once). Linux-only, which is fine here.
+  - **`.strm` files.** Write a stub pointing at the provider URL. Plex and
+    Jellyfin play them; \*arr cannot import them properly, and the URL inside
+    goes stale. Listed to be dismissed rather than rediscovered later.
+
+  Sequence, if this is picked up: prove the URL cache and range reads behind
+  WebDAV first, since that layer is shared by every option above it. Only
+  then decide whether NFS/SMB is worth the protocol surface.
+
+- ⏳ **All five debrid services.** TorBox and AllDebrid are done, with any
+  number of accounts on either (`providers.<name>.type`), and everything
+  routes by the provider a download actually belongs to — so adding one is
+  implementing the `debrid` interfaces and nothing structural.
+
+  Both rdt-client and decypharr support five: Real-Debrid, TorBox,
+  AllDebrid, Premiumize and Debrid-Link. That leaves **Real-Debrid,
+  Premiumize and Debrid-Link** to write, and it is the plainest gap against
+  either of them.
+
+  What actually blocks each is an account to verify against, not the code.
+  This project's rule has been verify live, never guess, and every provider
+  quirk found so far — TorBox's undocumented `cooldown_until`, AllDebrid's
+  docs being wrong about its own response shape, the comma-separated-hashes
+  claim that is false in practice — was found by making real calls. Writing
+  three providers from documentation alone would produce three plausible
+  implementations and no idea which of them work.
+
+  So: acquiring a cheap account on each is the actual first task, not a
+  detail. Premiumize is the most useful of the three to have anyway, since it
+  is the only other one of the five that does usenet.
+
+- ⏳ **Download engine choice.** One HTTP fetcher today, with no way to tune
+  it. rdt-client ships four engines and the contrast is unflattering.
+
+  **The missing throttling is the cheapest win and worth doing first,
+  independent of any engine work.** There is currently no speed limit, no
+  connection count, and no chunk sizing — `max_concurrent_downloads` caps how
+  many downloads run at once and nothing caps what one of them does to the
+  line. On a shared or metered connection that is a real absence, and it is a
+  setting on the existing fetcher rather than a new engine.
+
+  Engines worth having, in order of value:
+
+  - **Parallel/chunked HTTP.** Range requests across several connections with
+    resume. The natural evolution of what exists, and the one most likely to
+    make a visible difference on a fast line.
+  - **Symlink.** No download at all — shares its entire design with the
+    serving item above, and should be built with it rather than separately.
+  - **aria2c handoff.** Hand the URL to an aria2c daemon over RPC. Small
+    integration, mature downloader, and it inherits aria2's own tuning for
+    free instead of us reimplementing it.
+  - **Synology Download Station.** rdt-client offers it to keep downloads off
+    the machine running the client. Only worth it if you actually have one.
+
+  The engine picked should be per-download-able, not global: a symlink engine
+  makes sense for a library and a chunked fetch for something you want on
+  disk now, and forcing one choice across everything is the wrong shape.
 
 ---
 
