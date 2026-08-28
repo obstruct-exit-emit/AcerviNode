@@ -1541,18 +1541,18 @@ export function Settings({ apiKey }: Props) {
                   <button
                     type="button"
                     className="link-button"
-                    onClick={() => handleDeleteBackup(b.name)}
-                    disabled={backupStatus.kind === 'saving'}
-                  >
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    className="link-button"
                     onClick={() => handleRestoreBackup(b.name)}
                     disabled={backupStatus.kind === 'saving'}
                   >
                     Restore
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => handleDeleteBackup(b.name)}
+                    disabled={backupStatus.kind === 'saving'}
+                  >
+                    Delete
                   </button>
                 </li>
               ))}
