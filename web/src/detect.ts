@@ -692,6 +692,37 @@ export function stepSanitize(
   }
 }
 
+// base64UnwrapDisabled reports whether the field holds something that would
+// have been unwrapped, had unwrapping not been switched off.
+//
+// The narrow case on purpose. A paste can fail to decode for several reasons
+// -- it was cut short, it is nested past the depth cap, it was never encoded
+// at all -- and all of them look identical: nothing happens. Only one of
+// those is a situation this application creates for itself, by offering a
+// switch that then changes behaviour invisibly. That one gets a hint; the
+// rest stay silent, because guessing at "this looks encoded" misfires on
+// TOTP secrets and hashes, which are base64-shaped and not encoded anything.
+//
+// No heuristic here at all: it asks the real question by unwrapping the same
+// input with the switch on and seeing whether that would have changed
+// anything. Costs an extra parse per keystroke, and only while switched off.
+export function base64UnwrapDisabled(text: string, opts: DetectOptions = {}): boolean {
+  // A fast path, not a correctness guard: with the switch on the comparison
+  // below reaches the same answer on its own, since both sides then unwrap
+  // identically. It is here to skip two extra parses per keystroke in the
+  // common case, which is why no test fails when it is removed.
+  if (opts.decodeBase64 !== false) return false
+  const enabled: DetectOptions = { ...opts, decodeBase64: true }
+  // The two outcomes are compared, rather than the enabled one tested alone.
+  // Percent-escapes unwrap with the switch either way, so "enabling produces
+  // something" is true for input the switch has no bearing on -- which would
+  // have claimed the switch was to blame for a link that unwrapped fine.
+  if (unwrapEncoded(text, enabled).value !== unwrapEncoded(text, opts).value) return true
+  // A pasted list can hold encoded lines even when the field as a whole is
+  // not one value, so compare what the batch would find either way.
+  return sanitizeBatch(text, enabled).length > sanitizeBatch(text, opts).length
+}
+
 /** Human label for a kind, matching what the tabs used to say. */
 export function kindLabel(kind: Kind): string {
   switch (kind) {

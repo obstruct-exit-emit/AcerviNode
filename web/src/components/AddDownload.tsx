@@ -24,6 +24,7 @@ import {
 import {
   batchSummary,
   detectField,
+  base64UnwrapDisabled,
   detectFromFile,
   kindLabel,
   isListFilename,
@@ -144,6 +145,9 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
   // What the field holds as a whole: one item, or a batch of them. Memoised
   // because it re-parses the entire paste, and this renders on every keystroke.
   const field = useMemo(() => detectField(link, detectOpts), [link, detectOpts])
+  // The one silent failure worth explaining: unwrapping would have done
+  // something here, and the switch is the only reason it did not.
+  const base64Off = useMemo(() => base64UnwrapDisabled(link, detectOpts), [link, detectOpts])
   const isBatch = mode === 'link' && field.batch
   // Both file modes share one picker and one detection pass; they differ in
   // what they will accept from it.
@@ -738,6 +742,14 @@ export function AddDownload({ apiKey, providers, isAdmin, defaultManaged, onClos
             >
               use what I pasted instead
             </button>
+          </p>
+        )}
+        {/* Only ever shown when unwrapping would genuinely have done
+            something. Every other reason a paste fails to decode stays
+            silent -- see base64UnwrapDisabled for why. */}
+        {mode === 'link' && base64Off && (
+          <p className="settings-help">
+            Looks base64-encoded, but unwrapping is switched off in Settings.
           </p>
         )}
         {fileErrors.map((message) => (

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  base64UnwrapDisabled,
   batchSummary,
   isListFilename,
   mergeBatches,
@@ -896,5 +897,53 @@ describe('isListFilename', () => {
   it('ignores any directory portion', () => {
     expect(isListFilename('some.dir/links.txt')).toBe(true)
     expect(isListFilename('some.dir/links')).toBe(true)
+  })
+})
+
+describe('base64UnwrapDisabled', () => {
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  const MAGNET = 'magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056'
+  const WEB = 'https://mega.nz/file/abc#key'
+  const OFF = { decodeBase64: false }
+
+  it('says so when a wrapped link would have unwrapped', () => {
+    expect(base64UnwrapDisabled(b64(MAGNET), OFF)).toBe(true)
+    expect(base64UnwrapDisabled(b64(b64(WEB)), OFF)).toBe(true)
+  })
+
+  it('catches a pasted list whose lines are wrapped', () => {
+    const list = [b64(MAGNET), WEB].join('\n')
+    expect(base64UnwrapDisabled(list, OFF)).toBe(true)
+  })
+
+  it('stays quiet whenever unwrapping is on', () => {
+    expect(base64UnwrapDisabled(b64(MAGNET))).toBe(false)
+    expect(base64UnwrapDisabled(b64(MAGNET), { decodeBase64: true })).toBe(false)
+  })
+
+  // The reason this is the only hint that ships. Each of these is
+  // base64-shaped and none of them is encoded anything, so claiming the
+  // switch is why nothing happened would be simply wrong.
+  it.each([
+    ['JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', 'a TOTP secret'],
+    ['c9e15763f722f23e98a29decdfae341b98d53056', 'a bare infohash'],
+    ['9e107d9d372bb6826bd81d3542a419d6', 'an MD5'],
+    ['XdEtVVmxYY0hKTlJuQkdWVmhvVGxZd05UQlVhMUpo', 'a truncated paste'],
+    ['Some.Movie.2024.1080p.WEB-DL', 'a release name'],
+    ['just some words here', 'prose'],
+    ['', 'nothing'],
+  ])('stays quiet for %s (%s)', (input) => {
+    expect(base64UnwrapDisabled(input, OFF)).toBe(false)
+  })
+
+  it('stays quiet for a link that needs no unwrapping at all', () => {
+    expect(base64UnwrapDisabled(MAGNET, OFF)).toBe(false)
+    expect(base64UnwrapDisabled(WEB, OFF)).toBe(false)
+  })
+
+  // Percent-escapes keep unwrapping with base64 off, so nothing was lost and
+  // there is nothing to explain.
+  it('stays quiet for a percent-escaped link', () => {
+    expect(base64UnwrapDisabled(encodeURIComponent(WEB), OFF)).toBe(false)
   })
 })

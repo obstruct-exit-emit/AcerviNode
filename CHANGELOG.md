@@ -60,6 +60,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A hint when base64 unwrapping is switched off**, and only then. Turning
+  the switch off makes the feature disappear silently, which is a trap this
+  project created for itself the moment the switch existed — a setting that
+  changes behaviour invisibly is worse than no setting.
+
+  Deliberately the only such hint. A paste can fail to unwrap for several
+  reasons — cut short, nested past the depth cap, never encoded at all — and
+  every one of them looks identical: nothing happens. Only this one is ours to
+  explain. Guessing at "that looks encoded" for the others misfires on TOTP
+  secrets, bare infohashes and MD5s, all of which are base64-shaped and none
+  of which are encoded anything.
+
+  No heuristic involved: it unwraps the same input with the switch on and
+  compares the result. Writing that comparison the obvious way first — testing
+  only whether enabling produced something — was wrong, and its own test
+  caught it: percent-escapes unwrap either way, so it claimed the switch was
+  to blame for a link that had unwrapped perfectly well.
+
+
 - **Base64 link unwrapping can be switched off**, the counterpart to the base32
   switch and its opposite: opt-*out*, on by default, because unwrapping is
   useful and already shipped. Off, an encoded link stays as the text it looks
