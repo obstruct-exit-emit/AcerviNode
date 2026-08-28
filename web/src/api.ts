@@ -625,6 +625,15 @@ export function runBackup(apiKey: string): Promise<{ name: string }> {
   return request('/api/v1/settings/backups', apiKey, { method: 'POST' })
 }
 
+// deleteBackup removes one snapshot and the config copy beside it. The name is
+// encoded because it lands in the path; the server validates it against the
+// shape it writes regardless, and refuses anything else before touching disk.
+export function deleteBackup(apiKey: string, name: string): Promise<void> {
+  return request(`/api/v1/settings/backups/${encodeURIComponent(name)}`, apiKey, {
+    method: 'DELETE',
+  })
+}
+
 export interface StatusInfo {
   last_tick_at?: string
   kinds: Record<string, KindStatus>

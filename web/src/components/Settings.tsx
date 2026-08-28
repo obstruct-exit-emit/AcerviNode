@@ -6,6 +6,7 @@ import {
   addProvider,
   getBackups,
   getProviderSettings,
+  deleteBackup,
   runBackup,
   removeProvider,
   getStatus,
@@ -489,6 +490,27 @@ export function Settings({ apiKey }: Props) {
     setBackupStatus({ kind: 'saving' })
     try {
       await runBackup(apiKey)
+      setBackupStatus({ kind: 'idle' })
+      setBackups(await getBackups(apiKey))
+    } catch (err) {
+      setBackupStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  // Confirms, like every other destructive action here. Worth spelling out
+  // what goes: the config half is the one holding the credentials, so a
+  // snapshot is only useful as a pair and only dangerous as a pair.
+  async function handleDeleteBackup(name: string) {
+    if (
+      !confirm(
+        `Delete snapshot ${name}? Both halves go — the database copy and the config copy beside it, which holds the provider keys and login accounts as they were at that moment. This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    setBackupStatus({ kind: 'saving' })
+    try {
+      await deleteBackup(apiKey, name)
       setBackupStatus({ kind: 'idle' })
       setBackups(await getBackups(apiKey))
     } catch (err) {
@@ -1493,7 +1515,15 @@ export function Settings({ apiKey }: Props) {
                 <Fragment key={b.name}>
                   <dt>{new Date(b.taken_at).toLocaleString()}</dt>
                   <dd>
-                    {formatBytes(b.size_bytes)} · <code>{b.name}</code>
+                    {formatBytes(b.size_bytes)} · <code>{b.name}</code>{' '}
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => handleDeleteBackup(b.name)}
+                      disabled={backupStatus.kind === 'saving'}
+                    >
+                      Delete
+                    </button>
                   </dd>
                 </Fragment>
               ))}

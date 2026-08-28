@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"os"
@@ -490,5 +491,86 @@ func TestPrune_RemovesTheConfigCopyToo(t *testing.T) {
 	}
 	if len(yamls) != 1 {
 		t.Errorf("%d config copies left after pruning to 1 snapshot, want 1", len(yamls))
+	}
+}
+
+func TestDelete_RemovesTheSnapshotAndItsConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("api_key: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(&fakeDB{}, dir, cfg, time.Hour, 7)
+	path, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.Delete(filepath.Base(path)); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("snapshot still on disk after Delete")
+	}
+	if _, err := os.Stat(strings.TrimSuffix(path, fileSuffix) + configSuffix); !os.IsNotExist(err) {
+		t.Error("config copy left behind — it holds the credentials, so it is the half that matters")
+	}
+}
+
+// The name reaches Delete straight from a URL path segment. isSnapshotName
+// checks only a prefix and a suffix, which every one of these satisfies, so
+// the timestamp parse and the filepath.Base comparison are what actually stop
+// them. Each must be refused before anything touches the filesystem.
+func TestDelete_RefusesAnythingItDidNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
+
+	// A real file one directory up, to prove nothing escapes to it.
+	outside := filepath.Join(dir, "..", "acervinode-20260101-000000.db")
+	if err := os.WriteFile(outside, []byte("do not delete"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{
+		"acervinode-../../etc/shadow.db",
+		"acervinode-" + filepath.Join("..", "acervinode-20260101-000000") + fileSuffix,
+		"../acervinode-20260101-000000.db",
+		"acervinode-notatimestamp.db",
+		"acervinode-.db",
+		"acervinode-20260101-000000.yaml",
+		"config.yaml",
+		"",
+		".",
+		"..",
+	} {
+		if err := r.Delete(name); !errors.Is(err, ErrNotASnapshot) {
+			t.Errorf("Delete(%q) error = %v, want ErrNotASnapshot", name, err)
+		}
+	}
+
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("a file outside the backup directory was removed: %v", err)
+	}
+}
+
+func TestDelete_MissingSnapshotReportsNotExist(t *testing.T) {
+	r := New(&fakeDB{}, t.TempDir(), "", time.Hour, 7)
+	err := r.Delete("acervinode-20260101-000000.db")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Delete() error = %v, want it to report not-exist so the API can 404", err)
+	}
+}
+
+// A snapshot taken before config copies existed has no .yaml beside it, and
+// deleting it is not a failure.
+func TestDelete_ToleratesAMissingConfigCopy(t *testing.T) {
+	dir := t.TempDir()
+	name := filePrefix + "20260101-000000" + fileSuffix
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
+	if err := r.Delete(name); err != nil {
+		t.Errorf("Delete() error = %v, want a lone snapshot to delete cleanly", err)
 	}
 }

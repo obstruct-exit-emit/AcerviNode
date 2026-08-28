@@ -839,6 +839,17 @@ func (s *liveSettings) Backups() ([]api.BackupInfo, error) {
 	return out, nil
 }
 
+// DeleteBackup implements api.Settings.
+func (s *liveSettings) DeleteBackup(name string) error {
+	s.mu.Lock()
+	runner := s.backups
+	s.mu.Unlock()
+	if runner == nil {
+		return fmt.Errorf("backups are not running")
+	}
+	return runner.Delete(name)
+}
+
 // ProviderTypes lists the provider implementations this build can
 // construct, for the settings UI's "add a provider" picker — a name is free
 // text, but the type has to be one of these.

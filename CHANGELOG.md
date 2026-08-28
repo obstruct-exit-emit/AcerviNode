@@ -60,6 +60,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Delete a snapshot from Settings → Backup.** A per-snapshot Delete button,
+  behind a confirm like every other destructive action there, backed by
+  `DELETE /api/v1/settings/backups/{name}`. Both halves go together — the
+  database copy and the config copy beside it — because a snapshot is only
+  useful as a pair and only sensitive as a pair.
+
+  Deleting is offered where restoring deliberately is not. Removing a snapshot
+  from a browser is tidying; putting one back is a decision that deserves a
+  shell.
+
+  The name arrives as a URL path segment, so it is validated rather than
+  trusted. `isSnapshotName` alone would not do: it checks a prefix and a
+  suffix, which `acervinode-../../etc/shadow.db` satisfies perfectly well.
+  Requiring the timestamp to parse pins the exact shape, and every attempt is
+  refused before anything touches the filesystem. Verified live — four
+  malformed names returned `400`, a real one `204`, and the same name again
+  `404`.
+
+
 - **A hint when base64 unwrapping is switched off**, and only then. Turning
   the switch off makes the feature disappear silently, which is a trap this
   project created for itself the moment the switch existed — a setting that

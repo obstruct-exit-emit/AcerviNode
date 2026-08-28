@@ -8,6 +8,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -241,6 +242,46 @@ func (r *Runner) copyConfig(snapshotName string) error {
 	if err := os.WriteFile(dest, data, snapshotMode); err != nil {
 		return fmt.Errorf("write config copy: %w", err)
 	}
+	return nil
+}
+
+// ErrNotASnapshot rejects a name that is not one this package wrote.
+var ErrNotASnapshot = errors.New("not a snapshot name")
+
+// Delete removes one snapshot and the config copy beside it.
+//
+// The name arrives from a URL path segment, so it is validated as a whole
+// rather than trusted. isSnapshotName is not enough on its own for that job:
+// it checks a prefix and a suffix, which "acervinode-../../etc/shadow.db"
+// satisfies perfectly well. Requiring the timestamp to parse pins the exact
+// shape this package writes, and comparing against filepath.Base rejects
+// anything carrying a path component at all.
+//
+// The filepath.Base comparison is defence in depth and no test can isolate it:
+// any name with a separator in it also fails the timestamp parse, so removing
+// it breaks nothing. It stays because the two guards protect against different
+// mistakes -- one against a name that is not ours, one against a path that is
+// not here -- and only one of them would survive someone loosening the format.
+func (r *Runner) Delete(name string) error {
+	if !isSnapshotName(name) || name != filepath.Base(name) {
+		return ErrNotASnapshot
+	}
+	stamp := strings.TrimSuffix(strings.TrimPrefix(name, filePrefix), fileSuffix)
+	if _, err := time.Parse(timeLayout, stamp); err != nil {
+		return ErrNotASnapshot
+	}
+
+	path := filepath.Join(r.dir, name)
+	if err := os.Remove(path); err != nil {
+		// Includes not-exist, which the caller turns into a 404.
+		return err
+	}
+	// The pair goes together, exactly as prune removes it.
+	cfgCopy := strings.TrimSuffix(path, fileSuffix) + configSuffix
+	if err := os.Remove(cfgCopy); err != nil && !os.IsNotExist(err) {
+		slog.Warn("backup: could not remove config copy", "path", cfgCopy, "error", err)
+	}
+	slog.Info("backup: snapshot deleted", "path", path)
 	return nil
 }
 
