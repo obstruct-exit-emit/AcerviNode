@@ -107,11 +107,14 @@ func run(ctx context.Context) error {
 	settings.SetImporter(imp)
 	go imp.Run(ctx)
 
-	// Database snapshots. Everything AcerviNode knows lives in one SQLite
-	// file, so this is the difference between a bad day and starting over.
+	// Snapshots of both stores. The database holds the download history;
+	// the config file holds the provider keys, the API key and every login
+	// account, so a snapshot of one without the other restores half of
+	// what was lost.
 	backupRunner := backup.New(
 		db,
 		cfg.ResolvedBackupDir(),
+		configPath,
 		time.Duration(cfg.BackupIntervalHours)*time.Hour,
 		cfg.BackupKeep,
 	)

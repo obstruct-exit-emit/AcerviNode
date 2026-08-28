@@ -25,12 +25,17 @@ func (f *fakeDB) BackupTo(_ context.Context, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte("snapshot"), 0o600)
+	// 0644 on purpose: SQLite's VACUUM INTO creates its file under the
+	// process umask, which is world-readable on a normal install. Writing
+	// this restrictively would have let the permission test pass without the
+	// chmod that actually fixes it -- which is exactly what it did until a
+	// mutation check caught it.
+	return os.WriteFile(path, []byte("snapshot"), 0o644)
 }
 
 func TestRunOnce_WritesASnapshot(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{}, dir, time.Hour, 7)
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
 
 	path, err := r.RunOnce(context.Background())
 	if err != nil {
@@ -48,7 +53,7 @@ func TestRunOnce_WritesASnapshot(t *testing.T) {
 // which is what makes this work without reading mtimes back off disk.
 func TestPrune_KeepsNewest(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{}, dir, time.Hour, 3)
+	r := New(&fakeDB{}, dir, "", time.Hour, 3)
 
 	for i := 1; i <= 6; i++ {
 		name := fmt.Sprintf("%s2026080%d-120000%s", filePrefix, i, fileSuffix)
@@ -78,7 +83,7 @@ func TestPrune_KeepsNewest(t *testing.T) {
 // keep <= 0 retains everything, so a mistyped value can never wipe the lot.
 func TestPrune_KeepZeroRetainsEverything(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{}, dir, time.Hour, 0)
+	r := New(&fakeDB{}, dir, "", time.Hour, 0)
 	for i := 1; i <= 4; i++ {
 		name := fmt.Sprintf("%s2026080%d-120000%s", filePrefix, i, fileSuffix)
 		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600)
@@ -96,7 +101,7 @@ func TestPrune_KeepZeroRetainsEverything(t *testing.T) {
 // snapshot deliberately renamed to stop it being pruned.
 func TestPrune_IgnoresForeignFiles(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{}, dir, time.Hour, 1)
+	r := New(&fakeDB{}, dir, "", time.Hour, 1)
 	for i := 1; i <= 3; i++ {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("%s2026080%d-120000%s", filePrefix, i, fileSuffix)), []byte("x"), 0o600)
 	}
@@ -115,7 +120,7 @@ func TestPrune_IgnoresForeignFiles(t *testing.T) {
 // backup had also thrown away a good one.
 func TestRunOnce_FailureDoesNotPrune(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{err: fmt.Errorf("disk on fire")}, dir, time.Hour, 1)
+	r := New(&fakeDB{err: fmt.Errorf("disk on fire")}, dir, "", time.Hour, 1)
 	for i := 1; i <= 3; i++ {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("%s2026080%d-120000%s", filePrefix, i, fileSuffix)), []byte("x"), 0o600)
 	}
@@ -133,7 +138,7 @@ func TestRunOnce_FailureDoesNotPrune(t *testing.T) {
 // backup rewrites mtime while the name still says when it was taken.
 func TestList_TakenAtComesFromTheName(t *testing.T) {
 	dir := t.TempDir()
-	r := New(&fakeDB{}, dir, time.Hour, 7)
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
 	name := filePrefix + "20260815-133000" + fileSuffix
 	os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600)
 
@@ -150,7 +155,7 @@ func TestList_TakenAtComesFromTheName(t *testing.T) {
 // A missing directory is "nothing taken yet", not an error — it's created
 // by the first backup rather than up front.
 func TestList_MissingDirIsEmpty(t *testing.T) {
-	r := New(&fakeDB{}, filepath.Join(t.TempDir(), "nope"), time.Hour, 7)
+	r := New(&fakeDB{}, filepath.Join(t.TempDir(), "nope"), "", time.Hour, 7)
 	got, err := r.List()
 	if err != nil {
 		t.Fatalf("List() error = %v, want nil for a missing dir", err)
@@ -204,7 +209,7 @@ func waitForCount(t *testing.T, db *countingDB, n int, within time.Duration) int
 // — leaving the one path that actually runs unattended for months untested.
 func TestRun_SnapshotsOnTheInterval(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), 30*time.Millisecond, 0)
+	r := New(db, t.TempDir(), "", 30*time.Millisecond, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -238,7 +243,7 @@ func TestRun_DoesNotSnapshotWhenARecentOneExists(t *testing.T) {
 	dir := t.TempDir()
 	snapshotAged(t, dir, 0)
 	db := &countingDB{}
-	r := New(db, dir, time.Hour, 7)
+	r := New(db, dir, "", time.Hour, 7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -258,7 +263,7 @@ func TestRun_SnapshotsWhenOverdue(t *testing.T) {
 	dir := t.TempDir()
 	snapshotAged(t, dir, 3*time.Hour) // interval long past
 	db := &countingDB{}
-	r := New(db, dir, time.Hour, 7)
+	r := New(db, dir, "", time.Hour, 7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -273,7 +278,7 @@ func TestRun_SnapshotsWhenOverdue(t *testing.T) {
 // rather than waiting out a full interval for a baseline that does not exist.
 func TestRun_SnapshotsWhenNothingOnDisk(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), time.Hour, 7)
+	r := New(db, t.TempDir(), "", time.Hour, 7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -286,7 +291,7 @@ func TestRun_SnapshotsWhenNothingOnDisk(t *testing.T) {
 
 func TestInitialDelay(t *testing.T) {
 	t.Run("disabled stays disabled", func(t *testing.T) {
-		r := New(&fakeDB{}, t.TempDir(), 0, 7)
+		r := New(&fakeDB{}, t.TempDir(), "", 0, 7)
 		// Must stay non-positive: newTimer reads that as "never fire", and
 		// returning dueNow here would back up on an install that switched
 		// backups off.
@@ -298,7 +303,7 @@ func TestInitialDelay(t *testing.T) {
 	t.Run("waits out the remainder", func(t *testing.T) {
 		dir := t.TempDir()
 		snapshotAged(t, dir, 30*time.Minute)
-		r := New(&fakeDB{}, dir, time.Hour, 7)
+		r := New(&fakeDB{}, dir, "", time.Hour, 7)
 		got := r.initialDelay(time.Hour)
 		if got < 25*time.Minute || got > 31*time.Minute {
 			t.Errorf("initialDelay = %v, want roughly the 30 minutes remaining", got)
@@ -308,7 +313,7 @@ func TestInitialDelay(t *testing.T) {
 	t.Run("a future timestamp waits at most one interval", func(t *testing.T) {
 		dir := t.TempDir()
 		snapshotAged(t, dir, -5*time.Hour) // stamped in the future
-		r := New(&fakeDB{}, dir, time.Hour, 7)
+		r := New(&fakeDB{}, dir, "", time.Hour, 7)
 		// A clock corrected after the fact must not park the scheduler for
 		// five hours.
 		if got := r.initialDelay(time.Hour); got > time.Hour {
@@ -322,7 +327,7 @@ func TestInitialDelay(t *testing.T) {
 // disabled feature and a hot loop writing snapshots as fast as it can.
 func TestRun_ZeroIntervalNeverFires(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), 0, 7)
+	r := New(db, t.TempDir(), "", 0, 7)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -339,7 +344,7 @@ func TestRun_ZeroIntervalNeverFires(t *testing.T) {
 // loop at all rather than just storing the value.
 func TestRun_SetConfigRetunesARunningLoop(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), time.Hour, 0)
+	r := New(db, t.TempDir(), "", time.Hour, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -360,7 +365,7 @@ func TestRun_SetConfigRetunesARunningLoop(t *testing.T) {
 // switching backups off while running must actually stop them.
 func TestRun_SetConfigToZeroStopsTheLoop(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), 25*time.Millisecond, 0)
+	r := New(db, t.TempDir(), "", 25*time.Millisecond, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -381,7 +386,7 @@ func TestRun_SetConfigToZeroStopsTheLoop(t *testing.T) {
 // goroutine outliving the process's own lifecycle.
 func TestRun_StopsOnContextCancel(t *testing.T) {
 	db := &countingDB{}
-	r := New(db, t.TempDir(), 25*time.Millisecond, 0)
+	r := New(db, t.TempDir(), "", 25*time.Millisecond, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go r.Run(ctx)
@@ -394,5 +399,96 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if got := db.count(); got != settled {
 		t.Errorf("BackupTo called %d more times after the context was cancelled", got-settled)
+	}
+}
+
+// The config file, not the database, holds the provider keys, the API key and
+// every login account. A snapshot without it restores the download history and
+// leaves you locked out, which is the opposite of what a backup is for.
+func TestRunOnce_CopiesTheConfigBesideTheSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("api_key: secret\nport: 7846\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(&fakeDB{}, dir, cfg, time.Hour, 7)
+
+	path, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	copied := strings.TrimSuffix(path, fileSuffix) + configSuffix
+	got, err := os.ReadFile(copied)
+	if err != nil {
+		t.Fatalf("config copy not written beside the snapshot: %v", err)
+	}
+	if !strings.Contains(string(got), "api_key: secret") {
+		t.Errorf("config copy = %q, want the original contents", got)
+	}
+}
+
+// Both halves carry things nobody else should read: the database has the whole
+// download history, the config has credentials. VACUUM INTO creates its file
+// under the process umask, so the mode has to be set rather than inherited.
+func TestRunOnce_SnapshotAndConfigAreOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("api_key: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(&fakeDB{}, dir, cfg, time.Hour, 7)
+
+	path, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	for _, f := range []string{path, strings.TrimSuffix(path, fileSuffix) + configSuffix} {
+		info, err := os.Stat(f)
+		if err != nil {
+			t.Fatalf("stat %s: %v", f, err)
+		}
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			t.Errorf("%s has mode %o, want no group or world access", filepath.Base(f), perm)
+		}
+	}
+}
+
+// An install running entirely from environment variables has no config file,
+// and that is not a failure.
+func TestRunOnce_MissingConfigIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	r := New(&fakeDB{}, dir, filepath.Join(t.TempDir(), "absent.yaml"), time.Hour, 7)
+
+	if _, err := r.RunOnce(context.Background()); err != nil {
+		t.Errorf("RunOnce() error = %v, want a missing config to be tolerated", err)
+	}
+}
+
+// The pair shares a timestamp, so pruning one must take the other. A config
+// copy left behind would accumulate forever and still hold old credentials.
+func TestPrune_RemovesTheConfigCopyToo(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("api_key: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(&fakeDB{}, dir, cfg, time.Hour, 1)
+
+	var paths []string
+	for i := 0; i < 3; i++ {
+		p, err := r.RunOnce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+		time.Sleep(1100 * time.Millisecond) // stamps are second-granular
+	}
+
+	yamls, err := filepath.Glob(filepath.Join(dir, "*"+configSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(yamls) != 1 {
+		t.Errorf("%d config copies left after pruning to 1 snapshot, want 1", len(yamls))
 	}
 }

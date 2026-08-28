@@ -634,6 +634,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A snapshot now covers both stores, and is readable only by its owner.**
+  Backups protected the database and nothing else, while the file that actually
+  matters was never copied: `config.yaml` holds every setting, both provider API
+  keys, the AcerviNode API key and every login account. Restoring a snapshot
+  recovered your download history and left you locked out with no credentials.
+
+  Each snapshot is now a pair sharing one timestamp —
+  `acervinode-<stamp>.db` and `acervinode-<stamp>.yaml` — pruned together. A
+  separate file rather than an archive keeps `VACUUM INTO`'s consistent-snapshot
+  property for the database, leaves both halves directly usable without
+  unpacking, and makes a restore two copies rather than a tool. It also lets the
+  halves be restored independently, which is usually what you want: recover a
+  lost history without reverting settings changed since.
+
+  Both are written `0600`. `VACUUM INTO` creates its file under the process
+  umask, so snapshots had been **world-readable** — tolerable for download
+  history, not for a copy of your credentials.
+
+
 - **Backups are now opt-in.** `backup_interval_hours` defaults to `0`; set a
   value to enable them. Previously the one retention setting that defaulted to
   on, on the reasoning that doing nothing here is the only case with a cost —
@@ -754,6 +773,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **Documentation claimed backups protected things they did not contain.** Four
+  documents said a snapshot held "every login account and session". The live
+  database has six tables — `downloads`, `download_files`, `deleted_downloads`,
+  `discovery_baseline`, `discovery_seeded`, `schema_migrations` — and no
+  migration ever created a users or sessions table. Accounts live in
+  `config.yaml`; sessions are in memory and are never written anywhere at all.
+
+  `docs/api.md` justified a real security decision — never serving snapshot
+  contents over the API — with a reason that was not true. The decision stands;
+  the reason now matches what a snapshot actually holds.
+
+  `docs/installation.md` was the one document that had it right ("`config.yaml`
+  is a separate file and is not part of the snapshot"), which the change above
+  made wrong. Rewritten with the two-file restore.
+
 
 - **A frequently-restarted instance never backed up at all.** The scheduler
   waited a full interval from *process start* and deliberately never backed up

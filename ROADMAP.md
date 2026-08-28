@@ -115,7 +115,7 @@ this unattended. Recommendations first.
   care if we lose database"), on the reasoning that re-discovery would
   re-adopt anything still sitting on the provider. What changed that: the
   database stopped being only a download cache. Since Phase 9 it also holds
-  every login account and session, plus categories, path overrides and all
+  every login account, plus categories, path overrides and all
   live settings — none of which any provider can hand back. Losing it now
   means losing the way in, not just the history.
 
@@ -133,7 +133,7 @@ this unattended. Recommendations first.
   backed up at startup, so a restart loop can't flush good snapshots out of
   the window. `GET`/`POST /api/v1/settings/backups` plus a Settings → Backup
   tab; the API returns names and sizes but never a snapshot's contents,
-  since one holds every account and session. Restore is manual and
+  since one holds every account and both provider keys. Restore is manual and
   documented. Live-verified: retention pruned 4 to the newest 2, the
   interval retuned without a restart, and a restored snapshot opened clean
   with its rows intact.

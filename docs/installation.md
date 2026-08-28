@@ -181,10 +181,25 @@ identity, same as any other service.
 
 ## Backups and restore
 
-AcerviNode keeps everything it knows in one SQLite file — configuration,
-download history, categories, login accounts and sessions. It snapshots that
-file to `<data_dir>/backups` every `backup_interval_hours` (24 by default),
-keeping the newest `backup_keep` (7 by default). Under the packaged systemd
+AcerviNode keeps what it knows in **two** files, and a snapshot is a copy of
+both:
+
+| File | Holds |
+| --- | --- |
+| `<data_dir>/acervinode.db` | Download history, per-file records, discovery state |
+| `config.yaml` | Every setting, both provider API keys, the AcerviNode API key, and every login account |
+
+Only the second is hard to reconstruct, which is why both are copied. A
+snapshot of the database alone would restore your history and leave you locked
+out with no provider credentials. (Login *sessions* are held in memory and
+never written anywhere — a restart signs everyone out, restore or no restore.)
+
+Each snapshot is therefore a pair sharing one timestamp —
+`acervinode-<stamp>.db` and `acervinode-<stamp>.yaml` — written to
+`<data_dir>/backups` every `backup_interval_hours` (**opt-in**; set a value to
+enable it), keeping the newest `backup_keep` (7 by default). Both files are
+written `0600`, readable only by the user AcerviNode runs as, and the pair is
+pruned together. Under the packaged systemd
 unit that resolves to `/var/lib/acervinode/backups`, which the unit's
 `ReadWritePaths` already covers.
 
@@ -208,20 +223,34 @@ anyway.
 sudo systemctl stop acervinode
 # Keep the current file rather than overwriting it outright.
 sudo mv /var/lib/acervinode/acervinode.db /var/lib/acervinode/acervinode.db.bak
-sudo cp /var/lib/acervinode/backups/acervinode-20260824-001259.db         /var/lib/acervinode/acervinode.db
+sudo cp /var/lib/acervinode/backups/acervinode-20260824-001259.db \
+        /var/lib/acervinode/acervinode.db
 sudo chown acervinode:acervinode /var/lib/acervinode/acervinode.db
+
+# The config half of the same snapshot. Skip this to keep your current
+# settings and restore only the download history.
+sudo cp /etc/acervinode/config.yaml /etc/acervinode/config.yaml.bak
+sudo cp /var/lib/acervinode/backups/acervinode-20260824-001259.yaml \
+        /etc/acervinode/config.yaml
+sudo chown acervinode:acervinode /etc/acervinode/config.yaml
+sudo chmod 600 /etc/acervinode/config.yaml
+
 sudo systemctl start acervinode
 ```
 
 Two things worth knowing before you do:
 
-- **The snapshot carries its own accounts and sessions.** Restoring an older
-  one restores the logins as they were then — a user added since will be gone,
-  and a password changed since reverts. Treat a snapshot as the credential
-  material it is when copying it off the box.
-- **`config.yaml` is a separate file** and is not part of the snapshot. A
-  restore brings back the database, not `/etc/acervinode/config.yaml`; back
-  that up alongside it if you want the pair.
+- **The two halves can be restored independently, and often should be.** The
+  database is the download history; the config is your settings, keys and
+  logins. Restoring only the `.db` recovers a lost history without reverting
+  settings you have changed since — which is usually what you want.
+- **Restoring the config half reverts your logins to that moment.** A user
+  added since will be gone and a password changed since reverts, because those
+  live in that file. It also restores the provider keys as they were, so a key
+  you have rotated since would go back to the old one.
+- **A snapshot is credential material.** The `.yaml` half is a plaintext copy
+  of both provider API keys and every password hash. Treat it exactly as you
+  would `config.yaml` itself when copying it anywhere.
 
 Copy snapshots somewhere off the machine if they are meant to survive losing
 it — the API lists names and sizes but deliberately never serves a snapshot's

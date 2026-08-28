@@ -43,7 +43,12 @@ type Runner struct {
 	dir string
 
 	mu       sync.Mutex
-	interval time.Duration
+	// configPath is the config file copied alongside each snapshot. It, not
+	// the database, holds the provider keys, the API key and every login
+	// account, so a snapshot without it restores the download history and
+	// leaves you locked out. Empty disables the copy.
+	configPath string
+	interval   time.Duration
 	keep     int
 
 	// changed carries a new interval to Run, so a settings change retunes
@@ -54,10 +59,11 @@ type Runner struct {
 
 // New builds a Runner. interval of 0 disables scheduled backups entirely;
 // manual ones still work. keep is how many snapshots to retain.
-func New(db snapshotter, dir string, interval time.Duration, keep int) *Runner {
+func New(db snapshotter, dir, configPath string, interval time.Duration, keep int) *Runner {
 	return &Runner{
-		db:       db,
-		dir:      dir,
+		db:         db,
+		dir:        dir,
+		configPath: configPath,
 		interval: interval,
 		keep:     keep,
 		changed:  make(chan time.Duration, 1),
@@ -183,6 +189,18 @@ func (r *Runner) RunOnce(ctx context.Context) (string, error) {
 	if err := r.db.BackupTo(ctx, path); err != nil {
 		return "", err
 	}
+	// VACUUM INTO creates the file under the process umask, which leaves it
+	// world-readable on a normal install. A snapshot carries the whole
+	// download history, and the config beside it carries credentials, so
+	// neither has any business being readable by anyone else.
+	if err := os.Chmod(path, snapshotMode); err != nil {
+		slog.Warn("backup: could not restrict snapshot permissions", "path", path, "error", err)
+	}
+	if err := r.copyConfig(name); err != nil {
+		// Logged, not fatal, and no reason to discard the database snapshot
+		// that just succeeded: half a backup beats none.
+		slog.Error("backup: config copy failed", "error", err)
+	}
 	slog.Info("backup: snapshot written", "path", path)
 
 	// Pruned after a successful write, never before: trimming first would
@@ -191,6 +209,39 @@ func (r *Runner) RunOnce(ctx context.Context) (string, error) {
 		slog.Error("backup: prune failed", "error", err)
 	}
 	return path, nil
+}
+
+// snapshotMode keeps a snapshot readable only by the user that wrote it.
+const snapshotMode = 0o600
+
+// configSuffix names the config copy sitting beside a snapshot. It shares
+// the snapshot timestamp, so the pair is obvious and prunes together.
+const configSuffix = ".yaml"
+
+// copyConfig writes the config file alongside the snapshot of the same
+// moment.
+//
+// A separate file rather than an archive: it keeps VACUUM INTO's
+// consistent-snapshot property for the database, leaves both halves
+// directly usable without unpacking anything, and makes a restore two
+// copies rather than a tool.
+func (r *Runner) copyConfig(snapshotName string) error {
+	if r.configPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(r.configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Running entirely from environment variables is legitimate.
+			return nil
+		}
+		return fmt.Errorf("read config: %w", err)
+	}
+	dest := filepath.Join(r.dir, strings.TrimSuffix(snapshotName, fileSuffix)+configSuffix)
+	if err := os.WriteFile(dest, data, snapshotMode); err != nil {
+		return fmt.Errorf("write config copy: %w", err)
+	}
+	return nil
 }
 
 // Snapshot is one backup file on disk.
@@ -245,6 +296,11 @@ func (r *Runner) prune() error {
 		return err
 	}
 	for _, s := range snaps[min(keep, len(snaps)):] {
+		// The config copy shares this snapshot's stamp and goes with it.
+		cfgCopy := strings.TrimSuffix(s.Path, fileSuffix) + configSuffix
+		if err := os.Remove(cfgCopy); err != nil && !os.IsNotExist(err) {
+			slog.Warn("backup: could not remove config copy", "path", cfgCopy, "error", err)
+		}
 		if err := os.Remove(s.Path); err != nil {
 			return fmt.Errorf("remove old backup %s: %w", s.Name, err)
 		}

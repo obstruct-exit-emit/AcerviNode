@@ -140,11 +140,13 @@ the storage layer.
 - SQLite (pure Go, no cgo) — one `downloads` table shared by both shims, tracking
   every add from `queued` through `ready_for_import`
 - Embedded, ordered migrations
-- **Automatic backups, opt-in** — everything AcerviNode knows (config,
-  history, categories, login accounts) lives in that one file, and no provider
-  can hand any of it back, so setting `backup_interval_hours` is worth doing.
-  Off until you do: a snapshot is a copy of every account and session, which is
-  a decision to make rather than inherit. Once on it keeps the last 7. Taken with SQLite's own consistent-snapshot
+- **Automatic backups, opt-in** — a snapshot is a pair: the SQLite database
+  (download history) and a copy of `config.yaml` (every setting, both provider
+  keys, and every login account). The second is the one nothing else can hand
+  back, so setting `backup_interval_hours` is worth doing. Off until you do,
+  because that half is a plaintext copy of your credentials and writing one on
+  a schedule should be a decision. Both files are written `0600`, and the pair
+  prunes together; the newest 7 are kept. Taken with SQLite's own consistent-snapshot
   support, so they're safe to take while it's running and open cleanly on their
   own — see [Backups and restore](docs/installation.md#backups-and-restore)
 
