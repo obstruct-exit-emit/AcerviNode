@@ -166,11 +166,11 @@ Worth reading before you install it, so nothing here is a surprise later.
   disk before an \*arr app imports it. Nothing here presents the provider as a
   filesystem, so **you need disk space for everything you download**, and an
   import waits for the whole file rather than starting instantly. This is the
-  single biggest difference from decypharr — which serves its libraries
-  instead, through a virtual filesystem (its own, or rclone, or WebDAV) plus
-  read-only NFS and SMB — and it is a design choice —
-  the cost is disk and latency, the benefit is no `/dev/fuse`, no `SYS_ADMIN`,
-  no mount propagation, and nothing to unwedge when a mount goes stale.
+  single biggest difference from decypharr, which serves its libraries instead
+  through a virtual filesystem (its own, or rclone, or WebDAV) plus read-only
+  NFS and SMB. It is a design choice: the cost is disk and latency, the benefit
+  is no `/dev/fuse`, no `SYS_ADMIN`, no mount propagation, and nothing to
+  unwedge when a mount goes stale.
 - **No Docker image.** Packaged as a Linux tarball with a systemd unit. The
   binary itself is portable, but the supported install story is
   Linux + systemd.
