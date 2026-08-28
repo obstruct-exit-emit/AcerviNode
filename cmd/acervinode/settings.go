@@ -850,6 +850,30 @@ func (s *liveSettings) DeleteBackup(name string) error {
 	return runner.Delete(name)
 }
 
+// RestoreBackup implements api.Settings.
+//
+// Stages the snapshot and restarts. Only the database half is restored: the
+// config half carries the API key and every login, so replacing it would sign
+// out the session asking for it and change the credential the request
+// authenticated with. That stays a shell job -- see restore.go.
+func (s *liveSettings) RestoreBackup(ctx context.Context, name string) error {
+	s.mu.Lock()
+	runner, dataDir := s.backups, s.cfg.DataDir
+	s.mu.Unlock()
+	if runner == nil {
+		return fmt.Errorf("backups are not running")
+	}
+	path, err := runner.Path(name)
+	if err != nil {
+		return err
+	}
+	if err := stageRestore(path, dataDir); err != nil {
+		return fmt.Errorf("stage restore: %w", err)
+	}
+	slog.Info("restore: snapshot staged, restarting to apply", "snapshot", name)
+	return s.RequestRestart(ctx)
+}
+
 // ProviderTypes lists the provider implementations this build can
 // construct, for the settings UI's "add a provider" picker — a name is free
 // text, but the type has to be one of these.

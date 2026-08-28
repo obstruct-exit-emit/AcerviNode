@@ -628,6 +628,15 @@ export function runBackup(apiKey: string): Promise<{ name: string }> {
 // deleteBackup removes one snapshot and the config copy beside it. The name is
 // encoded because it lands in the path; the server validates it against the
 // shape it writes regardless, and refuses anything else before touching disk.
+// restoreBackup stages a snapshot and restarts to apply it, so this resolves
+// while the server is on its way down — the UI has to expect a disconnect.
+// Only the database is restored; the config half stays put deliberately.
+export function restoreBackup(apiKey: string, name: string): Promise<{ status: string }> {
+  return request(`/api/v1/settings/backups/${encodeURIComponent(name)}/restore`, apiKey, {
+    method: 'POST',
+  })
+}
+
 export function deleteBackup(apiKey: string, name: string): Promise<void> {
   return request(`/api/v1/settings/backups/${encodeURIComponent(name)}`, apiKey, {
     method: 'DELETE',

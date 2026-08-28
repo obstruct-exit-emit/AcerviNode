@@ -64,3 +64,29 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete backup: "+err.Error(), http.StatusInternalServerError)
 	}
 }
+
+// handleRestoreBackup implements POST /api/v1/settings/backups/{name}/restore.
+//
+// Returns 202, not 200: the restore has been *staged*, not performed. SQLite
+// will not have its file swapped under an open connection, so the snapshot is
+// put in place for the next startup and the service restarts itself. By the
+// time a client could read this response the process is already going down.
+//
+// Only the database half is restored. The config half holds the API key and
+// every login, so replacing it would sign out the session that asked and
+// invalidate the credential the request authenticated with — that one stays a
+// deliberate act at a shell, and the snapshot's .yaml sits ready for it.
+func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
+	err := s.settings.RestoreBackup(r.Context(), r.PathValue("name"))
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, map[string]string{"status": "restarting to apply the restore"})
+	case errors.Is(err, backup.ErrNotASnapshot):
+		http.Error(w, "not a snapshot name", http.StatusBadRequest)
+	case errors.Is(err, os.ErrNotExist):
+		http.Error(w, "no such snapshot", http.StatusNotFound)
+	default:
+		http.Error(w, "failed to restore backup: "+err.Error(), http.StatusInternalServerError)
+	}
+}

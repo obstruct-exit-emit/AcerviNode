@@ -67,6 +67,14 @@ func run(ctx context.Context) error {
 	if err := os.MkdirAll(cfg.DownloadDir, 0o755); err != nil {
 		return fmt.Errorf("create download dir: %w", err)
 	}
+	// Before anything opens the database: a restore staged by the previous
+	// run is applied here, while nothing holds a connection to swap out from
+	// under. See restore.go.
+	if err := applyPendingRestore(cfg.DataDir); err != nil {
+		slog.Error("failed to apply a staged restore", "error", err)
+		os.Exit(1)
+	}
+
 	db, err := database.Open(cfg.DataDir + "/acervinode.db")
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)

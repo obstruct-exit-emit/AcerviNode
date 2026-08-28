@@ -1333,6 +1333,46 @@ table.downloads tbody tr:hover {
   font-size: 12.5px;
 }
 
+/* One snapshot per row: when and what on the left, actions hard right on the
+   same line. Deliberately not .detail-meta — that is a two-column grid shared
+   with the download detail view, and a cell there is too narrow to hold the
+   name and two buttons without wrapping them onto their own line. */
+.backup-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.backup-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.backup-when {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex: none;
+}
+
+/* Takes the slack, which is what pushes the buttons to the right edge. */
+.backup-detail {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+  flex: 1;
+  min-width: 0;
+}
+
+.backup-list .link-button {
+  flex: none;
+}
+
 .account-status {
   margin-top: 16px;
 }

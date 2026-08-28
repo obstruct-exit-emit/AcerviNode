@@ -173,6 +173,8 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 
 type fakeSettings struct {
 	deletedBackup   string
+	restoredBackup  string
+	restoreBackupErr error
 	deleteBackupErr error
 	base32Infohashes   bool
 	managedAddDefaults ManagedAddOptions
@@ -381,6 +383,11 @@ func (f *fakeSettings) RunBackupNow(context.Context) (string, error) {
 }
 
 func (f *fakeSettings) Backups() ([]BackupInfo, error) { return f.backups, nil }
+
+func (f *fakeSettings) RestoreBackup(_ context.Context, name string) error {
+	f.restoredBackup = name
+	return f.restoreBackupErr
+}
 
 func (f *fakeSettings) DeleteBackup(name string) error {
 	f.deletedBackup = name

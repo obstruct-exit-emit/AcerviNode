@@ -60,6 +60,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Restore a snapshot from Settings → Backup**, and the snapshot rows now put
+  their actions on one line, right-aligned.
+
+  Restoring cannot happen in place: SQLite will not have its file swapped under
+  an open connection, and this process holds one for its whole life. So the
+  snapshot is staged and AcerviNode restarts to apply it *before* anything opens
+  the database — the window where the file is replaced is one in which nothing
+  is reading it. The endpoint returns `202`, because the restore has been
+  scheduled rather than performed.
+
+  The database it replaces is kept as `acervinode.db.pre-restore`. The `-wal`
+  and `-shm` sidecars are cleared, since they belong to the database being
+  replaced and would be read as the restored one's — a corrupt pairing that
+  looks exactly like data loss.
+
+  **Only the database half is restored.** The config half holds the API key and
+  every login, so replacing it would sign out the session that asked and
+  invalidate the credential the request authenticated with. That stays a shell
+  job; the snapshot's `.yaml` is on disk for it.
+
+  Verified live: restoring an older snapshot took the download count from 1 to
+  5, kept the previous database aside, and left the same API key working — then
+  the pre-restore database was put back.
+
+
 - **Delete a snapshot from Settings → Backup.** A per-snapshot Delete button,
   behind a confirm like every other destructive action there, backed by
   `DELETE /api/v1/settings/backups/{name}`. Both halves go together — the
@@ -792,6 +817,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is a `git` revert away if Web Downloads ever grows link validation.
 
 ### Fixed
+
+- **A shared guard shipped calling itself.** Factoring the snapshot-name
+  validation out of `Delete` so `Path` could reuse it replaced the wrong
+  occurrence: the new `validateName` got the call, not the body, so it recursed
+  until the stack gave out. It reached the live service and crashed it on the
+  first restore attempt.
+
+  The tests did not catch it, and the reason is the lesson. `Delete` still had
+  its own inlined copy of the guard, so every `Delete` test passed throughout.
+  `Path` was the recursive path, and it had been added with **no test at all** —
+  so the only thing exercising it was production. It has tests now, and they
+  fail outright on the recursive version.
+
 
 - **Documentation claimed backups protected things they did not contain.** Four
   documents said a snapshot held "every login account and session". The live

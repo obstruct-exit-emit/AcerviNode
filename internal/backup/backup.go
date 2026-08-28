@@ -245,6 +245,33 @@ func (r *Runner) copyConfig(snapshotName string) error {
 	return nil
 }
 
+// Path resolves a snapshot name to its file, applying the same validation
+// Delete does. Exported so a caller that needs to read a snapshot -- restoring
+// one, say -- cannot skip the checks by joining the path itself.
+func (r *Runner) Path(name string) (string, error) {
+	if err := validateName(name); err != nil {
+		return "", err
+	}
+	path := filepath.Join(r.dir, name)
+	if _, err := os.Stat(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// validateName is the guard shared by everything taking a snapshot name from
+// outside. See Delete for why a prefix and suffix check is not enough.
+func validateName(name string) error {
+	if !isSnapshotName(name) || name != filepath.Base(name) {
+		return ErrNotASnapshot
+	}
+	stamp := strings.TrimSuffix(strings.TrimPrefix(name, filePrefix), fileSuffix)
+	if _, err := time.Parse(timeLayout, stamp); err != nil {
+		return ErrNotASnapshot
+	}
+	return nil
+}
+
 // ErrNotASnapshot rejects a name that is not one this package wrote.
 var ErrNotASnapshot = errors.New("not a snapshot name")
 
@@ -263,12 +290,8 @@ var ErrNotASnapshot = errors.New("not a snapshot name")
 // mistakes -- one against a name that is not ours, one against a path that is
 // not here -- and only one of them would survive someone loosening the format.
 func (r *Runner) Delete(name string) error {
-	if !isSnapshotName(name) || name != filepath.Base(name) {
-		return ErrNotASnapshot
-	}
-	stamp := strings.TrimSuffix(strings.TrimPrefix(name, filePrefix), fileSuffix)
-	if _, err := time.Parse(timeLayout, stamp); err != nil {
-		return ErrNotASnapshot
+	if err := validateName(name); err != nil {
+		return err
 	}
 
 	path := filepath.Join(r.dir, name)

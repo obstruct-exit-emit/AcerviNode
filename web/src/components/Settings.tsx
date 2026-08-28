@@ -7,6 +7,7 @@ import {
   getBackups,
   getProviderSettings,
   deleteBackup,
+  restoreBackup,
   runBackup,
   removeProvider,
   getStatus,
@@ -513,6 +514,26 @@ export function Settings({ apiKey }: Props) {
       await deleteBackup(apiKey, name)
       setBackupStatus({ kind: 'idle' })
       setBackups(await getBackups(apiKey))
+    } catch (err) {
+      setBackupStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
+    }
+  }
+
+  // Restores the database only, and says so: the snapshot's config half holds
+  // the API key and every login, and swapping that would sign you out mid-
+  // request. The confirm spells out both what comes back and what does not.
+  async function handleRestoreBackup(name: string) {
+    if (
+      !confirm(
+        `Restore ${name}? Your download history is replaced by this snapshot's, and AcerviNode restarts to apply it — the page will disconnect briefly. The current database is kept as acervinode.db.pre-restore rather than discarded. Settings, provider keys and login accounts are NOT restored; the snapshot's config copy is on disk if you want those too.`,
+      )
+    ) {
+      return
+    }
+    setBackupStatus({ kind: 'saving' })
+    try {
+      await restoreBackup(apiKey, name)
+      setBackupStatus({ kind: 'error', message: 'Restoring — AcerviNode is restarting. Reload in a few seconds.' })
     } catch (err) {
       setBackupStatus({ kind: 'error', message: err instanceof ApiError ? err.message : String(err) })
     }
@@ -1510,24 +1531,32 @@ export function Settings({ apiKey }: Props) {
           {backups.length === 0 ? (
             <p className="settings-help">No snapshots yet.</p>
           ) : (
-            <dl className="detail-meta">
+            <ul className="backup-list">
               {backups.map((b) => (
-                <Fragment key={b.name}>
-                  <dt>{new Date(b.taken_at).toLocaleString()}</dt>
-                  <dd>
-                    {formatBytes(b.size_bytes)} · <code>{b.name}</code>{' '}
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => handleDeleteBackup(b.name)}
-                      disabled={backupStatus.kind === 'saving'}
-                    >
-                      Delete
-                    </button>
-                  </dd>
-                </Fragment>
+                <li key={b.name}>
+                  <span className="backup-when">{new Date(b.taken_at).toLocaleString()}</span>
+                  <span className="backup-detail">
+                    {formatBytes(b.size_bytes)} · <code>{b.name}</code>
+                  </span>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => handleDeleteBackup(b.name)}
+                    disabled={backupStatus.kind === 'saving'}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => handleRestoreBackup(b.name)}
+                    disabled={backupStatus.kind === 'saving'}
+                  >
+                    Restore
+                  </button>
+                </li>
               ))}
-            </dl>
+            </ul>
           )}
         </section>
       )}

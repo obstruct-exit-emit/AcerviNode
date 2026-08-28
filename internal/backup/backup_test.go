@@ -574,3 +574,47 @@ func TestDelete_ToleratesAMissingConfigCopy(t *testing.T) {
 		t.Errorf("Delete() error = %v, want a lone snapshot to delete cleanly", err)
 	}
 }
+
+// Path had no test when it was added, and shipped calling itself instead of
+// the guard it was meant to share with Delete. Delete's own tests passed
+// throughout, because Delete still had the guard inlined -- so the crash only
+// appeared on the live service, on the one path nothing exercised.
+func TestPath_ResolvesASnapshot(t *testing.T) {
+	dir := t.TempDir()
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
+	written, err := r.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.Path(filepath.Base(written))
+	if err != nil {
+		t.Fatalf("Path() error = %v", err)
+	}
+	if got != written {
+		t.Errorf("Path() = %q, want %q", got, written)
+	}
+}
+
+func TestPath_AppliesTheSameGuardAsDelete(t *testing.T) {
+	dir := t.TempDir()
+	r := New(&fakeDB{}, dir, "", time.Hour, 7)
+	for _, name := range []string{
+		"acervinode-../../etc/shadow.db",
+		"../acervinode-20260101-000000.db",
+		"acervinode-notatimestamp.db",
+		"config.yaml",
+		"",
+	} {
+		if _, err := r.Path(name); !errors.Is(err, ErrNotASnapshot) {
+			t.Errorf("Path(%q) error = %v, want ErrNotASnapshot", name, err)
+		}
+	}
+}
+
+func TestPath_MissingSnapshotReportsNotExist(t *testing.T) {
+	r := New(&fakeDB{}, t.TempDir(), "", time.Hour, 7)
+	if _, err := r.Path("acervinode-20260101-000000.db"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Path() error = %v, want not-exist", err)
+	}
+}

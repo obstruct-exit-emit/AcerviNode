@@ -214,10 +214,16 @@ Take one on demand from **Settings → Backup**, or:
 curl -X POST http://localhost:7846/api/v1/settings/backups   -H "Authorization: Bearer $ACERVINODE_API_KEY"
 ```
 
-**Restoring is deliberately manual.** There is no restore endpoint: putting a
-different database under a running process is not something to trigger from a
-web button by accident, and the correct sequence involves stopping the service
-anyway.
+**Restoring the database** is available from **Settings → Backup**, behind a
+confirm. It cannot happen in place — SQLite will not have its file swapped
+under an open connection — so the snapshot is staged and AcerviNode restarts to
+apply it before anything opens the database. The one it replaced is kept as
+`acervinode.db.pre-restore` rather than discarded.
+
+**Restoring the config half is still manual, and deliberately so.** It holds
+the API key and every login, so replacing it from a browser would sign out the
+session asking for it and change the credential the request authenticated with.
+Do it at a shell, below, if you want the settings and accounts back too.
 
 ```bash
 sudo systemctl stop acervinode

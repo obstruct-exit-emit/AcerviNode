@@ -380,6 +380,10 @@ type Settings interface {
 	// beside it. The name is validated against the shape the backup
 	// package writes rather than trusted, since it arrives from a URL.
 	DeleteBackup(name string) error
+	// RestoreBackup puts a snapshot back. The database cannot be swapped
+	// under a live connection, so this stages the file and restarts;
+	// the request returns before the restore has actually happened.
+	RestoreBackup(ctx context.Context, name string) error
 	// APIKey returns AcerviNode's own current API key — the live source of
 	// truth every authenticated route (native API and both compat shims)
 	// checks against, so a regenerated key takes effect everywhere at once.
@@ -601,6 +605,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/backups", s.requireAdmin(s.handleGetBackups))
 	s.mux.HandleFunc("POST /api/v1/settings/backups", s.requireAdmin(s.handleRunBackup))
 	s.mux.HandleFunc("DELETE /api/v1/settings/backups/{name}", s.requireAdmin(s.handleDeleteBackup))
+	s.mux.HandleFunc("POST /api/v1/settings/backups/{name}/restore", s.requireAdmin(s.handleRestoreBackup))
 	s.mux.HandleFunc("POST /api/v1/settings/providers", s.requireAdmin(s.handleAddProvider))
 	s.mux.HandleFunc("GET /api/v1/settings/provider-types", s.requireAdmin(s.handleGetProviderTypes))
 	s.mux.HandleFunc("DELETE /api/v1/settings/providers/{name}", s.requireAdmin(s.handleRemoveProvider))
