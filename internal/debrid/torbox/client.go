@@ -88,6 +88,10 @@ type Client struct {
 	apiKey         string
 	httpClient     *http.Client
 	requestTimeout time.Duration
+	// queued collapses one poll pass's worth of queued lookups into a
+	// single call. See queuedcache.go for why it is on the status path
+	// only and not the bulk listing.
+	queued queuedCache
 }
 
 // NewClient builds a Client authenticated with apiKey against the real

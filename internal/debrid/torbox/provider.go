@@ -57,7 +57,7 @@ func (p *Provider) Status(ctx context.Context, id debrid.ProviderDownloadID) (de
 	} else if t.ID != 0 {
 		return torrentToStatus(t), nil
 	}
-	if queued, err := p.client.ListQueued(ctx, "torrent"); err == nil {
+	if queued, err := p.client.listQueuedCached(ctx, "torrent"); err == nil {
 		for _, q := range queued {
 			if formatID(q.ID) == string(id) {
 				return queuedToStatus(q), nil

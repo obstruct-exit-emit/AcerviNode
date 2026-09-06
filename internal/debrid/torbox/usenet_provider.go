@@ -51,7 +51,7 @@ func (p *UsenetProvider) Status(ctx context.Context, id debrid.ProviderDownloadI
 	} else if d.ID != 0 {
 		return usenetToStatus(d), nil
 	}
-	if queued, err := p.client.ListQueued(ctx, "usenet"); err == nil {
+	if queued, err := p.client.listQueuedCached(ctx, "usenet"); err == nil {
 		for _, q := range queued {
 			if formatID(q.ID) == string(id) {
 				return queuedToStatus(q), nil
