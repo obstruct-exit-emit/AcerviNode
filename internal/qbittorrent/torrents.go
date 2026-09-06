@@ -16,7 +16,6 @@ import (
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
-	"time"
 )
 
 // handleAdd implements POST /api/v2/torrents/add. qBittorrent's real
@@ -177,7 +176,6 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	live := s.refreshFromProvider(ctx, rows)
 
 	wantHashes := splitFilter(r.URL.Query().Get("hashes"))
 	wantCategory := r.URL.Query().Get("category")
@@ -191,103 +189,20 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-		items = append(items, toTorrentInfo(d, live[liveKeyFor(d, s.registry.DefaultNameFor(debrid.KindTorrent))], fetchProgress, hasFetchProgress))
+		// Read, never fetch. Whatever internal/importer's last poll wrote is
+		// what an *arr app sees, however often it asks — see the package
+		// comment on why this shim is deliberately a wall.
+		live, _ := s.db.LiveStatus(d.ID)
+		items = append(items, toTorrentInfo(d, live, fetchProgress, hasFetchProgress))
 	}
 
 	writeJSON(w, items)
 }
 
-// liveTorrentInfo is the fast-moving, purely informational subset of a
-// provider's status that's never persisted to the database — read fresh on
-// every poll and attached to the response by toTorrentInfo, the same
-// treatment ETA always had, now shared with real qBittorrent's own swarm
-// visibility (num_seeds/num_leechs/dlspeed) once that was found to be
-// missing entirely (see debrid.DownloadStatus.Seeders's own doc comment).
-type liveTorrentInfo struct {
-	ETASeconds         int64
-	Seeders            int64
-	Leechers           int64
-	DownloadSpeedBytes int64
-}
 
-// listCachedProvider is the optional half of this shim's provider,
-// implemented by debrid's Dynamic*Provider wrapper — the same pointer
-// internal/importer holds. Going through it means one provider listing per
-// interval serves the importer and every connected *arr app at once,
-// instead of this handler fetching its own copy on every request. Optional
-// so a plain provider (this package's test fake) still works, fetching
-// directly as before.
-type listCachedProvider interface {
-	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
-}
 
-// refreshFromProvider syncs every row's local state against one provider
-// List() call — a single bulk request rather than one Status() call per row.
-// See database.RefreshFromProvider, which this and internal/importer's own
-// proactive background refresh both share, so an *arr app polling here still
-// gets the freshest possible view even between importer ticks. Also returns
-// each row's current liveTorrentInfo keyed by provider download ID.
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) map[liveKey]liveTorrentInfo {
-	// Grouped by provider: each account is listed once, and only about its
-	// own rows. Listing every registered provider regardless would ask
-	// accounts about downloads that aren't theirs and cost a request per
-	// provider even when nothing tracked belongs to it.
-	byProvider := map[string][]*database.Download{}
-	for _, d := range rows {
-		name := d.Provider
-		if name == "" {
-			name = s.registry.DefaultNameFor(debrid.KindTorrent)
-		}
-		byProvider[name] = append(byProvider[name], d)
-	}
 
-	live := map[liveKey]liveTorrentInfo{}
-	for name, group := range byProvider {
-		p := s.registry.Torrent(name)
-		if p == nil {
-			slog.Warn("qbittorrent: no provider available, skipping refresh", "provider", name, "downloads", len(group))
-			continue
-		}
-		statuses, fetchedAt, err := p.ListCached(ctx)
-		if err != nil {
-			slog.Error("qbittorrent: provider list failed", "provider", name, "error", err)
-			continue
-		}
-		// Deliberately no missing-detection: this runs on every *arr poll,
-		// with no rate-limit backoff and no view of whether the provider has
-		// been answering reliably. Concluding a download vanished is
-		// internal/importer's bulk pass's job — see database.RefreshOptions.
-		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt, database.RefreshOptions{})
-		for _, st := range statuses {
-			live[liveKey{provider: name, id: string(st.ID)}] = liveTorrentInfo{
-				ETASeconds:         st.ETASeconds,
-				Seeders:            st.Seeders,
-				Leechers:           st.Leechers,
-				DownloadSpeedBytes: st.DownloadSpeedBytes,
-			}
-		}
-	}
-	return live
-}
 
-// liveKey identifies one download's live status. Keyed by provider as well
-// as id: two providers can legitimately issue the same id, and merging them
-// into one map would let one account's numbers be reported for another's
-// download.
-type liveKey struct {
-	provider string
-	id       string
-}
-
-// liveKeyFor is d's key in the map refreshFromProvider returns, applying
-// the same empty-provider fallback the refresh itself used so the two agree.
-func liveKeyFor(d *database.Download, defaultProvider string) liveKey {
-	name := d.Provider
-	if name == "" {
-		name = defaultProvider
-	}
-	return liveKey{provider: name, id: d.ProviderDownloadID}
-}
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
 func (s *Server) handleProperties(w http.ResponseWriter, r *http.Request) {
@@ -491,7 +406,7 @@ type torrentFileInfo struct {
 // save_path either, so GetItems took the "use content_path" branch
 // anyway — using an empty path no completed Managed torrent could ever
 // actually import from.
-func toTorrentInfo(d *database.Download, live liveTorrentInfo, fetchProgress float64, hasFetchProgress bool) torrentInfo {
+func toTorrentInfo(d *database.Download, live database.LiveStatus, fetchProgress float64, hasFetchProgress bool) torrentInfo {
 	completionOn := int64(-1)
 	if d.CompletedAt != nil {
 		completionOn = d.CompletedAt.Unix()

@@ -40,7 +40,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return
 	}
-	s.refreshFromProvider(ctx, rows)
+	// No refresh: this shim reads what the poll last wrote and never
+	// reaches the provider itself. See the package comment.
 
 	slots := make([]historySlot, 0, len(rows))
 	for _, d := range rows {

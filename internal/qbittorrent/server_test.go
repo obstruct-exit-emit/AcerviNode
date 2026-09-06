@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -69,7 +70,30 @@ func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
-	return newTestServerWithSettings(t, staticAPIKey("test-api-key"))
+	ts, client, _ := newTestServerWithDB(t)
+	return ts, client
+}
+
+// newTestServerWithDB also hands back the database. Now that the shim never
+// reaches the provider, a test that wants a download's state to move has to
+// write it the way internal/importer's poll does.
+func newTestServerWithDB(t *testing.T) (*httptest.Server, *http.Client, *database.DB) {
+	t.Helper()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	srv := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey("test-api-key"))
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	return ts, &http.Client{Jar: jar}, db
 }
 
 func newTestServerWithSettings(t *testing.T, settings settingsSource) (*httptest.Server, *http.Client) {
@@ -95,7 +119,7 @@ func newTestServerWithSettings(t *testing.T, settings settingsSource) (*httptest
 // makes for its "Test" button, an add, repeated /info polling through a real
 // state transition, properties/files lookup, and delete.
 func TestSonarrCallSequence(t *testing.T) {
-	ts, client := newTestServer(t)
+	ts, client, db := newTestServerWithDB(t)
 
 	// /api/v2/torrents/info without a session must be rejected.
 	resp, err := client.Get(ts.URL + "/api/v2/torrents/info")
@@ -160,8 +184,24 @@ func TestSonarrCallSequence(t *testing.T) {
 
 	wantHash := "abcdef0123456789abcdef0123456789abcdef01"
 
-	// First /info poll: the fake provider's second Status/List call (the
-	// first happened synchronously during add) reports "downloading".
+	// The shim is a wall: polling it never reaches the provider, so state
+	// only moves when internal/importer's own poll has written it. Sonarr
+	// sees the last thing that poll recorded — which is the whole point, and
+	// is why this test now advances the row itself rather than expecting a
+	// poll to do it. Before the wall, the add's own provider call left the
+	// row "downloading" and this assertion passed by side effect.
+	advance := func(state string) {
+		t.Helper()
+		row, err := db.GetDownloadByHash(t.Context(), wantHash)
+		if err != nil || row == nil {
+			t.Fatalf("GetDownloadByHash() = %v, %v", row, err)
+		}
+		if err := db.UpdateDownloadStatus(t.Context(), row.ID, state, row.Progress, row.SizeBytes, nil, ""); err != nil {
+			t.Fatalf("UpdateDownloadStatus(%s) error = %v", state, err)
+		}
+	}
+	advance(database.StateDownloading)
+
 	items := getTorrentInfo(t, client, ts.URL)
 	if len(items) != 1 {
 		t.Fatalf("info after add = %d items, want 1", len(items))
@@ -176,10 +216,10 @@ func TestSonarrCallSequence(t *testing.T) {
 		t.Errorf("category = %q, want tv-sonarr", items[0].Category)
 	}
 
-	// Second /info poll: fake provider now reports completed, but that only
-	// maps to local "provider_completed" — still "downloading" to Sonarr,
-	// since internal/importer hasn't fetched the files to disk yet (that's
-	// exercised separately in internal/importer's own tests).
+	// provider_completed still reads as "downloading" to Sonarr: the files
+	// are on the provider but not yet fetched to disk, so it is not importable
+	// (internal/importer's own tests cover that half).
+	advance(database.StateProviderCompleted)
 	items = getTorrentInfo(t, client, ts.URL)
 	if len(items) != 1 || items[0].State != "downloading" {
 		t.Fatalf("state after second poll = %+v, want downloading (provider_completed, not yet imported)", items)
@@ -439,7 +479,7 @@ func TestHandleSetShareLimits_TopPrio_SetForceStart_AreAcceptedNoOps(t *testing.
 
 func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 	d := &database.Download{SavePath: "/downloads/tv-sonarr/Some.Release.Name"}
-	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+	info := toTorrentInfo(d, database.LiveStatus{}, 0, false)
 
 	if info.ContentPath != "/downloads/tv-sonarr/Some.Release.Name" {
 		t.Errorf("content_path = %q, want the real save path unchanged", info.ContentPath)
@@ -461,7 +501,7 @@ func TestToTorrentInfo_SplitsContentPathFromSavePath(t *testing.T) {
 // persists SavePath before marking ready_for_import).
 func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
 	d := &database.Download{SavePath: ""}
-	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+	info := toTorrentInfo(d, database.LiveStatus{}, 0, false)
 
 	if info.SavePath != "" || info.ContentPath != "" {
 		t.Errorf("save_path = %q, content_path = %q, want both empty", info.SavePath, info.ContentPath)
@@ -473,7 +513,7 @@ func TestToTorrentInfo_EmptySavePathStaysEmpty(t *testing.T) {
 // live status, found live to be entirely missing before this.
 func TestToTorrentInfo_ReportsSwarmInfo(t *testing.T) {
 	d := &database.Download{}
-	info := toTorrentInfo(d, liveTorrentInfo{Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117}, 0, false)
+	info := toTorrentInfo(d, database.LiveStatus{Seeders: 3, Leechers: 1, DownloadSpeedBytes: 191117}, 0, false)
 
 	if info.NumSeeds != 3 {
 		t.Errorf("num_seeds = %d, want 3", info.NumSeeds)
@@ -509,7 +549,7 @@ func TestQbtState_ReadyForImportReportsPausedUP(t *testing.T) {
 // own configured seed-ratio settings in Sonarr/Radarr.
 func TestToTorrentInfo_ReportsZeroRatioAlwaysSatisfyingSeedLimit(t *testing.T) {
 	d := &database.Download{}
-	info := toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+	info := toTorrentInfo(d, database.LiveStatus{}, 0, false)
 
 	if info.Ratio != 0 {
 		t.Errorf("ratio = %v, want 0", info.Ratio)
@@ -529,20 +569,20 @@ func TestToTorrentInfo_ReportsZeroRatioAlwaysSatisfyingSeedLimit(t *testing.T) {
 // keeps reporting d.Progress unchanged.
 func TestToTorrentInfo_SubstitutesFetchProgressWhileProviderCompleted(t *testing.T) {
 	d := &database.Download{State: database.StateProviderCompleted, Progress: 1.0}
-	info := toTorrentInfo(d, liveTorrentInfo{}, 0.42, true)
+	info := toTorrentInfo(d, database.LiveStatus{}, 0.42, true)
 	if info.Progress != 0.42 {
 		t.Errorf("Progress = %v, want 0.42 (live fetch progress substituted in)", info.Progress)
 	}
 
 	// No fetch progress currently tracked — falls back to d.Progress unchanged.
-	info = toTorrentInfo(d, liveTorrentInfo{}, 0, false)
+	info = toTorrentInfo(d, database.LiveStatus{}, 0, false)
 	if info.Progress != 1.0 {
 		t.Errorf("Progress = %v, want 1.0 (d.Progress, no fetch progress tracked yet)", info.Progress)
 	}
 
 	// A different state never substitutes, even with a fetch progress value in hand.
 	downloading := &database.Download{State: database.StateDownloading, Progress: 0.6}
-	info = toTorrentInfo(downloading, liveTorrentInfo{}, 0.9, true)
+	info = toTorrentInfo(downloading, database.LiveStatus{}, 0.9, true)
 	if info.Progress != 0.6 {
 		t.Errorf("Progress = %v, want 0.6 (d.Progress, StateDownloading never substitutes)", info.Progress)
 	}
@@ -636,8 +676,11 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 		name: "Some Release", size: 276445467, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d's current state/progress exactly
 	}
 
-	srv := &Server{registry: testRegistry(provider), db: db}
-	srv.refreshFromProvider(ctx, []*database.Download{d})
+	// Retargeted when the shims became read-only: the caller moved to
+	// internal/importer, but the backfill logic being guarded lives in
+	// database.RefreshFromProvider and is exercised directly here.
+	statuses, _ := provider.List(ctx)
+	db.RefreshFromProvider(ctx, []*database.Download{d}, statuses, time.Now().UTC(), database.RefreshOptions{})
 
 	got, err := db.GetDownloadByID(ctx, "dl-1")
 	if err != nil {
@@ -672,10 +715,15 @@ func TestHandleInfo_ReportsETAFromProvider(t *testing.T) {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
+	// ETA is fast-moving and never persisted, so it reaches the shim through
+	// the in-memory cache database.RefreshFromProvider fills — not from a
+	// provider call the shim makes itself, which it no longer does.
 	provider := newFakeProvider()
 	provider.entries["fake-eta"] = &fakeEntry{
 		name: "ETA Test", size: 1024, calls: 1, eta: 123,
 	}
+	statuses, _ := provider.List(ctx)
+	db.RefreshFromProvider(ctx, []*database.Download{d}, statuses, time.Now().UTC(), database.RefreshOptions{})
 
 	srv := &Server{registry: testRegistry(provider), db: db}
 	rec := httptest.NewRecorder()
@@ -690,7 +738,7 @@ func TestHandleInfo_ReportsETAFromProvider(t *testing.T) {
 		t.Fatalf("info = %d items, want 1", len(items))
 	}
 	if items[0].Eta != 123 {
-		t.Errorf("Eta = %d, want 123 (from provider)", items[0].Eta)
+		t.Errorf("Eta = %d, want 123 (from the cache the poll filled)", items[0].Eta)
 	}
 }
 
@@ -869,65 +917,16 @@ func testRegistryNamed(name string, p *fakeProvider) *debrid.Registry {
 	return r
 }
 
-// TestRefreshFromProvider_GroupsRowsByProvider covers the shim listing each
-// account once, about its own rows only. Two providers can legitimately
-// issue the same id, so the live-status map is keyed by provider as well —
-// merging on id alone would report one account's numbers for another's
-// download.
-func TestRefreshFromProvider_GroupsRowsByProvider(t *testing.T) {
-	ctx := context.Background()
-	db, err := database.Open(":memory:")
-	if err != nil {
-		t.Fatalf("database.Open() error = %v", err)
-	}
-	defer db.Close()
-
-	// Same provider-side id on both accounts, deliberately.
-	const sharedID = "shared-1"
-	alpha := newFakeProvider()
-	alpha.entries[sharedID] = &fakeEntry{name: "Alpha Release", size: 100, eta: 11, calls: 1}
-	beta := newFakeProvider()
-	beta.entries[sharedID] = &fakeEntry{name: "Beta Release", size: 200, eta: 22, calls: 1}
-
-	registry := debrid.NewRegistry()
-	for name, f := range map[string]*fakeProvider{"alpha": alpha, "beta": beta} {
-		d := debrid.NewDynamicTorrentProvider(name)
-		d.Set(f)
-		d.SetListCacheTTL(-1)
-		registry.Register(name, d, nil, nil)
-	}
-	srv := &Server{registry: registry, db: db}
-
-	rows := []*database.Download{}
-	for _, name := range []string{"alpha", "beta"} {
-		d := &database.Download{
-			ID: "dl-" + name, Provider: name, ProviderDownloadID: sharedID,
-			Kind: database.KindTorrent, Hash: "h-" + name, Name: name,
-			State: database.StateDownloading,
-		}
-		if err := db.InsertDownload(ctx, d); err != nil {
-			t.Fatalf("InsertDownload(%s) error = %v", name, err)
-		}
-		rows = append(rows, d)
-	}
-
-	live := srv.refreshFromProvider(ctx, rows)
-
-	got := live[liveKey{provider: "alpha", id: sharedID}]
-	if got.ETASeconds != 11 {
-		t.Errorf("alpha ETA = %d, want 11 — its own account's number", got.ETASeconds)
-	}
-	if got := live[liveKey{provider: "beta", id: sharedID}]; got.ETASeconds != 22 {
-		t.Errorf("beta ETA = %d, want 22 — its own account's number", got.ETASeconds)
-	}
-}
-
-// TestRefreshFromProvider_NeverFlagsDownloadsAsVanished is the shim half of
-// the fix. This refresh runs on every *arr poll, with no rate-limit backoff
-// and no view of whether the provider has been answering reliably, so a
-// listing that comes back short here must not be allowed to conclude that a
-// download is gone. That decision belongs to internal/importer's bulk pass.
-func TestRefreshFromProvider_NeverFlagsDownloadsAsVanished(t *testing.T) {
+// TestShimNeverCallsTheProvider is the wall. An *arr app polling this shim
+// must never be able to cause a provider request, however often it asks:
+// internal/importer's poll is the only thing that talks to the provider, and
+// whatever it last wrote is what Sonarr sees.
+//
+// This replaces an earlier test asserting the shim's own refresh never flagged
+// a download as vanished. That refresh no longer exists, so the property it
+// guarded is now structural — and this asserts the stronger thing it was
+// really protecting: no provider traffic driven by *arr polling at all.
+func TestShimNeverCallsTheProvider(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(":memory:")
 	if err != nil {
@@ -936,30 +935,32 @@ func TestRefreshFromProvider_NeverFlagsDownloadsAsVanished(t *testing.T) {
 	defer db.Close()
 
 	d := &database.Download{
-		ID: "dl-1", Provider: fakeProviderName, ProviderDownloadID: "gone-1",
+		ID: "dl-1", Provider: fakeProviderName, ProviderDownloadID: "p-1",
 		Kind: database.KindTorrent, Hash: "h1", Name: "Still There",
-		State: database.StateProviderCompleted, AddedVia: database.AddedViaManual,
+		State: database.StateDownloading, AddedVia: database.AddedViaManual,
 	}
 	if err := db.InsertDownload(ctx, d); err != nil {
 		t.Fatalf("InsertDownload() error = %v", err)
 	}
 
-	// The provider knows nothing about it — an empty listing, exactly what a
-	// degraded provider returns.
-	srv := &Server{registry: testRegistry(newFakeProvider()), db: db}
-	for i := 0; i < 5; i++ {
-		srv.refreshFromProvider(ctx, []*database.Download{d})
+	provider := newFakeProvider()
+	// The handler directly, not through the router: routed requests need a
+	// login first, and an unauthenticated 403 never reaches the handler at
+	// all -- which would make this pass without proving anything. Found by
+	// mutation: reintroducing a provider call did not fail the first version.
+	srv := &Server{registry: testRegistry(provider), db: db}
+
+	// Hammer it the way four *arr apps on short intervals would.
+	for i := 0; i < 50; i++ {
+		rec := httptest.NewRecorder()
+		srv.handleInfo(rec, httptest.NewRequest(http.MethodGet, "/api/v2/torrents/info", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("poll %d: status = %d", i, rec.Code)
+		}
 	}
 
-	got, err := db.GetDownloadByID(ctx, d.ID)
-	if err != nil {
-		t.Fatalf("GetDownloadByID() error = %v", err)
-	}
-	if got.MissingCount != 0 {
-		t.Errorf("missing_count = %d after 5 shim refreshes, want 0", got.MissingCount)
-	}
-	if got.State == database.StateError {
-		t.Errorf("download was flagged %q by a shim refresh, want it untouched", got.State)
+	if provider.listCalls != 0 {
+		t.Errorf("provider listed %d times from 50 *arr polls, want 0 -- the shim must read what the poll wrote, never fetch", provider.listCalls)
 	}
 }
 

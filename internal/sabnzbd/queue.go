@@ -1,101 +1,16 @@
 package sabnzbd
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
-	"github.com/acervinode/acervinode/internal/debrid"
 )
 
-// listCachedProvider is the optional half of this shim's provider,
-// implemented by debrid's Dynamic*Provider wrapper — the same pointer
-// internal/importer holds. Going through it means one provider listing per
-// interval serves the importer and every connected *arr app at once,
-// instead of this handler fetching its own copy on every request. Optional
-// so a plain provider (this package's test fake) still works, fetching
-// directly as before.
-type listCachedProvider interface {
-	ListCached(ctx context.Context) ([]debrid.DownloadStatus, time.Time, error)
-}
 
-// refreshFromProvider syncs every tracked usenet download's local state
-// against one provider List() call. See database.RefreshFromProvider, which
-// this and internal/importer's own proactive background refresh both share,
-// so an *arr app polling here still gets the freshest possible view even
-// between importer ticks. Also returns each row's current ETA and sub-phase
-// (see debrid.DownloadStatus.Phase), both keyed by provider download ID, and
-// totalSpeedBytes — the sum of every download's current speed, matching
-// real SABnzbd's own mode=queue shape: an aggregate speed across the whole
-// queue, not a per-item field (confirmed against SABnzbd's real API docs —
-// there is no per-slot speed in the real API to match even if AcerviNode
-// wanted one). All three are fast-moving, purely informational values the
-// provider recomputes on every call, so unlike state/progress/size none of
-// them are persisted to the database, just read fresh and attached to the
-// response here (see toQueueSlot/handleQueue).
-func (s *Server) refreshFromProvider(ctx context.Context, rows []*database.Download) (eta map[liveKey]int64, phase map[liveKey]string, totalSpeedBytes int64) {
-	// Grouped by provider: each account is listed once, and only about its
-	// own rows. Listing every registered provider regardless would ask
-	// accounts about downloads that aren't theirs and cost a request per
-	// provider even when nothing tracked belongs to it.
-	byProvider := map[string][]*database.Download{}
-	for _, d := range rows {
-		name := d.Provider
-		if name == "" {
-			name = s.registry.DefaultNameFor(debrid.KindUsenet)
-		}
-		byProvider[name] = append(byProvider[name], d)
-	}
 
-	eta = map[liveKey]int64{}
-	phase = map[liveKey]string{}
-	for name, group := range byProvider {
-		p := s.registry.Usenet(name)
-		if p == nil {
-			slog.Warn("sabnzbd: no provider available, skipping refresh", "provider", name, "downloads", len(group))
-			continue
-		}
-		statuses, fetchedAt, err := p.ListCached(ctx)
-		if err != nil {
-			slog.Error("sabnzbd: provider list failed", "provider", name, "error", err)
-			continue
-		}
-		// Deliberately no missing-detection: this runs on every *arr poll,
-		// with no rate-limit backoff and no view of whether the provider has
-		// been answering reliably. Concluding a download vanished is
-		// internal/importer's bulk pass's job — see database.RefreshOptions.
-		s.db.RefreshFromProvider(ctx, group, statuses, fetchedAt, database.RefreshOptions{})
-		for _, st := range statuses {
-			k := liveKey{provider: name, id: string(st.ID)}
-			eta[k] = st.ETASeconds
-			phase[k] = st.Phase
-			totalSpeedBytes += st.DownloadSpeedBytes
-		}
-	}
-	return eta, phase, totalSpeedBytes
-}
 
-// liveKey identifies one download's live status. Keyed by provider as well
-// as id: two providers can legitimately issue the same id, and merging them
-// into one map would let one account's numbers be reported for another's
-// download.
-type liveKey struct {
-	provider string
-	id       string
-}
-
-// liveKeyFor is d's key in the maps refreshFromProvider returns, applying
-// the same empty-provider fallback the refresh itself used so the two agree.
-func liveKeyFor(d *database.Download, defaultProvider string) liveKey {
-	name := d.Provider
-	if name == "" {
-		name = defaultProvider
-	}
-	return liveKey{provider: name, id: d.ProviderDownloadID}
-}
 
 type queueSlot struct {
 	NzoID      string `json:"nzo_id"`
@@ -127,15 +42,21 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return
 	}
-	eta, phase, totalSpeedBytes := s.refreshFromProvider(ctx, rows)
+	// Read, never fetch: whatever internal/importer's last poll wrote is what
+	// an *arr app sees, however often it asks. See the package comment.
+	var totalSpeedBytes int64
+	for _, d := range rows {
+		live, _ := s.db.LiveStatus(d.ID)
+		totalSpeedBytes += live.DownloadSpeedBytes
+	}
 
 	slots := make([]queueSlot, 0, len(rows))
 	for _, d := range rows {
 		switch d.State {
 		case database.StateQueued, database.StateDownloading, database.StateProviderCompleted:
 			fetchProgress, hasFetchProgress := s.db.FetchProgress(d.ID)
-			k := liveKeyFor(d, s.registry.DefaultNameFor(debrid.KindUsenet))
-			slots = append(slots, toQueueSlot(d, eta[k], phase[k], fetchProgress, hasFetchProgress))
+			live, _ := s.db.LiveStatus(d.ID)
+			slots = append(slots, toQueueSlot(d, live.ETASeconds, live.Phase, fetchProgress, hasFetchProgress))
 		}
 	}
 	// kbpersec is real SABnzbd's own aggregate-speed field, at the top of

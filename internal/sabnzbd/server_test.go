@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/acervinode/acervinode/internal/database"
 	"github.com/acervinode/acervinode/internal/debrid"
@@ -39,7 +40,25 @@ func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	return newTestServerWithSettings(t, staticAPIKey(testAPIKey))
+	ts, _ := newTestServerWithDB(t)
+	return ts
+}
+
+// newTestServerWithDB also hands back the database. Now that this shim never
+// reaches the provider, a test that wants state to move has to write it the
+// way internal/importer's poll does.
+func newTestServerWithDB(t *testing.T) (*httptest.Server, *database.DB) {
+	t.Helper()
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	srv := NewServer(testRegistry(newFakeProvider()), db, staticAPIKey(testAPIKey))
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return ts, db
 }
 
 func newTestServerWithSettings(t *testing.T, settings settingsSource) *httptest.Server {
@@ -72,7 +91,7 @@ type historyResponse struct {
 // makes for its "Test" button, an add, repeated /queue polling through a
 // real state transition, and finally seeing the item land in /history.
 func TestSonarrCallSequence(t *testing.T) {
-	ts := newTestServer(t)
+	ts, db := newTestServerWithDB(t)
 
 	// mode=version with a wrong apikey must be rejected.
 	resp, err := http.Get(ts.URL + "/api?mode=version&apikey=wrong")
@@ -152,7 +171,22 @@ func TestSonarrCallSequence(t *testing.T) {
 	}
 	nzoID := nzoIDs[0].(string)
 
-	// First /queue poll: fake provider's second call reports "downloading".
+	// The shim is a wall: polling it never reaches the provider, so state only
+	// moves when internal/importer's own poll has written it. Sonarr sees the
+	// last thing that poll recorded. Before the wall this advanced as a side
+	// effect of the shim's own fetch, which is exactly what was removed.
+	advance := func(state string) {
+		t.Helper()
+		row, err := db.GetDownloadByID(t.Context(), nzoID)
+		if err != nil || row == nil {
+			t.Fatalf("GetDownloadByID() = %v, %v", row, err)
+		}
+		if err := db.UpdateDownloadStatus(t.Context(), row.ID, state, row.Progress, row.SizeBytes, nil, ""); err != nil {
+			t.Fatalf("UpdateDownloadStatus(%s) error = %v", state, err)
+		}
+	}
+	advance(database.StateDownloading)
+
 	queue := getQueue(t, ts.URL)
 	if len(queue.Queue.Slots) != 1 {
 		t.Fatalf("queue after add = %d slots, want 1", len(queue.Queue.Slots))
@@ -176,6 +210,7 @@ func TestSonarrCallSequence(t *testing.T) {
 	// importer (not wired into this shim-only test, see internal/importer's
 	// own tests) is what actually fetches the files to disk and moves it to
 	// history.
+	advance(database.StateProviderCompleted)
 	queue = getQueue(t, ts.URL)
 	if len(queue.Queue.Slots) != 1 || queue.Queue.Slots[0].Status != "Moving" {
 		t.Fatalf("queue after provider-completion = %+v, want one Moving slot (provider_completed, not yet imported)", queue.Queue.Slots)
@@ -465,8 +500,10 @@ func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *t
 		name: "Some NZB Release", size: 987654321, calls: 1, // calls=1 -> List() sees calls=2 -> "downloading"/0.5, matching d exactly
 	}
 
-	srv := &Server{registry: testRegistry(provider), db: db}
-	srv.refreshFromProvider(ctx, []*database.Download{d})
+	// Retargeted when the shims became read-only — the logic under test
+	// lives in database.RefreshFromProvider, which the importer now owns.
+	statuses, _ := provider.List(ctx)
+	db.RefreshFromProvider(ctx, []*database.Download{d}, statuses, time.Now().UTC(), database.RefreshOptions{})
 
 	got, err := db.GetDownloadByID(ctx, "dl-1")
 	if err != nil {
@@ -502,6 +539,11 @@ func TestHandleQueue_ReportsTimeLeftFromProvider(t *testing.T) {
 		name: "ETA Test", size: 1024, calls: 1, eta: 754, // 754s = 0:12:34
 	}
 
+	// ETA is never persisted — it reaches the shim through the in-memory
+	// cache database.RefreshFromProvider fills, not a call the shim makes.
+	statuses, _ := provider.List(ctx)
+	db.RefreshFromProvider(ctx, []*database.Download{d}, statuses, time.Now().UTC(), database.RefreshOptions{})
+
 	srv := &Server{registry: testRegistry(provider), db: db, categories: newCategoryStore()}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil)
@@ -533,6 +575,7 @@ func TestHandleQueue_ReportsAggregateSpeed(t *testing.T) {
 	defer db.Close()
 
 	provider := newFakeProvider()
+	var rows []*database.Download
 	for i, id := range []string{"fake-usenet-speed-1", "fake-usenet-speed-2"} {
 		d := &database.Download{
 			ID: id, Provider: "faketorbox", ProviderDownloadID: id, Kind: database.KindUsenet,
@@ -541,12 +584,18 @@ func TestHandleQueue_ReportsAggregateSpeed(t *testing.T) {
 		if err := db.InsertDownload(ctx, d); err != nil {
 			t.Fatalf("InsertDownload(%s) error = %v", id, err)
 		}
+		rows = append(rows, d)
 		speed := int64(100 * 1024) // 100 KB/s
 		if i == 1 {
 			speed = 924 * 1024 // 924 KB/s -> combined 1024.00 KB/s
 		}
 		provider.entries[debrid.ProviderDownloadID(id)] = &fakeEntry{name: id, size: 1024, calls: 1, speed: speed}
 	}
+
+	// Speed is aggregated from the same cache the poll fills; the shim adds
+	// nothing of its own and makes no provider call to get it.
+	statuses, _ := provider.List(ctx)
+	db.RefreshFromProvider(ctx, rows, statuses, time.Now().UTC(), database.RefreshOptions{})
 
 	srv := &Server{registry: testRegistry(provider), db: db, categories: newCategoryStore()}
 	rec := httptest.NewRecorder()

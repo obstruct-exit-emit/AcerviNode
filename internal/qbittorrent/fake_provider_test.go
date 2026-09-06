@@ -13,9 +13,12 @@ import (
 // of Status()/List() calls, so a test can assert a real queued -> downloading
 // -> completed transition the same way *arr apps observe it by polling.
 type fakeProvider struct {
-	mu      sync.Mutex
-	entries map[debrid.ProviderDownloadID]*fakeEntry
-	nextID  int
+	// listCalls counts provider listings, so a test can assert the shims
+	// never cause one — see TestShimNeverCallsTheProvider.
+	listCalls int
+	mu        sync.Mutex
+	entries   map[debrid.ProviderDownloadID]*fakeEntry
+	nextID    int
 }
 
 type fakeEntry struct {
@@ -93,6 +96,7 @@ func (f *fakeProvider) Status(_ context.Context, id debrid.ProviderDownloadID) (
 func (f *fakeProvider) List(_ context.Context) ([]debrid.DownloadStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCalls++
 	out := make([]debrid.DownloadStatus, 0, len(f.entries))
 	for id, e := range f.entries {
 		e.calls++
