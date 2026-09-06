@@ -33,6 +33,11 @@ func (s *Server) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	id, err := p.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: displayName})
 	if err != nil {
 		slog.Error("sabnzbd: add nzb url failed", "error", err)
+		// The provider may have taken it even though the reply did not
+		// arrive. Usenet has no client-side hash, so this can only be
+		// matched on name -- best-effort, and better than the item being
+		// adopted as Manual and never imported.
+		s.recordPendingAdd(ctx, displayName, category)
 		writeJSON(w, map[string]any{"status": false, "error": err.Error()})
 		return
 	}
@@ -85,6 +90,11 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	id, err := p.AddNZBFile(ctx, header.Filename, data, debrid.AddOptions{Name: displayName})
 	if err != nil {
 		slog.Error("sabnzbd: add nzb file failed", "error", err)
+		// The provider may have taken it even though the reply did not
+		// arrive. Usenet has no client-side hash, so this can only be
+		// matched on name -- best-effort, and better than the item being
+		// adopted as Manual and never imported.
+		s.recordPendingAdd(ctx, displayName, category)
 		writeJSON(w, map[string]any{"status": false, "error": err.Error()})
 		return
 	}
@@ -104,6 +114,20 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 // nzo_id handed back to the *arr app — SABnzbd's real nzo_id has no fixed
 // format, so there's nothing to preserve from the provider side (contrast
 // with the qBittorrent shim, which must expose a real infohash).
+// recordPendingAdd notes an *arr add that failed after the request went out,
+// so discovery can recognise the item as Managed if the provider took it
+// anyway. Best-effort by design -- see database.RecordPendingArrAdd.
+func (s *Server) recordPendingAdd(ctx context.Context, name, category string) {
+	if err := s.db.RecordPendingArrAdd(ctx, &database.PendingArrAdd{
+		Provider: s.registry.DefaultNameFor(debrid.KindUsenet),
+		Kind:     database.KindUsenet,
+		Name:     name,
+		Category: category,
+	}); err != nil {
+		slog.Error("sabnzbd: could not record a failed add for later reconciliation", "error", err)
+	}
+}
+
 func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, fallbackName, category, source string) (nzoID string, err error) {
 	p := s.defaultUsenet()
 	if p == nil {

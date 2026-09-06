@@ -1218,6 +1218,22 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 		if baseline[string(st.ID)] || recentlyDeleted[string(st.ID)] {
 			continue
 		}
+		// An *arr add that reached the provider but whose reply never got
+		// back leaves the item here, untracked, with nothing saying it was
+		// ours. Adopting it as Manual is what "a Managed download turned
+		// into a Manual one" actually is -- the row was never created as
+		// Managed in the first place. Claiming the recorded intent puts it
+		// back where it belongs, with its original category and save path.
+		addedVia := database.AddedViaManual
+		category, savePath := "", ""
+		if pending, err := im.db.ClaimPendingArrAdd(ctx, providerName, kind, st.Hash, st.Name); err != nil {
+			slog.Error("importer: could not check for a pending *arr add", "error", err)
+		} else if pending != nil {
+			addedVia = database.AddedViaArr
+			category, savePath = pending.Category, pending.SavePath
+			slog.Info("importer: adopted an untracked provider item as Managed -- it matched an *arr add that failed after the provider took it",
+				"provider_id", st.ID, "kind", kind, "name", st.Name, "category", category)
+		}
 		d := &database.Download{
 			ID:                 uuid.NewString(),
 			Provider:           providerName,
@@ -1228,7 +1244,9 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 			SizeBytes:          st.SizeBytes,
 			State:              database.LocalStateFromProvider(st.State),
 			Progress:           st.Progress,
-			AddedVia:           database.AddedViaManual,
+			AddedVia:           addedVia,
+			Category:           category,
+			SavePath:           savePath,
 			// A discovered download has no add-request source to capture
 			// the normal way — this is the closest equivalent, whenever the
 			// provider happens to know the original link (a reconstructed

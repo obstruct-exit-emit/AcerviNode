@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -87,6 +88,36 @@ func readFormFile(header *multipart.FileHeader) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+// recordPendingAdd notes an *arr add that failed after the request went out,
+// so discovery can recognise the item as Managed if the provider took it
+// anyway. Best-effort: a failure to record leaves exactly the behaviour that
+// existed before this, so it is logged rather than surfaced to the *arr app,
+// which is already being told the add failed.
+func (s *Server) recordPendingAdd(ctx context.Context, kind database.Kind, hash, name, category, savePath string) {
+	if err := s.db.RecordPendingArrAdd(ctx, &database.PendingArrAdd{
+		Provider: s.registry.DefaultNameFor(debrid.KindTorrent),
+		Kind:     kind,
+		Hash:     hash,
+		Name:     name,
+		Category: category,
+		SavePath: savePath,
+	}); err != nil {
+		slog.Error("qbittorrent: could not record a failed add for later reconciliation", "error", err)
+	}
+}
+
+// infohashFromMagnet pulls the btih out of a magnet, lowercased, or returns
+// empty when there is not one to find.
+func infohashFromMagnet(magnet string) string {
+	m := magnetInfohash.FindStringSubmatch(magnet)
+	if m == nil {
+		return ""
+	}
+	return strings.ToLower(m[1])
+}
+
+var magnetInfohash = regexp.MustCompile(`(?i)xt=urn:btih:([0-9a-z]+)`)
+
 func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath string) error {
 	p := s.defaultTorrent()
 	if p == nil {
@@ -94,6 +125,11 @@ func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath strin
 	}
 	id, err := p.AddMagnet(ctx, magnet, debrid.AddOptions{Name: magnetDisplayName(magnet)})
 	if err != nil {
+		// The provider may have accepted this even though the reply did not
+		// reach us. Without a record of the attempt, the next discovery pass
+		// finds it untracked and adopts it as a Manual download -- which is
+		// what "a Managed download turned into a Manual one" actually is.
+		s.recordPendingAdd(ctx, database.KindTorrent, infohashFromMagnet(magnet), magnetDisplayName(magnet), category, savePath)
 		return err
 	}
 	return s.storeNewDownload(ctx, id, magnet, category, savePath)
@@ -106,6 +142,9 @@ func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byt
 	}
 	id, err := p.AddTorrentFile(ctx, filename, data, debrid.AddOptions{Name: filename})
 	if err != nil {
+		// No infohash without parsing the torrent, so this one matches on
+		// name alone -- see database.ClaimPendingArrAdd.
+		s.recordPendingAdd(ctx, database.KindTorrent, "", filename, category, savePath)
 		return err
 	}
 	return s.storeNewDownload(ctx, id, "", category, savePath)
@@ -198,11 +237,6 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, items)
 }
-
-
-
-
-
 
 // handleProperties implements GET /api/v2/torrents/properties?hash=...
 func (s *Server) handleProperties(w http.ResponseWriter, r *http.Request) {
