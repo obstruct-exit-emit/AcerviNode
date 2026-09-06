@@ -84,9 +84,14 @@ modeled on avoiding):
 | `error` (moves to `/history`) | `Failed` | See above |
 
 `mode=queue`'s `timeleft` field (`H:MM:SS`, matching real SABnzbd) reports the
-provider's live ETA for the download — read fresh from the same provider call
-that refreshes state/progress on every poll, not persisted to the database
-(see `internal/sabnzbd`'s `refreshFromProvider`/`formatTimeLeft`).
+provider's live ETA for the download. It is fast-moving and never persisted —
+it comes from `database.DB.LiveStatus`, the in-memory cache
+`internal/importer`'s poll fills (see `formatTimeLeft` for the formatting).
+**This shim makes no provider call of its own**: polling it cannot cause
+provider traffic, so `timeleft` is as fresh as the last poll and no fresher.
+The same is true of `kbpersec`, which is summed from that cache rather than
+fetched. See
+[Providers](providers.md#the-compat-shims-are-a-wall-they-read-they-never-fetch).
 
 `percentage`/`mbleft` while `status` is `Moving` (the local state is
 `provider_completed`) report internal/importer's own live local-transfer

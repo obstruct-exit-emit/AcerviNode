@@ -678,6 +678,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The compat shims are a wall: they read, they never fetch.** An \*arr app can
+  no longer cause a provider request. `internal/importer`'s poll is the only
+  thing that talks to a provider, and whatever it last wrote is what
+  Sonarr/Radarr see, however often they ask.
+
+  Both shims used to run their own refresh on *every* request, so provider load
+  scaled with how many \*arr apps were connected and how fast they polled. The
+  shared listing cache narrowed that to one fetch per interval but never closed
+  it — when the TTL expired, the next \*arr poll still triggered a call.
+
+  Verified live with a real Radarr 6.3.0 and `tcpdump`: **120 shim polls plus 3
+  Radarr queue refreshes produced 2 packets** to the provider, both bare TCP
+  keepalives on an idle socket. The control — no \*arr traffic, our poll running
+  — produced 68 in the same window, which is what makes the first number mean
+  anything.
+
+  The trade: \*arr freshness is now bounded by `import_interval_seconds`, so at
+  30s a queue view can be thirty seconds stale. Deliberate, and the dial to
+  reach for if an \*arr app ever looks laggy.
+
+
 - **Polling defaults raised: `import_interval_seconds` 10 → 30,
   `fast_poll_interval_seconds` 3 → 15.** The old fast-poll default was tuned
   live, but that tuning did not account for what a *queued* download costs: the

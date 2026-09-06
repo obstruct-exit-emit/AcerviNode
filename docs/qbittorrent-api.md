@@ -52,10 +52,12 @@ specific vocabulary:
 | `error` | `error` | Either the provider itself reported a failure (e.g. TorBox's own "Error" state, or a stalled/no-seeds torrent — see [Providers](providers.md#state-mapping)) or Completed Download Handling gave up after exhausting its own fetch retries |
 
 `GET /api/v2/torrents/info`'s `eta` field reports the provider's live ETA
-(seconds) for the download — read fresh from the same provider call that
-refreshes state/progress on every poll, not persisted to the database (it's a
-fast-moving, purely informational value; see `internal/qbittorrent`'s
-`refreshFromProvider`).
+(seconds) for the download. It is fast-moving and purely informational, so it
+is never persisted — it comes from `database.DB.LiveStatus`, the in-memory
+cache `internal/importer`'s poll fills. **This shim makes no provider call of
+its own**: polling it cannot cause provider traffic, so `eta` is as fresh as
+the last poll and no fresher. See
+[Providers](providers.md#the-compat-shims-are-a-wall-they-read-they-never-fetch).
 
 `progress` while `state` is `downloading` *and* the local state is
 actually `provider_completed` reports internal/importer's own live local-

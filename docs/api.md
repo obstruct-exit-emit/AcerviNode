@@ -217,9 +217,8 @@ rather than `added_via`, since it works for Managed and Manual alike.
 `eta_seconds`/`seeders`/`leechers`/`download_speed_bytes`/`phase`/
 `airlocked` are fast-moving, provider-reported fields deliberately never
 persisted to the database — read from an in-memory cache (`database.DB.LiveStatus`) populated
-as a side effect of whichever poller last refreshed this download (either
-compat shim's own reactive refresh, or `internal/importer`'s bulk/fast
-polls), not a synchronous provider call this endpoint makes itself. Zero
+as a side effect of `internal/importer`'s bulk or fast poll, not a
+synchronous provider call this endpoint makes itself. Zero
 (and `phase` empty) whenever nothing's polled this download yet, or for a
 provider/kind with no such concept — `seeders`/`leechers`/
 `download_speed_bytes` are torrent-only; `phase` is usenet-only

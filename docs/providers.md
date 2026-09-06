@@ -324,9 +324,10 @@ finished download looking permanently "queued", and even an actively-polling
 
 `Importer.refreshStatuses` closes that gap: every tick, it calls each configured
 provider's `List` for both kinds and applies the result via
-`database.RefreshFromProvider` — the exact same sync logic both compat shims'
-`refreshFromProvider` call, now shared in one place (`internal/database`) instead
-of duplicated per shim, so all three interpret a provider's state identically.
+`database.RefreshFromProvider`. That sync logic lives in one place
+(`internal/database`) rather than being duplicated per caller, which is what
+made it safe to stop the compat shims calling it at all: they no longer sync
+anything, they read what this pass wrote.
 Because this runs on `import_interval_seconds` regardless of external polling, a
 download that finishes between polls — or with nothing polling at all — is
 picked up within one tick, and if that same tick moves it into
@@ -475,7 +476,8 @@ over) an independent one.
 
 Once both the bulk path and the fast per-download poll above exist, a real
 race becomes possible: multiple independent pollers (either compat shim's
-own reactive refresh on every `/info`/`mode=queue` request, `Tick`'s bulk
+own reactive refresh on every `/info`/`mode=queue` request (removed — see
+[the shims are a wall](#the-compat-shims-are-a-wall-they-read-they-never-fetch)), `Tick`'s bulk
 pass, and `runFastPoll`'s targeted one) can all be mid-flight against the
 provider for the *same* download at once. `database.DB`'s connection pool is
 a single connection (`SetMaxOpenConns(1)`), so the resulting `UPDATE`s can't
@@ -1295,7 +1297,7 @@ read progress from the same `mylist` endpoint the same way.
 server-side for up to 600 seconds by default — a freshly added torrent was simply
 absent from the response until `bypass_cache=true` was passed. Both `ListTorrents`
 and `ListUsenetDownloads` always set it, since AcerviNode's whole polling model
-(both compat shims' `refreshFromProvider`, and `internal/importer`'s own ticks)
+(`internal/importer`'s own ticks — the shims no longer refresh at all)
 depends on this endpoint reflecting current state promptly, not on a 10-minute
 delay.
 
@@ -1539,6 +1541,52 @@ status display actually uses: `plan` (an integer tier — 0 Free, 1 Essential, 2
 subscription), `is_subscribed`, `premium_expires_at`, `total_bytes_downloaded`,
 `cooldown_until`.
 
+### A failed \*arr add that the provider actually took
+
+Reported three times as "Managed downloads turning into Manual". They never
+turn: there is exactly **one** write to `added_via` in the codebase and it sets
+`arr`, so a Managed row cannot be flipped to Manual. What happens is the
+Managed row is never created.
+
+Sonarr adds through a shim, the request reaches the provider, the provider
+**accepts it** — and the reply never gets back. A timeout, a 429, a dropped
+connection. The shim returns the error, no row is written, and the item sits on
+the account with nothing tracking it. The next discovery pass finds it
+untracked and adopts it as `AddedViaManual`, exactly as designed. Sonarr then
+never imports it, because as far as AcerviNode is concerned nothing asked for
+it.
+
+Discovery already guarded two windows of this shape — a seeded baseline, and
+`RecentlyDeletedDownloads` for something just removed — but had none for an add
+that succeeded provider-side and failed to report back. That window is widened
+by exactly the rate limiting that makes adds fail in the first place, which is
+why the symptom clusters rather than appearing at random.
+
+So both shims now record the attempt when an add errors
+(`database.RecordPendingArrAdd`, table `pending_arr_adds`, migration 0014), and
+discovery claims it (`ClaimPendingArrAdd`) instead of adopting as Manual —
+restoring the original category and save path with it.
+
+- **Torrents match on infohash**, which is exact and present on both sides.
+- **Usenet matches on name**, and is honestly best-effort:
+  `debrid.DownloadStatus.Hash` is documented empty for usenet, so there is no
+  hash to match on.
+- **The attempt is recorded for every add error**, not only ambiguous ones.
+  Classifying which failures could still have landed means guessing at the
+  provider's internals, and guessing wrong loses the download; a spurious row
+  matches nothing and expires in two hours.
+- **Claimed once.** The row is deleted on match, so a second untracked item
+  cannot inherit an identity that has already been spent.
+
+The direction of the residual risk is deliberate. A wrongly-Managed download
+gets fetched to disk, which is recoverable; a wrongly-Manual one is never
+imported, which is the bug. Four guards keep it narrow — provider, kind,
+expiry, single-use — and each fails the test suite when reverted.
+
+**This does not repair history.** Nothing rewrites `added_via`, so a download
+already adopted as Manual stays Manual. Re-grabbing it from the \*arr app is the
+fix; `InsertOrClaimForArr` will then attach it properly.
+
 #### `cooldown_until` — a real, undocumented account restriction
 
 Found live while investigating a real "everything looks frozen" report — every
@@ -1571,30 +1619,51 @@ whenever it's set to a future time. Without this, the exact same "why has nothin
 updated in hours" investigation would otherwise require reading logs or querying
 TorBox directly by hand, same as how this was actually found.
 
-### One provider listing per interval, shared by everything
+### The compat shims are a wall: they read, they never fetch
 
-`internal/importer`'s background poll and both compat shims' reactive
-refreshes (qBittorrent's `/torrents/info`, SABnzbd's `mode=queue` and
-`mode=history`) all need the same thing: the provider's current listing for
-a kind. Each of them used to fetch its own — the shims on *every single
-request*, so provider load scaled directly with how many *arr apps were
-connected and how fast they polled. Sonarr, Radarr, Readarr and Lidarr each
-polling more than one of those endpoints per cycle multiplies fast, and
-since TorBox meters rate limits per API key across its servers (v8.4.1),
+**An \*arr app cannot cause a provider request.** `internal/importer`'s poll is
+the only thing that talks to a provider, and whatever it last wrote is what
+Sonarr/Radarr/Lidarr/Readarr see, however often they ask. The shims read rows
+from the database and the fast-moving fields (ETA, seeders, speed, phase) from
+the in-memory `database.LiveStatus` cache that poll already fills for the
+native API.
+
+It was not always so, and the history is the justification. Both shims used to
+run their own `refreshFromProvider` on *every single request*, so provider load
+scaled directly with how many \*arr apps were connected and how fast they
+polled — four apps each hitting more than one endpoint per cycle multiplies
+fast. A shared `debrid.ListCache` narrowed that to one fetch per kind per
+interval, which helped enormously, but it never closed the hole: when the TTL
+expired, the next \*arr poll still triggered a provider call. Load remained a
+function of *their* polling rather than of our own schedule.
+
+Since TorBox meters rate limits per API key across its servers (v8.4.1),
 tripping that limit stalls *every* kind at once — while a kind is in
 rate-limit backoff `refreshKind` skips its listing entirely, so nothing
-advances and the whole app looks frozen.
+advances and the whole app looks frozen. Making the boundary absolute is what
+takes that outcome off the table.
 
-A single `debrid.ListCache` now lives on each shared `Dynamic*Provider`
-wrapper — the same pointer the importer and the shims already hold — so one
-fetch per kind per interval serves all of them, and concurrent callers share
-an in-flight call instead of each starting another. Its TTL tracks
-`import_interval_seconds` (`Importer.SetConfig` retunes it live): that
-setting is already the user's answer to how often the provider should be
-asked, and a shim request has no reason to answer it differently. Measured
-against the real API, four simulated *arr apps polling continuously for 30
-seconds: **3 provider calls, 2,227 requests served** — and that call count
-doesn't move as more *arr apps are added.
+Measured live, with a real Radarr 6.3.0 pointed at the shim and `tcpdump`
+counting packets to `api.torbox.app`:
+
+| | packets to the provider |
+| --- | --- |
+| 120 shim polls + 3 Radarr queue refreshes, our poll silenced | **2** |
+| no \*arr traffic at all, our poll running | 68 |
+
+Those 2 are bare TCP keepalive ACKs on an idle connection, not a request. The
+second row is the control — without it, a low number proves only that the
+capture filter was wrong.
+
+**The trade this makes.** \*arr freshness is now bounded by
+`import_interval_seconds`: at 30s, Radarr's queue view can be up to thirty
+seconds stale. That is deliberate and harmless — imports are driven by state
+transitions, not sub-second freshness — but it is the dial to reach for if a
+\*arr app ever looks laggy. Unbounded provider load was the alternative.
+
+The `ListCache` still exists and still serves the importer's own poll (and
+would serve any future second reader), which is why its two implementation
+details below still matter.
 
 Two details the implementation depends on:
 
