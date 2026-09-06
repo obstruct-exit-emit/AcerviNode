@@ -1351,16 +1351,25 @@ export function Settings({ apiKey }: Props) {
                 </button>
               </form>
               <p className="settings-help">
-                Import interval is the bulk poll that syncs every tracked download's status from the provider. Fast
-                poll interval checks each actively downloading Managed download individually, so a finished download
-                is noticed within a few seconds instead of waiting for the next full import interval — separate
-                from (and much cheaper than) the import interval, since it only ever checks downloads already known
-                to be in progress. The default (3s) was tuned against a real provider to stay responsive without
-                risking a rate limit; raise it if you routinely have many downloads active at once. Request timeout
-                bounds a single call to the provider's own API (unlike the fetch idle timeout under Import &amp;
-                cleanup, this one covers small API calls, not file downloads, so it's a plain total deadline) —
-                lower it to fail faster during a provider outage, raise it if you're seeing timeouts on a slow
-                connection to the provider.
+                Import interval is the bulk poll that syncs every tracked download's status from the
+                provider, and it also sets how long the shared listing is reused for — Sonarr and
+                Radarr read through that same cache, so this bounds their polling too, not just ours.
+                Fast poll checks each in-progress Managed download individually, so a finish is
+                noticed without waiting for the next bulk pass.
+                </p>
+<p className="settings-help">
+                Fast poll is the expensive one, and the cost is per download, not per pass. A download
+                that is still queued costs two calls each time — the direct lookup misses, then the
+                queued listing answers — so at 3 seconds, three queued downloads were roughly 120
+                provider calls a minute on their own. That is what the defaults were raised for.
+                Multiply before lowering these: calls per minute is about (60 / fast poll) × downloads
+                in progress, plus (60 / import interval) per kind.
+                </p>
+                <p className="settings-help">
+                Request timeout bounds a single call to the provider's API — a plain total deadline,
+                unlike the fetch idle timeout under Import & cleanup, which covers file transfers. It
+                has no bearing on how often calls happen, so it is not a lever for rate limiting.
+                Lower it to fail faster during an outage, raise it on a slow link to the provider.
               </p>
               {generalStatus.kind === 'saved' && <p className="settings-success">Saved — applied immediately.</p>}
               {generalStatus.kind === 'error' && <p className="settings-error">Failed to save: {generalStatus.message}</p>}

@@ -27,8 +27,8 @@ func TestLoad_DefaultsWithNoFile(t *testing.T) {
 	if cfg.DownloadDir != "./downloads" {
 		t.Errorf("DownloadDir = %q, want ./downloads", cfg.DownloadDir)
 	}
-	if cfg.ImportIntervalSeconds != 10 {
-		t.Errorf("ImportIntervalSeconds = %d, want 10", cfg.ImportIntervalSeconds)
+	if cfg.ImportIntervalSeconds != 30 {
+		t.Errorf("ImportIntervalSeconds = %d, want 30", cfg.ImportIntervalSeconds)
 	}
 	if cfg.ImportMaxRetries != 5 {
 		t.Errorf("ImportMaxRetries = %d, want 5", cfg.ImportMaxRetries)
@@ -260,8 +260,8 @@ func TestLoad_FastPollIntervalDefaultsTo3Seconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.FastPollIntervalSeconds != 3 {
-		t.Errorf("FastPollIntervalSeconds default = %d, want 3", cfg.FastPollIntervalSeconds)
+	if cfg.FastPollIntervalSeconds != 15 {
+		t.Errorf("FastPollIntervalSeconds default = %d, want 15", cfg.FastPollIntervalSeconds)
 	}
 }
 

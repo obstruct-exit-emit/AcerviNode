@@ -678,6 +678,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Polling defaults raised: `import_interval_seconds` 10 → 30,
+  `fast_poll_interval_seconds` 3 → 15.** The old fast-poll default was tuned
+  live, but that tuning did not account for what a *queued* download costs: the
+  direct lookup misses — that is what queued means — and the queued-listing
+  fallback answers, so it is two calls per download per pass. Three queued
+  downloads at 3s came to roughly 120 provider calls a minute on their own, and
+  it peaked exactly on a batch add.
+
+  Existing installs are unaffected: a value already in `config.yaml` wins, and
+  any install that has ever saved settings has one. This only changes what a
+  fresh install starts with.
+
+  Raising the import interval has a second effect worth knowing: the shared
+  listing cache's TTL tracks it, and both compat shims read through that cache
+  — so it bounds Sonarr/Radarr's polling of us, not only our own bulk pass.
+
+  The Settings help text was rewritten to match. It previously said the 3s
+  default was "tuned against a real provider… raise it if you routinely have
+  many downloads active at once", which undersold it badly — nothing hinted the
+  cost was per download, or that a queued one costs double. It now gives the
+  arithmetic instead: calls per minute is about (60 / fast poll) × downloads in
+  progress, plus (60 / import interval) per kind.
+
+
 - **A snapshot now covers both stores, and is readable only by its owner.**
   Backups protected the database and nothing else, while the file that actually
   matters was never copied: `config.yaml` holds every setting, both provider API

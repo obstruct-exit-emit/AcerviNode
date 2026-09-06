@@ -819,7 +819,7 @@ func TestHandleSetTorBoxAPIKey_RequiresAuth(t *testing.T) {
 func TestHandleGetGeneralSettings(t *testing.T) {
 	settings := &fakeSettings{general: GeneralInfo{
 		APIKey: "secret", Port: 7846, DataDir: "./data", DownloadDir: "./downloads",
-		LogLevel: "info", ImportIntervalSeconds: 10, ImportMaxRetries: 5,
+		LogLevel: "info", ImportIntervalSeconds: 30, ImportMaxRetries: 5,
 	}}
 	srv, _ := newTestServer(t, nil, nil, settings)
 
