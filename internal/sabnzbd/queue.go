@@ -60,9 +60,8 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// kbpersec is real SABnzbd's own aggregate-speed field, at the top of
-	// the queue object (not per-slot — see refreshFromProvider's own doc
-	// comment), formatted as a decimal string the same way real SABnzbd
-	// does (e.g. "1296.02").
+	// the queue object rather than per-slot, formatted as a decimal string
+	// the same way real SABnzbd does (e.g. "1296.02").
 	kbPerSec := float64(totalSpeedBytes) / 1024
 	writeJSON(w, map[string]any{"queue": map[string]any{
 		"slots":    slots,

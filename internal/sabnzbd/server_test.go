@@ -476,9 +476,11 @@ func getHistory(t *testing.T, baseURL string) historyResponse {
 
 // TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged
 // mirrors internal/qbittorrent's regression test for the same real bug: an
-// NZB-URL-only add starts with size_bytes=0, and refreshFromProvider's
-// early-exit check only compared state and progress, never size, so a later
-// poll that only changed size never got persisted.
+// NZB-URL-only add starts with size_bytes=0, and the shim's own then-existing
+// refreshFromProvider had an early-exit check that only compared state and
+// progress, never size, so a later poll that only changed size never got
+// persisted. That function is gone (the shims are a wall now); the guarded
+// logic lives in database.RefreshFromProvider, which this test calls directly.
 func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *testing.T) {
 	ctx := t.Context()
 	db, err := database.Open(":memory:")

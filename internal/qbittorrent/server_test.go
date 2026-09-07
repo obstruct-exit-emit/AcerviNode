@@ -652,9 +652,12 @@ func readBody(t *testing.T, resp *http.Response) string {
 // TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged is a
 // regression test: a magnet-only add starts with size_bytes=0 (magnet URIs
 // don't carry size), and a real bug let it stay 0 forever once state and
-// progress settled — refreshFromProvider's early-exit check only looked at
-// those two fields, never size, so a later poll that only changed size never
-// wrote it. Found manually testing against a real TorBox account.
+// progress settled — the shim's own then-existing refreshFromProvider had an
+// early-exit check that only looked at those two fields, never size, so a
+// later poll that only changed size never wrote it. Found manually testing
+// against a real TorBox account. That function is gone (the shims are a wall
+// now); the guarded logic lives in database.RefreshFromProvider, which this
+// test calls directly.
 func TestRefreshFromProvider_BackfillsSizeEvenWhenStateAndProgressUnchanged(t *testing.T) {
 	ctx := t.Context()
 	db, err := database.Open(":memory:")

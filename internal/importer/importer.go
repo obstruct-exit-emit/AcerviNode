@@ -760,11 +760,14 @@ func (im *Importer) Tick(ctx context.Context) error {
 }
 
 // refreshStatuses proactively syncs every queued/downloading row's local
-// state against its provider — the same sync each compat shim already does
-// reactively when an *arr app polls /info or mode=queue (see
-// internal/qbittorrent and internal/sabnzbd's own refreshFromProvider), but
-// run on im.interval regardless of whether anything is actively polling
-// right now. Without this, a download only ever progressed when something
+// state against its provider, on im.interval and regardless of whether
+// anything is polling right now. It is the only thing that syncs: both
+// compat shims used to do this reactively on every /info or mode=queue
+// request, which made provider load a function of how many *arr apps were
+// connected and how fast they polled, and they are now a read-only wall
+// over whatever this pass last wrote.
+//
+// Without this, a download only ever progressed when something
 // external happened to poll — including never, if nothing but the native API
 // or web UI (which don't touch the provider at all) is watching it — so it
 // could sit looking stuck long after the provider actually finished. See

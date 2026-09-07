@@ -314,13 +314,15 @@ lingers into a retry attempt or past `ready_for_import`.
 
 ### Proactive status refresh
 
-Both compat shims sync a download's local state against the provider
-*reactively* — only when an \*arr app happens to call `GET /api/v2/torrents/info`
-or `mode=queue`. On its own, that meant a download's state only ever advanced
-when something external polled one of those endpoints; watching only the native
-API or web UI (neither of which touches a provider at all) could leave a
-finished download looking permanently "queued", and even an actively-polling
-\*arr app only caught up on its own poll cadence.
+Both compat shims *used to* sync a download's local state against the provider
+reactively — only when an \*arr app happened to call `GET /api/v2/torrents/info`
+or `mode=queue`. That meant a download's state only ever advanced when something
+external polled one of those endpoints; watching only the native API or web UI
+(neither of which touches a provider at all) could leave a finished download
+looking permanently "queued", and even an actively-polling \*arr app only caught
+up on its own poll cadence. (The shims no longer refresh at all — see
+[the shims are a wall](#the-compat-shims-are-a-wall-they-read-they-never-fetch)
+for why that reactive path was removed outright.)
 
 `Importer.refreshStatuses` closes that gap: every tick, it calls each configured
 provider's `List` for both kinds and applies the result via
@@ -960,8 +962,8 @@ until the user actually clicked download and hit the error live (`files_error`
 — see [API](api.md)).
 
 `RefreshFromProvider` (`internal/database/downloads.go`) now catches this
-proactively too, for both `internal/importer`'s own ticks and each compat
-shim's reactive polling (same shared function, all callers benefit). A row
+proactively too, on `internal/importer`'s own ticks — the only caller left now
+that the compat shims no longer refresh anything. A row
 whose `provider_download_id` is missing from a *successful* provider listing
 (`p.List()` itself failing — e.g. a rate limit — doesn't count as a miss;
 `refreshKind` already skips calling `RefreshFromProvider` at all on a listing

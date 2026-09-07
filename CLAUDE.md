@@ -246,7 +246,7 @@ Always pass `-timeout 600s` to Go tests and never wrap the run in an outer
 `timeout` — doing so has produced a falsely green report.
 
 The four frontend suites are example-based, **property/fuzz**, **boundary**, and
-**adversarial**. The property sweep is the highest-yield: 12 invariants over
+**adversarial**. The property sweep is the highest-yield: 15 invariants over
 thousands of generated inputs, and it found two idempotence bugs nothing
 hand-written would have. Run it deep with
 `npx vitest run detect.property --testTimeout=180000`.

@@ -96,9 +96,11 @@ the storage layer.
 - A fetch that fails is retried with exponential backoff, not forever and not
   instantly — `import_max_retries` (default 5) caps how many attempts a download
   gets before it's moved to `error` instead of retried again.
-- Status is synced from the provider proactively on every tick, not just when
-  Sonarr/Radarr happens to poll — a download progresses even if nothing but the
-  web UI is watching it.
+- Status is synced from the provider on AcerviNode's own tick, and only there.
+  Sonarr/Radarr polling a compat shim never reaches the provider — it reads what
+  the last tick recorded. So a download progresses even if nothing but the web
+  UI is watching it, and provider load does not grow with the number of
+  connected \*arr apps.
 
 **🖥️ Native API + web UI**
 
