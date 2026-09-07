@@ -151,7 +151,11 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		Category:           category,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
-		Progress:           status.Progress,
+		// A provider can report a failure the instant it accepts an add,
+		// and a row born in StateError needs its reason like any other --
+		// see database.ProviderErrorMessage.
+		ErrorMessage: database.ProviderErrorMessage(status.State, status.RawState),
+		Progress:     status.Progress,
 		// Source is the NZB URL itself for a URL-based add, empty for a
 		// .nzb file upload — see database.Download.Source and ReAddDownload.
 		Source: source,

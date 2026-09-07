@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An errored download could carry no explanation.** A row that *entered*
+  `error` through a status refresh always recorded the provider's own reason,
+  but a row *born* in `error` recorded nothing — and there are two ways that
+  happens: the discovery pass adopting an item that was already failed in the
+  provider account, and any of the five add paths where the provider accepts
+  the add and its very first status reports a failure. Both stored the state
+  and dropped the reason.
+
+  Nothing repaired it afterwards, which is what made it stick: a refresh only
+  updates rows the provider still lists, and missing-detection deliberately
+  skips a row that is already in `error`, so once the item left the account
+  the blank was permanent. Found on the real account — four adopted usenet
+  rows sitting in `error` with `error_message` NULL, and a `.torrent` upload
+  TorBox had accepted (`success:true`) and then reported as
+  `"stalled (no seeds)"` with nothing local saying so.
+
+  `database.ProviderErrorMessage` now pairs with `LocalStateFromProvider`, and
+  every one of the seven sites that turns a provider status into a row uses
+  both. It returns the raw state only when that state is a failure — copying it
+  unconditionally would park `"downloading"` in the error column of a healthy
+  download, which the regression test pins. Reproduced and verified live: an
+  item discovered while failed now adopts carrying
+  `"failed (Download failed - Not on your server(s) ...)"` where it previously
+  adopted with NULL.
+
 ### Tests
 
 - **Covered the backup scheduler loop**, which had no tests at all — every

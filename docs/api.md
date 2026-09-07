@@ -143,6 +143,13 @@ Two fields are omitted when empty rather than sent null: `provider_cached_at`
 `"no longer found in the provider's account"`, a provider's own failure text,
 and so on).
 
+The reason is recorded whenever a row *enters* `error`, insert included: a
+download discovered already failed in the provider account, or one the provider
+accepts and immediately reports as failed, carries its explanation from the
+moment the row exists. That distinction matters because nothing fills it in
+afterwards — a refresh only updates rows the provider still lists, and
+missing-detection skips a row that is already in `error`.
+
 ```json
 {
   "state": "error",

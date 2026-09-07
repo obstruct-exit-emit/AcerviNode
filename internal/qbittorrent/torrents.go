@@ -182,7 +182,11 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		SavePath:           savePath,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
-		Progress:           status.Progress,
+		// A provider can report a failure the instant it accepts an add,
+		// and a row born in StateError needs its reason like any other --
+		// see database.ProviderErrorMessage.
+		ErrorMessage: database.ProviderErrorMessage(status.State, status.RawState),
+		Progress:     status.Progress,
 		// Source is the magnet itself for a magnet-based add, empty for a
 		// .torrent file upload (nothing to resubmit without keeping the raw
 		// bytes) — see database.Download.Source and ReAddDownload.

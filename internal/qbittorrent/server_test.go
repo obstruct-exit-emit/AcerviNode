@@ -866,6 +866,68 @@ func TestHandleAdd_ClaimsAnExistingManualRow(t *testing.T) {
 	}
 }
 
+// TestHandleAdd_RecordsTheProvidersReasonWhenItFailsImmediately covers a row
+// born in StateError. A provider can accept an add and report a failure on
+// the very first status -- the real case being a .torrent TorBox took happily
+// (success:true, with an id) and then reported as "stalled (no seeds)".
+// Storing the state without the reason leaves the download showing as failed
+// with nothing saying why, in the web UI and in the *arr app's own queue.
+func TestHandleAdd_RecordsTheProvidersReasonWhenItFailsImmediately(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	provider := newFakeProvider()
+	provider.addFailure = "stalled (no seeds)"
+
+	ts := httptest.NewServer(NewServer(testRegistry(provider), db, staticAPIKey("test-api-key")))
+	t.Cleanup(ts.Close)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	loginResp, err := client.PostForm(ts.URL+"/api/v2/auth/login", url.Values{
+		"username": {"admin"},
+		"password": {"test-api-key"},
+	})
+	if err != nil {
+		t.Fatalf("login error = %v", err)
+	}
+	loginResp.Body.Close()
+
+	addResp, err := client.PostForm(ts.URL+"/api/v2/torrents/add", url.Values{
+		"urls":     {testMagnet},
+		"category": {"tv-sonarr"},
+	})
+	if err != nil {
+		t.Fatalf("add error = %v", err)
+	}
+	if b := readBody(t, addResp); addResp.StatusCode != http.StatusOK || b != "Ok." {
+		t.Fatalf("add status=%d body=%q, want 200 Ok.", addResp.StatusCode, b)
+	}
+
+	rows, err := db.ListDownloads(ctx, database.KindTorrent)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if rows[0].State != database.StateError {
+		t.Fatalf("state = %q, want %q", rows[0].State, database.StateError)
+	}
+	if rows[0].ErrorMessage != "stalled (no seeds)" {
+		t.Errorf("error_message = %q, want the provider's own reason %q",
+			rows[0].ErrorMessage, "stalled (no seeds)")
+	}
+}
+
 // TestTorrentFor_ResolvesTheDownloadsOwnProvider covers the shim resolving
 // per download rather than holding one provider. A row can name a provider
 // this shim can't reach — several configured, or the account swapped after

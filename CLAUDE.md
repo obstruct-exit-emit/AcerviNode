@@ -125,6 +125,15 @@ deleted on match, so a second untracked item cannot inherit an identity already
 spent. The guards are provider, kind, expiry and single-use, and each fails the
 suite when removed.
 
+**`LocalStateFromProvider` and `ProviderErrorMessage` are a pair.** Anything
+turning a provider status into a persisted row needs both halves: the state,
+and — when that state is a failure — the provider's own reason. Only the
+refresh path used to carry the reason, so a row *born* in `error` (discovery
+adopting an already-failed item; an add the provider accepts and immediately
+fails) stored no explanation at all. Nothing repairs that later, which is what
+makes it permanent rather than merely late: refresh only updates rows still
+present in a listing, and missing-detection skips a row already in `error`.
+
 ---
 
 ## How to work here

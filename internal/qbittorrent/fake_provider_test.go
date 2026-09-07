@@ -13,6 +13,9 @@ import (
 // of Status()/List() calls, so a test can assert a real queued -> downloading
 // -> completed transition the same way *arr apps observe it by polling.
 type fakeProvider struct {
+	// addFailure, when set, makes every entry this provider creates report
+	// that raw failure immediately -- see fakeEntry.failure.
+	addFailure string
 	// listCalls counts provider listings, so a test can assert the shims
 	// never cause one — see TestShimNeverCallsTheProvider.
 	listCalls int
@@ -22,12 +25,16 @@ type fakeProvider struct {
 }
 
 type fakeEntry struct {
-	hash  string
-	name  string
-	size  int64
-	eta   int64
-	calls int
-	files []debrid.DownloadFile
+	// failure, when set, is the provider's own raw failure string for
+	// this entry -- reported from the very first status, the way TorBox
+	// reports "stalled (no seeds)" for a torrent it accepted happily.
+	failure string
+	hash    string
+	name    string
+	size    int64
+	eta     int64
+	calls   int
+	files   []debrid.DownloadFile
 }
 
 func newFakeProvider() *fakeProvider {
@@ -56,9 +63,10 @@ func (f *fakeProvider) add(hash, name string) debrid.ProviderDownloadID {
 	f.nextID++
 	id := debrid.ProviderDownloadID(fmt.Sprintf("fake-%d", f.nextID))
 	f.entries[id] = &fakeEntry{
-		hash: hash,
-		name: name,
-		size: 1024,
+		failure: f.addFailure,
+		hash:    hash,
+		name:    name,
+		size:    1024,
 		files: []debrid.DownloadFile{
 			{ProviderFileID: "1", Path: "movie.mkv", SizeBytes: 1024},
 		},
@@ -67,6 +75,12 @@ func (f *fakeProvider) add(hash, name string) debrid.ProviderDownloadID {
 }
 
 func (f *fakeProvider) statusFor(id debrid.ProviderDownloadID, e *fakeEntry) debrid.DownloadStatus {
+	if e.failure != "" {
+		return debrid.DownloadStatus{
+			ID: id, Name: e.name, Hash: e.hash, SizeBytes: e.size,
+			State: debrid.StateError, RawState: e.failure,
+		}
+	}
 	state := debrid.StateQueued
 	progress := 0.0
 	switch {

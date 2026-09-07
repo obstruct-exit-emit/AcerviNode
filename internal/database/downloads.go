@@ -1110,6 +1110,29 @@ func LocalStateFromProvider(s debrid.DownloadState) string {
 	}
 }
 
+// ProviderErrorMessage returns what belongs in a row's error_message for a
+// state that came from the provider: the provider's own raw state string
+// (e.g. TorBox's "stalled (no seeds)"), but only when that state is actually
+// a failure. Anything else gets nothing -- a raw state only explains
+// something when there is something to explain, and copying it
+// unconditionally would park "downloading" in the error column of a
+// perfectly healthy download.
+//
+// Deliberately paired with LocalStateFromProvider: every caller that
+// translates a provider status into a persisted row needs both halves. Two
+// such callers exist -- RefreshFromProvider and internal/importer's discovery
+// adoption -- and only the first used to carry the reason across. That left
+// an item discovered while already failed sitting in StateError with no
+// explanation, permanently: RefreshFromProvider only updates rows present in
+// a listing, and handleMissingFromProvider skips a row that is already
+// StateError, so nothing ever came back to fill it in.
+func ProviderErrorMessage(state debrid.DownloadState, rawState string) string {
+	if state != debrid.StateError {
+		return ""
+	}
+	return rawState
+}
+
 // RefreshFromProvider updates every row in rows whose provider-reported
 // state, progress, or size has changed, using one bulk statuses slice (a
 // single provider List() call) rather than a Status() call per row. Mutates
@@ -1342,10 +1365,7 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		// .RawState). Included in the no-op change check below so an
 		// updated failure reason (e.g. "stalled (no seeds)" -> "Error")
 		// isn't silently skipped just because progress/size didn't move.
-		errorMessage := ""
-		if newState == StateError {
-			errorMessage = st.RawState
-		}
+		errorMessage := ProviderErrorMessage(st.State, st.RawState)
 		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes && errorMessage == d.ErrorMessage {
 			continue
 		}

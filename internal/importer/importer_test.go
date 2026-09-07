@@ -1933,6 +1933,68 @@ func TestDiscoverManual_SetsSourceFromOriginalURL(t *testing.T) {
 	}
 }
 
+// TestDiscoverManual_AdoptsProviderErrorWithItsReason proves an item
+// discovered while already failed at the provider carries the provider's own
+// explanation into the row, instead of landing in StateError with nothing to
+// show for it.
+//
+// Not cosmetic, because nothing later repairs it: RefreshFromProvider only
+// updates rows that appear in a listing, and handleMissingFromProvider skips a
+// row that is already StateError, so once the provider drops the failed item
+// the empty reason is frozen for good. Found live -- four adopted usenet rows
+// sat in "error" with no message at all while TorBox had said exactly why
+// ("failed (Download failed - Not on your server(s) ...)").
+func TestDiscoverManual_AdoptsProviderErrorWithItsReason(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	provider := &fakeProvider{statuses: []debrid.DownloadStatus{
+		{ID: "already-tracked-1", Name: "Pre-existing", State: debrid.StateCompleted},
+	}}
+	im := New(db, testRegistry(provider, nil), t.TempDir(), time.Minute, 5)
+	// Primes discovery for this provider+kind; only tick 2's additions matter.
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 1 error = %v", err)
+	}
+
+	provider.statuses = append(provider.statuses,
+		debrid.DownloadStatus{ID: "failed-item", Name: "Stalled", State: debrid.StateError, RawState: "stalled (no seeds)"},
+		debrid.DownloadStatus{ID: "healthy-item", Name: "Fine", State: debrid.StateDownloading, RawState: "downloading"},
+	)
+	if err := im.Tick(ctx); err != nil {
+		t.Fatalf("Tick() 2 error = %v", err)
+	}
+
+	failed, err := db.GetDownloadByProviderID(ctx, "faketorbox", "failed-item")
+	if err != nil {
+		t.Fatalf("GetDownloadByProviderID(failed-item) error = %v", err)
+	}
+	if failed == nil {
+		t.Fatal("failed-item was never adopted")
+	}
+	if failed.State != database.StateError {
+		t.Fatalf("failed-item State = %q, want %q", failed.State, database.StateError)
+	}
+	if failed.ErrorMessage != "stalled (no seeds)" {
+		t.Errorf("failed-item ErrorMessage = %q, want the provider's own reason %q",
+			failed.ErrorMessage, "stalled (no seeds)")
+	}
+
+	// The raw state only explains anything when it is explaining a failure.
+	// Copying it onto every adopted row would park "downloading" in the error
+	// column of a download that is doing fine.
+	healthy, err := db.GetDownloadByProviderID(ctx, "faketorbox", "healthy-item")
+	if err != nil {
+		t.Fatalf("GetDownloadByProviderID(healthy-item) error = %v", err)
+	}
+	if healthy == nil {
+		t.Fatal("healthy-item was never adopted")
+	}
+	if healthy.ErrorMessage != "" {
+		t.Errorf("healthy-item ErrorMessage = %q, want empty", healthy.ErrorMessage)
+	}
+}
+
 // TestDiscoverManual_SkipsRecentlyDeletedDownload proves a provider item
 // that's still technically present in a listing right after being
 // intentionally deleted (a real, observed race — the provider's own delete

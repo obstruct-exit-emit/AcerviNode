@@ -1243,10 +1243,15 @@ func (im *Importer) discoverManual(ctx context.Context, kind database.Kind, prov
 			Name:               st.Name,
 			SizeBytes:          st.SizeBytes,
 			State:              database.LocalStateFromProvider(st.State),
-			Progress:           st.Progress,
-			AddedVia:           addedVia,
-			Category:           category,
-			SavePath:           savePath,
+			// An item can be discovered already failed, and the provider's
+			// own reason is the only explanation this row will ever get --
+			// see database.ProviderErrorMessage for why nothing backfills it
+			// later.
+			ErrorMessage: database.ProviderErrorMessage(st.State, st.RawState),
+			Progress:     st.Progress,
+			AddedVia:     addedVia,
+			Category:     category,
+			SavePath:     savePath,
 			// A discovered download has no add-request source to capture
 			// the normal way — this is the closest equivalent, whenever the
 			// provider happens to know the original link (a reconstructed

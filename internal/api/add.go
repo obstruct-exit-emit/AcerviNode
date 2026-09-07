@@ -292,7 +292,11 @@ func (s *Server) handleAddTorrent(w http.ResponseWriter, r *http.Request) {
 		Category:           category,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
-		Progress:           status.Progress,
+		// A provider can report a failure the instant it accepts an add,
+		// and a row born in StateError needs its reason like any other --
+		// see database.ProviderErrorMessage.
+		ErrorMessage: database.ProviderErrorMessage(status.State, status.RawState),
+		Progress:     status.Progress,
 		// Source is the magnet itself for a magnet-based add, empty for a
 		// .torrent file upload — see database.Download.Source.
 		Source: magnet,
@@ -395,7 +399,11 @@ func (s *Server) handleAddUsenet(w http.ResponseWriter, r *http.Request) {
 		Category:           category,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
-		Progress:           status.Progress,
+		// A provider can report a failure the instant it accepts an add,
+		// and a row born in StateError needs its reason like any other --
+		// see database.ProviderErrorMessage.
+		ErrorMessage: database.ProviderErrorMessage(status.State, status.RawState),
+		Progress:     status.Progress,
 		// Source is the NZB URL itself for a URL-based add, empty for a
 		// .nzb file upload — see database.Download.Source. SourceFile is
 		// the reverse: the raw uploaded bytes for a file-based add, empty
@@ -556,7 +564,11 @@ func (s *Server) handleAddWebDownload(w http.ResponseWriter, r *http.Request) {
 		Category:           category,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
-		Progress:           status.Progress,
+		// A provider can report a failure the instant it accepts an add,
+		// and a row born in StateError needs its reason like any other --
+		// see database.ProviderErrorMessage.
+		ErrorMessage: database.ProviderErrorMessage(status.State, status.RawState),
+		Progress:     status.Progress,
 		// Source is the link itself — always present, since there's no
 		// file-upload variant for this kind — so handleReAddDownload can
 		// always resubmit it, unlike torrent/usenet where a file-uploaded
