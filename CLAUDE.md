@@ -12,7 +12,7 @@ A self-hosted download client for **debrid services** (TorBox, AllDebrid). It
 impersonates qBittorrent and SABnzbd so Sonarr/Radarr/Lidarr/Readarr can hand it
 grabs, sends them to a debrid provider, waits for the provider to finish, then
 fetches the resolved files to local disk over plain HTTP. One static Go binary
-with an embedded React dashboard and a pure-Go SQLite database. ~36k lines of
+with an embedded React dashboard and a pure-Go SQLite database. ~38k lines of
 Go, ~9k of TypeScript. Linux + systemd is the packaged deployment.
 
 **Managed vs Manual** is the central distinction. Managed downloads (added by an
@@ -107,6 +107,24 @@ Several tests assert the count; update them when you add one.
 **SQLite is one connection with WAL.** Slow writes block everything, which is why
 WAL exists. Do not add a second connection without understanding why there is one.
 
+**The compat shims are a wall: they read, they never fetch.** An \*arr app must
+never be able to cause a provider request. `internal/importer`'s poll is the only
+thing that talks to a provider; the shims read rows and `database.LiveStatus`.
+Re-introducing a provider call there makes load a function of how many \*arr apps
+are connected and how fast they poll — which is what it used to be, and what
+caused the rate limiting. Verified by packet capture, not by inspection.
+
+**The stuck-download watchdog is Managed-only.** A Managed download has the \*arr
+import pipeline waiting on it, so a permanently stuck row blocks something.
+Nothing waits on a Manual download — that is what Manual means — so erroring one
+destroys what the operator meant to fetch later. This reverses an earlier
+decision that covered both; do not "restore" it.
+
+**A pending \*arr add is claimed exactly once.** `pending_arr_adds` rows are
+deleted on match, so a second untracked item cannot inherit an identity already
+spent. The guards are provider, kind, expiry and single-use, and each fails the
+suite when removed.
+
 ---
 
 ## How to work here
@@ -114,9 +132,16 @@ WAL exists. Do not add a second connection without understanding why there is on
 **Verify live. Never guess.** Provider documentation is wrong often enough that
 this is the project's defining discipline. Three real examples: TorBox's docs
 claim comma-separated hashes for check-cached (repeated params is what actually
-works), AllDebrid's docs misdescribe their own response shape, and TorBox has an
-undocumented `cooldown_until` account restriction that looks exactly like a bug
-in our polling. Every one was found by making a real call.
+works), and AllDebrid's docs misdescribe their own response shape. Both were
+found by making a real call.
+
+The same discipline applies to *our own* notes. `docs/providers.md` records
+`cooldown_until` as a probable anti-abuse restriction, found during an incident
+where every listing returned `200 OK` with zero items. Two later observations
+weaken that: the field reads as exactly `updated_at + 24h` every time, which
+looks rolling rather than punitive, and it has been seen set while listings
+returned normally. The doc already hedges it as unconfirmed — treat it as an
+open question, not a known cause, and do not diagnose from it.
 
 **Every fix gets a failing test first, then a mutation check.** Write the test,
 watch it fail, fix it, then revert *only the fix* and confirm the test fails
@@ -142,9 +167,11 @@ with two display names). Those are tests that record the decision, not bugs.
 - Go is not on the default PATH in a non-login shell:
   `export PATH=$PATH:/usr/local/go/bin`.
 - The running instance is a **systemd service** on `:7846`, binary at
-  `/opt/acervinode/acervinode`. `sudo` needs a password — **ask the user for it,
-  and never write it, an API key, or a provider token into a file.** Credentials
-  live in the instance's own `config.yaml`.
+  `/opt/acervinode/acervinode`. **Check whether `sudo` needs a password** (`sudo -n true`) rather
+  than assuming: the WSL box was rebuilt and is now passwordless, while earlier
+  ones prompted. If it does prompt, ask — and **never write a password, an API
+  key, or a provider token into a file**, this repo has a public remote.
+  Credentials live in the instance's own `config.yaml`, mode 600.
 
 **Deploy sequence — the frontend must be built first**, because the Go binary
 embeds it:
@@ -172,16 +199,22 @@ and **CSS specificity** (`.settings-card button` beat `.link-button`). Verify by
 grepping the *source*, then the *served bundle*, with a string unique to the
 change — grepping a non-unique string has produced false confirmation twice.
 
-**Editing with Python patch scripts: assert in both directions.** Confirm the new
-text is present *and* the old text is gone. Match on trimmed line content rather
-than exact indentation — indentation in this repo is inconsistent in places, and
-an unasserted `str.replace` that silently no-ops is the single most common way
-work here goes wrong.
+**Editing with Python patch scripts: assert the anchor is UNIQUE.**
+`assert s.count(old) == 1` before replacing, not merely `old in s`. Asserting
+"new present, old gone" is not enough and has already failed: factoring a guard
+out of `Delete` so `Path` could share it replaced the first occurrence, which
+was inside the new function's own body — `validateName` ended up calling itself,
+recursed until the stack gave out, and took down the live service. Both
+directions were satisfied; the old text *was* gone, from the wrong place. Also
+match on trimmed line content rather than exact indentation, which is
+inconsistent here — and an unasserted `str.replace` that silently no-ops remains
+the other common way work goes wrong.
 
-**Bash heredocs eat backslashes.** `\\n` inside `<<'PYEOF'` has repeatedly become
-a real newline, producing unterminated string literals. For any patch containing
-backslashes, either write the script to a file first or build the backslash with
-`chr(92)`.
+**Never put a backslash inside a `<<'PYEOF'` heredoc. There is no exception.**
+`\\n` becomes a real newline, producing unterminated string literals. This is
+documented, has been read, and has still been done repeatedly in a single
+session — so treat it as a hard rule rather than a caution: write the script to
+a file with the Write tool, or build the backslash with `chr(92)`.
 
 **Rate-limit backoff blanks polling for a whole kind**, which presents as the UI
 freezing rather than as an error. Check `GET /api/v1/status` before diagnosing a
