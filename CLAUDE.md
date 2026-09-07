@@ -181,6 +181,17 @@ with two display names). Those are tests that record the decision, not bugs.
   ones prompted. If it does prompt, ask — and **never write a password, an API
   key, or a provider token into a file**, this repo has a public remote.
   Credentials live in the instance's own `config.yaml`, mode 600.
+- **The service does not autostart, and must not be re-enabled.**
+  `systemctl disable acervinode` has been run, so after a WSL restart nothing
+  is listening on `:7846` until someone runs `sudo systemctl start acervinode`.
+  A connection-refused on that port almost always means it simply was never
+  started rather than that anything is broken — check
+  `systemctl status acervinode` before diagnosing further. Leave it disabled:
+  this box shares a TorBox account with the real Proxmox instance, so a
+  background poll running whenever WSL happens to be up discovers that
+  instance's downloads as ghost Manual rows, flags them "no longer found" when
+  Proxmox deletes the provider copy after fetching, and spends rate limit
+  nobody asked it to spend. Start it for a test, stop it afterwards.
 
 **Deploy sequence — the frontend must be built first**, because the Go binary
 embeds it:
