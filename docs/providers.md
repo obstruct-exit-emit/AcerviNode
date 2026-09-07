@@ -913,9 +913,20 @@ download still steadily, actively transferring on a slow connection is
 never affected by this however long the whole thing takes — only a
 download that's actually gone quiet trips it, the same "idle, not total"
 philosophy `ImportFetchTimeoutSeconds` already applies to a single file's
-own fetch. Applies to both Managed and Manual downloads — being stuck
-queued/downloading isn't a state that means anything different depending on
-how it was added, unlike the retention policy above.
+own fetch. **Managed downloads only**, which reverses the original scope. That scope
+covered both, reasoning that being stuck queued/downloading isn't a state that
+means anything different depending on how a download was added. It is. A
+Managed download has the \*arr import pipeline waiting on it, and a row stuck
+forever blocks that — the whole reason this watchdog exists. Nothing waits on a
+Manual download; that is what Manual means. Auto-erroring one destroys the
+artifact the operator intended to fetch later, to solve a problem it does not
+have.
+
+Found in use rather than by review: a usenet download queued behind others on
+the provider reports no change for hours. It is not stalled, it is queued — and
+at a two-hour timeout the watchdog errored it before it could be fetched. The
+`updated_at` keying above is precisely what makes this safe for Managed rows
+and unsafe for Manual ones.
 
 ### Error-state cleanup
 

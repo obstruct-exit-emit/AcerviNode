@@ -863,6 +863,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The stuck-download watchdog no longer errors Manual downloads.** It had no
+  `added_via` filter, so a Manual download sitting in the provider's queue was
+  auto-errored the same as a Managed one — destroying the thing the operator
+  meant to fetch later.
+
+  This reverses a stated decision rather than fixing an oversight. The original
+  scope covered both, reasoning that "stuck queued/downloading" means the same
+  thing however a download was added. It does not: a Managed download has the
+  \*arr import pipeline waiting on it and a stuck row blocks that forever, which
+  is the whole reason the watchdog exists. Nothing waits on a Manual download —
+  that is what Manual means.
+
+  Found in use, not by review. A usenet download queued behind others reports no
+  change for hours; it is not stalled, it is queued. At a two-hour timeout it was
+  errored before it could be grabbed. The `updated_at` keying is exactly what
+  makes the watchdog safe for Managed rows and unsafe for Manual ones.
+
+
 - **A shared guard shipped calling itself.** Factoring the snapshot-name
   validation out of `Delete` so `Path` could reuse it replaced the wrong
   occurrence: the new `validateName` got the call, not the body, so it recursed

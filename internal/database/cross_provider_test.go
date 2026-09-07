@@ -125,6 +125,58 @@ func TestListDownloadsByProvider_ScopesToOneProvider(t *testing.T) {
 	}
 }
 
+// TestListStuckDownloads_ManagedOnly pins the watchdog to Managed downloads.
+//
+// This reverses an earlier decision, and the reasoning is worth keeping. The
+// original scope covered both, on the grounds that "stuck queued/downloading"
+// is the same state however a download was added. It is not: for a Managed
+// download something is waiting -- the *arr import pipeline -- and a row stuck
+// forever blocks it, which is the whole reason the watchdog exists. Nothing is
+// waiting on a Manual download; that is its definition. Erroring one destroys
+// the thing the operator meant to fetch later, to solve a problem it does not
+// have.
+//
+// Found in the wild: a usenet download queued behind others on the provider
+// reports no change for hours. It is not stalled, it is queued -- and at a
+// two-hour timeout the watchdog killed it before it could be fetched.
+func TestListStuckDownloads_ManagedOnly(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	old := time.Now().Add(-2 * time.Hour)
+	mk := func(via AddedVia, id string) string {
+		d := newTestDownload(KindUsenet)
+		d.ProviderDownloadID = id
+		d.State = StateQueued
+		d.AddedVia = via
+		if err := db.InsertDownload(ctx, d); err != nil {
+			t.Fatalf("InsertDownload() error = %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE downloads SET updated_at = ? WHERE id = ?`, old, d.ID); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+		return d.ID
+	}
+
+	managed := mk(AddedViaArr, "managed-1")
+	manual := mk(AddedViaManual, "manual-1")
+
+	got, err := db.ListStuckDownloads(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListStuckDownloads() error = %v", err)
+	}
+	ids := map[string]bool{}
+	for _, d := range got {
+		ids[d.ID] = true
+	}
+	if !ids[managed] {
+		t.Error("a stale Managed download was not returned — the watchdog has nothing to do")
+	}
+	if ids[manual] {
+		t.Error("a stale Manual download was returned; auto-erroring it destroys something nobody was waiting on")
+	}
+}
+
 // TestListStuckDownloads_OnlyInFlightAndOnlyStale backs the stuck-download
 // watchdog, which auto-errors what it returns. Untested until now, and it
 // defaults to disabled — so the first time anyone switches it on would have

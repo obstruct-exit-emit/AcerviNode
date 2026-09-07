@@ -207,6 +207,11 @@ type Config struct {
 	// actually making progress is never affected) for at least this many
 	// minutes. 0 (the default) disables the watchdog entirely — nothing
 	// currently catches a download that's stalled with no explicit error.
+	//
+	// Managed only. Nothing is waiting on a Manual download, so erroring one
+	// destroys what the operator meant to fetch later rather than unblocking
+	// anything — see database.ListStuckDownloads for the full reasoning and
+	// the case that prompted it.
 	StuckDownloadTimeoutMinutes int `yaml:"stuck_download_timeout_minutes"`
 	// CleanupErrorAfterDays, if > 0, has internal/importer automatically
 	// remove a download once it's been sat in StateError for at least this

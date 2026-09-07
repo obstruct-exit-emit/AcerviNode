@@ -553,16 +553,28 @@ func (db *DB) ListDownloadsEligibleForCleanup(ctx context.Context, olderThan tim
 // UpdateDownloadStatus/RefreshFromProvider actually change something
 // (state/progress/size/error), never on a no-op poll, so an old updated_at
 // here means the provider has genuinely stopped reporting anything new, not
-// just that the download has been running a while. Applies to both Managed
-// and Manual downloads — unlike ListDownloadsEligibleForCleanup's arr-only
-// scope, being stuck queued/downloading isn't a state that means anything
-// different depending on how it was added.
+// just that the download has been running a while.
+//
+// Managed only, which reverses an earlier decision worth recording. The
+// original scope covered both, reasoning that "stuck queued/downloading" is
+// the same state however a download was added. It is not. For a Managed
+// download something is waiting — the *arr import pipeline — and a row stuck
+// forever blocks it, which is the entire reason this watchdog exists. Nothing
+// is waiting on a Manual download; that is what Manual means. Auto-erroring
+// one destroys the artifact the operator intended to fetch later, to solve a
+// problem it does not have.
+//
+// Found in the wild rather than by reading: a usenet download queued behind
+// others on the provider reports no change for hours — not stalled, queued —
+// and a two-hour timeout killed it before it could be fetched. The
+// updated_at keying is what makes the watchdog safe for Managed rows, and it
+// is exactly what makes it unsafe for Manual ones.
 func (db *DB) ListStuckDownloads(ctx context.Context, olderThan time.Time) ([]*Download, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT `+downloadColumns+`
 		FROM downloads
-		WHERE state IN (?, ?) AND updated_at < ?
-		ORDER BY updated_at`, StateQueued, StateDownloading, olderThan)
+		WHERE state IN (?, ?) AND updated_at < ? AND added_via = ?
+		ORDER BY updated_at`, StateQueued, StateDownloading, olderThan, string(AddedViaArr))
 	if err != nil {
 		return nil, fmt.Errorf("list stuck downloads: %w", err)
 	}
