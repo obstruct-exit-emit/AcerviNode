@@ -1204,19 +1204,21 @@ export function Settings({ apiKey }: Props) {
                       <p className="settings-error">{addProviderStatus.message}</p>
                     )}
 
-                    {/* This provider's own account — its plan, its expiry,
-                        its restrictions. Inside its card because none of it
-                        generalises: two providers have two different plans,
-                        and a cooldown belongs to whichever account applied
-                        it. */}
-                    {account?.available && account.cooldown_until && new Date(account.cooldown_until).getTime() > Date.now() && (
-                      <p className="settings-error">
-                        ⚠ {providerLabel(p.name)} is restricting this account until{' '}
-                        {new Date(account.cooldown_until).toLocaleString()} — every download's progress can look
-                        frozen with no other visible cause while this is active. Not something AcerviNode can do
-                        anything about; it'll clear on its own.
-                      </p>
-                    )}
+                    {/* This provider's own account — its plan, its expiry.
+                        Inside its card because none of it generalises: two
+                        providers have two different plans.
+
+                        No cooldown_until warning here any more, deliberately.
+                        It used to render whenever that field was in the
+                        future, which measurement showed is *always*: sampled
+                        against the real TorBox API eight minutes apart, the
+                        value advanced by 26 minutes and read as exactly
+                        updated_at + 24h to the second, and updated_at is
+                        bumped by account activity. So it is a derived, rolling
+                        horizon that can never be reached — not a restriction,
+                        and the banner was permanently on for every account,
+                        blaming TorBox for unrelated symptoms. See
+                        docs/providers.md. */}
                     {account?.available && (
                       <dl className="detail-meta account-status">
                         <dt>Plan</dt>

@@ -255,7 +255,7 @@ everything else in it intact — which before this would have been deleted outri
   (new `database.CountDownloadsByState`). Deliberately doesn't fold in
   TorBox's own `cooldown_until` (a separate, earlier fix — see
   [CHANGELOG](CHANGELOG.md) and
-  [Providers](docs/providers.md#cooldown_until--a-real-undocumented-account-restriction))
+  [Providers](docs/providers.md#cooldown_until--measured-and-not-a-restriction))
   even though both were motivated by the same incident — a listing
   call that succeeds but finds nothing new still advances
   `last_successful_list_at`, so the two fields answer genuinely different

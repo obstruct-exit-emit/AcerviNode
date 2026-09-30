@@ -2236,7 +2236,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   field — it's display-only — but a warning banner now appears on the
   Settings page whenever it's active, so this is diagnosable at a glance
   next time instead of requiring a manual log/API investigation. See
-  docs/providers.md#cooldown_until--a-real-undocumented-account-restriction
+  docs/providers.md#cooldown_until--measured-and-not-a-restriction
   for the full writeup, including the caveat that TorBox doesn't document
   this field anywhere and the causal mechanism isn't independently
   confirmed on their end.

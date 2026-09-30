@@ -454,7 +454,7 @@ does, closing the gap at the source instead of leaning on retry to paper
 over it.
 
 `Importer.runFastPoll` runs `refreshActiveDownloads` on its own goroutine and
-its own ticker (`fastPollInterval`, 3s by default — `fast_poll_interval_seconds`,
+its own ticker (`fastPollInterval`, 15s by default — `fast_poll_interval_seconds`,
 live-configurable, no restart, see [Configuration](configuration.md); the
 default was tuned live against a real provider to stay responsive without
 risking a rate limit, but a user with many downloads active at once may
@@ -1214,7 +1214,7 @@ Three signals, each answering a different question:
   "found something new" — a `List()` call that succeeds but returns nothing
   changed still counts as successful. This is the one genuinely subtle part:
   during the real TorBox `cooldown_until` incident (see
-  [`cooldown_until`](#cooldown_until--a-real-undocumented-account-restriction)
+  [`cooldown_until`](#cooldown_until--measured-and-not-a-restriction)
   above), every listing call kept returning `200 OK` with zero items — not an
   error — so `last_successful_list_at` would have kept advancing the entire
   time, offering no signal that anything was wrong. That's why
@@ -1600,7 +1600,7 @@ expiry, single-use — and each fails the test suite when reverted.
 already adopted as Manual stays Manual. Re-grabbing it from the \*arr app is the
 fix; `InsertOrClaimForArr` will then attach it properly.
 
-#### `cooldown_until` — a real, undocumented account restriction
+#### `cooldown_until` — measured, and not a restriction
 
 Found live while investigating a real "everything looks frozen" report — every
 download's `progress` had stopped updating, `RefreshFromProvider`'s mass-vanish
@@ -1613,24 +1613,38 @@ had `cooldown_until` set to a real future timestamp (roughly 24h out from the
 account's own `updated_at`) — every listing endpoint stayed empty for as long as
 that held.
 
-That specific causal mechanism (`cooldown_until` being *why* listings are empty,
-as opposed to a coincidental correlation with some other account-level state) is
-**not independently confirmed from TorBox's own documentation** — there isn't
-any found for this field at all. The correlation observed live was exact and
-repeatable in the moment, which is the most that can honestly be claimed. Given
-the account's own usage counters (`torrents_downloaded`/`usenet_downloads_downloaded`)
-were both very high at the time, this reads like a TorBox-side anti-abuse/rate
-cooldown triggered by sustained heavy API usage — this project's own long-running
-live-testing sessions being the most likely cause on the account it was found on,
-not something a normal personal-use pattern would be expected to trigger.
+**That reading was wrong, and the field has since been measured.** Two samples
+of `GET /user/me` against the real account, eight minutes apart:
 
-AcerviNode doesn't change any polling behavior based on this field — no special
-backoff, no different retry logic — it's surfaced purely for visibility:
-`debrid.AccountStatus.CooldownUntil` → `GET /api/v1/settings/account`'s
-`cooldown_until` → a warning banner in the Settings page's TorBox account section
-whenever it's set to a future time. Without this, the exact same "why has nothing
-updated in hours" investigation would otherwise require reading logs or querying
-TorBox directly by hand, same as how this was actually found.
+| sampled at | `cooldown_until` | `updated_at` |
+| --- | --- | --- |
+| `03:20:47Z` | `2026-10-01T02:59:36Z` | `2026-09-30T03:03:13Z` |
+| `03:29:12Z` | `2026-10-01T03:25:26Z` | `2026-09-30T03:25:26Z` |
+
+`cooldown_until` **advanced by 26 minutes between the two**, and in the second it
+is exactly `updated_at` + 24h — equal to the second. `updated_at` is bumped by
+account activity, so it is always close to now. The field is therefore a derived,
+rolling 24-hour horizon that is **permanently in the future and can never be
+reached**. It does not mark a restriction, it cannot expire, and nothing can be
+diagnosed from it.
+
+What the original incident actually was is still unknown — listings really were
+returning zero items for hours. `cooldown_until` was simply the wrong suspect:
+it was set then because it is *always* set.
+
+AcerviNode has never changed polling behaviour based on this field, and now does
+not display it either. It used to render a red "TorBox is restricting this
+account until …" banner in Settings whenever the value was in the future — which
+is to say permanently, on every account, blaming the provider for whatever else
+the user happened to be seeing. The field is still carried through
+`debrid.AccountStatus.CooldownUntil` → `GET /api/v1/settings/account` for anyone
+who wants it; it is just not presented as a problem.
+
+**To tell whether polling is actually being rate limited**, read
+`GET /api/v1/status` instead: it reports a per-kind `error_count` and the last
+successful listing time, and a real `429` is mapped to `debrid.ErrRateLimited`
+and logged. On the account where this was measured those counters were all zero
+and 24 hours of logs contained no `429` at all, while the banner was showing.
 
 ### The compat shims are a wall: they read, they never fetch
 

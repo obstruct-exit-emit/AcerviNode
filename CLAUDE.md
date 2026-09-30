@@ -144,13 +144,25 @@ claim comma-separated hashes for check-cached (repeated params is what actually
 works), and AllDebrid's docs misdescribe their own response shape. Both were
 found by making a real call.
 
-The same discipline applies to *our own* notes. `docs/providers.md` records
-`cooldown_until` as a probable anti-abuse restriction, found during an incident
-where every listing returned `200 OK` with zero items. Two later observations
-weaken that: the field reads as exactly `updated_at + 24h` every time, which
-looks rolling rather than punitive, and it has been seen set while listings
-returned normally. The doc already hedges it as unconfirmed — treat it as an
-open question, not a known cause, and do not diagnose from it.
+The same discipline applies to *our own* notes, and `cooldown_until` is the
+worked example. `docs/providers.md` recorded it for months as a probable
+anti-abuse restriction, found during an incident where every listing returned
+`200 OK` with zero items. It was hedged as unconfirmed, then treated as an open
+question — and it was still wrong, because nobody had simply *sampled it twice*.
+Two `GET /user/me` calls eight minutes apart settled it: the value advanced by 26
+minutes and read as exactly `updated_at + 24h` to the second. It is a rolling
+horizon that is permanently in the future and can never be reached, so it marks
+nothing. Meanwhile the UI had been showing a red "TorBox is restricting this
+account" banner whenever it was in the future — that is, always, on every
+account — and the operator reported it as a real problem more than once.
+
+Two lessons worth more than the fact itself. **A hedge is not a finding**:
+writing "unconfirmed" bought years of nobody checking, when the check was one
+extra API call. And **be careful what gets rendered in red**: a warning derived
+from a field nobody understood sent every investigation down the wrong path,
+including this project's own. To tell whether polling is really being limited,
+read `GET /api/v1/status` — per-kind `error_count` and a real `429` mapped to
+`debrid.ErrRateLimited` — not a provider field whose meaning was assumed.
 
 **Every fix gets a failing test first, then a mutation check.** Write the test,
 watch it fail, fix it, then revert *only the fix* and confirm the test fails

@@ -565,10 +565,14 @@ export interface ProviderAccount {
   is_subscribed?: boolean
   premium_expires_at?: string
   total_bytes_downloaded?: number
-  // cooldown_until, if present and in the future, means the provider is
-  // currently restricting this account — every download's progress/state
-  // can look frozen with no other visible explanation while this is set.
-  // Not documented anywhere by the provider; surfaced as-is, not acted on.
+  // cooldown_until is TorBox's own undocumented field, carried through the
+  // API but deliberately not displayed — it is not a restriction. Measured
+  // against the real account: it reads as exactly updated_at + 24h to the
+  // second, and updated_at is bumped by account activity, so it advances as
+  // you use the account (26 minutes' movement across two samples eight
+  // minutes apart) and is never in the past. It was previously shown as a
+  // warning whenever it was in the future, i.e. permanently. See
+  // docs/providers.md before putting it back in front of anyone.
   cooldown_until?: string
 }
 
