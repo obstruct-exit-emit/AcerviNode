@@ -1579,20 +1579,36 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) e
 		}
 	}
 
+	// Progress is measured against the files actually being fetched. d.SizeBytes
+	// counts every file the provider has, so with a sample or an extras folder
+	// filtered out it could never reach 100%. It remains the fallback when the
+	// provider gave no per-file sizes, which is what it always was before.
+	var total int64
+	for _, f := range files {
+		total += f.SizeBytes
+	}
+	if total <= 0 {
+		total = d.SizeBytes
+	}
+
 	var doneBytes int64
 	for _, f := range files {
 		fileDoneBytes := doneBytes // captured per-iteration, not the loop variable
 		onProgress := func(fileWritten int64) {
-			if d.SizeBytes <= 0 {
+			if total <= 0 {
 				return // nothing sane to divide by
 			}
-			im.db.SetFetchProgress(d.ID, float64(fileDoneBytes+fileWritten)/float64(d.SizeBytes))
+			im.db.SetFetchProgress(d.ID, min(1, float64(fileDoneBytes+fileWritten)/float64(total)))
 		}
 		if err := im.fetchFile(ctx, p, id, f, destDir, onProgress); err != nil {
 			return fmt.Errorf("fetch file %q: %w", f.Path, err)
 		}
 		doneBytes += f.SizeBytes
-		onProgress(0) // exact boundary update, not just whatever the throttled in-flight calls last happened to land on
+		// The exact end-of-file boundary, not whatever the throttled in-flight
+		// reports last landed on. This was onProgress(0), which -- measured from
+		// fileDoneBytes, the count *before* this file -- reported the start of the
+		// file just finished, so progress jumped back after every file in a pack.
+		onProgress(f.SizeBytes)
 	}
 
 	// resolveDestDir returning something other than d.SavePath means it fell
@@ -2031,10 +2047,19 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	pw := &progressWriter{w: out, onProgress: onProgress}
-	if _, err := io.Copy(pw, body); err != nil {
+	written, err := io.Copy(pw, body)
+	if err != nil {
 		out.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("write file: %w", err)
+	}
+	// A clean end of stream is not proof of a complete file -- see
+	// expectedTransferSize. Checked before the rename, so a short file never
+	// appears at the real destination, which is the whole point of .part.
+	if want, known := expectedTransferSize(resp.ContentLength, f.SizeBytes); known && written != want {
+		out.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("incomplete transfer: received %d of %d bytes", written, want)
 	}
 	if err := out.Close(); err != nil {
 		os.Remove(tmpPath)
@@ -2044,6 +2069,33 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("finalize file: %w", err)
 	}
 	return nil
+}
+
+// expectedTransferSize is how many bytes a completed fetch must have written,
+// and whether that is known at all.
+//
+// io.Copy returning nil only means the stream ended cleanly. For a response
+// with a Content-Length, Go's client already turns an early end into
+// io.ErrUnexpectedEOF; a *chunked* response has no length to hold it to, so one
+// that stopped short used to be renamed into place and handed to *arr as a
+// finished release.
+//
+// The server's own Content-Length wins whenever there is one: it is that
+// server's promise about this exact response, so trusting it can never fail a
+// transfer that actually arrived intact. The provider's reported file size is
+// consulted only when the server stated nothing. That ordering is deliberate
+// and conservative. TorBox's reported sizes were checked live against its CDN
+// and matched exactly for torrents and web downloads, but usenet could not be
+// checked, and failing every download of a kind because a provider reported an
+// estimate would be far worse than the gap this closes.
+func expectedTransferSize(contentLength, providerSize int64) (int64, bool) {
+	if contentLength >= 0 {
+		return contentLength, true
+	}
+	if providerSize > 0 {
+		return providerSize, true
+	}
+	return 0, false
 }
 
 // trimRedundantTopDir drops a leading directory from a provider-supplied
