@@ -32,6 +32,15 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		if err != nil || d == nil || d.Kind != database.KindUsenet {
 			continue
 		}
+		// Stop an in-flight fetch before anything is removed. internal/importer
+		// may be mid-write for this download, and nothing else tells it the row
+		// is going: it would keep writing, recreate what DeleteLocalFiles removes
+		// below, and rename a finished file into a directory no row tracks --
+		// an orphan nothing will ever clean up. The native API's delete has done
+		// this all along; this is the path *arr apps' deletes actually take, which
+		// are the ones that land mid-fetch. Unconditional, like the native one:
+		// the row goes whether or not files do.
+		s.settings.CancelFetch(d.ID)
 		// Whether the provider actually removed its own copy decides the
 		// tombstone's lifetime: a failed delete leaves the item on the
 		// account, where discovery would re-adopt it as a ghost once a

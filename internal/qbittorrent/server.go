@@ -26,6 +26,10 @@ type settingsSource interface {
 	// see handleDelete. Delegates to internal/importer, the only place that
 	// knows how to resolve a download's actual destination directory live.
 	DeleteLocalFiles(d *database.Download) error
+	// CancelFetch stops internal/importer's in-flight fetch for a download, if
+	// any, and waits for it to actually stop -- see handleDelete, which must
+	// call it before removing anything.
+	CancelFetch(id string)
 }
 
 // Server is an http.Handler implementing the qBittorrent Web API surface

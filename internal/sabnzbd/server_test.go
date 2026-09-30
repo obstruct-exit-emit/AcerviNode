@@ -28,6 +28,7 @@ const testDownloadDir = "/downloads"
 func (k staticAPIKey) APIKey() string                            { return string(k) }
 func (k staticAPIKey) DownloadDir() string                       { return testDownloadDir }
 func (k staticAPIKey) DeleteLocalFiles(*database.Download) error { return nil }
+func (k staticAPIKey) CancelFetch(string)                        {}
 
 // fakeSettings is settingsSource with an inspectable DeleteLocalFiles — for
 // tests that need to assert whether/how it was called (see
@@ -35,12 +36,21 @@ func (k staticAPIKey) DeleteLocalFiles(*database.Download) error { return nil }
 type fakeSettings struct {
 	deleteLocalFilesCalls []string // download IDs, in order
 	deleteLocalFilesErr   error
+	// events interleaves CancelFetch and DeleteLocalFiles calls in the order
+	// they happened, as "cancel:<id>" / "delete:<id>" -- the ordering is the
+	// point, see TestHandleDelete_CancelsTheFetchFirst.
+	events []string
+}
+
+func (f *fakeSettings) CancelFetch(id string) {
+	f.events = append(f.events, "cancel:"+id)
 }
 
 func (f *fakeSettings) APIKey() string      { return testAPIKey }
 func (f *fakeSettings) DownloadDir() string { return testDownloadDir }
 func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
 	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
+	f.events = append(f.events, "delete:"+d.ID)
 	return f.deleteLocalFilesErr
 }
 
