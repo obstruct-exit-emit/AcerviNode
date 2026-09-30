@@ -127,15 +127,25 @@ type Importer struct {
 	// cleanupErroredDownloads. 0 (the default) disables it.
 	cleanupErrorAfterDays int
 
-	// intervalChanged carries a fresh interval into Run's select loop so a
-	// live SetConfig call can reset the ticker without Run having to poll
-	// for changes. Buffered 1: a SetConfig that lands while Run hasn't
-	// consumed the previous change just overwrites it — only the latest
-	// interval matters.
-	intervalChanged chan time.Duration
+	// intervalChanged wakes Run when SetConfig changes the interval, so the
+	// ticker can be reset without Run polling for changes. It carries no
+	// value on purpose: Run reads the current interval from config when woken.
+	// That is what makes it safe for every send to be non-blocking. A signal
+	// is only ever dropped when one is already pending, and a pending one
+	// guarantees Run will read the latest value anyway.
+	//
+	// It used to carry the interval itself, which Run then trusted, so a
+	// newer value could not simply be dropped -- the sender drained the slot
+	// and sent again, blocking. Two saves racing could interleave as drain,
+	// refill, blocking send, and that settings request then hung until Run
+	// next read the channel, which is between ticks.
+	intervalChanged chan struct{}
 	// fastPollIntervalChanged is intervalChanged's exact counterpart for
 	// runFastPoll's own ticker — see SetFastPollInterval.
-	fastPollIntervalChanged chan time.Duration
+	fastPollIntervalChanged chan struct{}
+	// ttlMu serialises applying the listing-cache lifetime, which SetConfig
+	// does from the current interval rather than its own argument.
+	ttlMu sync.Mutex
 
 	// rateLimitMu guards rateLimitState — see refreshKind's cooldown check
 	// and recordRateLimitHit/clearRateLimitHit. Purely in-memory,
@@ -345,8 +355,8 @@ func New(db *database.DB, registry *debrid.Registry, downloadDir string, interva
 		dirMode:                 ensureWritableDirModeDefault,
 		fastPollInterval:        fastPollIntervalDefault,
 		httpClient:              &http.Client{}, // no client-wide Timeout — fetchFile derives a per-request one from fetchTimeout instead, since it can change live
-		intervalChanged:         make(chan time.Duration, 1),
-		fastPollIntervalChanged: make(chan time.Duration, 1),
+		intervalChanged:         make(chan struct{}, 1),
+		fastPollIntervalChanged: make(chan struct{}, 1),
 		rateLimitState:          map[providerKind]*kindBackoff{},
 		successfulListAt:        map[providerKind]time.Time{},
 		listStreak:              map[providerKind]int{},
@@ -391,20 +401,19 @@ func (im *Importer) SetConfig(downloadDir string, interval time.Duration, maxRet
 		return
 	}
 	// The shared listing cache's lifetime tracks this interval: it's already
-	// the user's answer to how often the provider should be asked, and a
-	// shim request has no reason to answer it differently.
-	im.applyListCacheTTL(interval)
+	// the user's answer to how often the provider should be asked. Applied
+	// under ttlMu from the *current* interval, not this call's argument, so
+	// racing saves cannot leave the cache on one value and the ticker on
+	// another: whichever applies last reads the last write.
+	im.ttlMu.Lock()
+	_, current, _ := im.getConfig()
+	im.applyListCacheTTL(current)
+	im.ttlMu.Unlock()
 
+	// Never blocks -- see intervalChanged.
 	select {
-	case im.intervalChanged <- interval:
+	case im.intervalChanged <- struct{}{}:
 	default:
-		// A previous change is still waiting for Run to consume it — drain
-		// it and replace with this newer one rather than blocking.
-		select {
-		case <-im.intervalChanged:
-		default:
-		}
-		im.intervalChanged <- interval
 	}
 }
 
@@ -524,14 +533,10 @@ func (im *Importer) SetFastPollInterval(d time.Duration) {
 	if !changed {
 		return
 	}
+	// Never blocks -- see intervalChanged.
 	select {
-	case im.fastPollIntervalChanged <- d:
+	case im.fastPollIntervalChanged <- struct{}{}:
 	default:
-		select {
-		case <-im.fastPollIntervalChanged:
-		default:
-		}
-		im.fastPollIntervalChanged <- d
 	}
 }
 
@@ -680,8 +685,9 @@ func (im *Importer) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case newInterval := <-im.intervalChanged:
-			ticker.Reset(newInterval)
+		case <-im.intervalChanged:
+			_, interval, _ := im.getConfig()
+			ticker.Reset(interval)
 		case <-ticker.C:
 			if err := im.tick(ctx, false); err != nil {
 				logTickError(ctx, "importer: tick failed", "error", err)
@@ -700,8 +706,8 @@ func (im *Importer) runFastPoll(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case newInterval := <-im.fastPollIntervalChanged:
-			ticker.Reset(newInterval)
+		case <-im.fastPollIntervalChanged:
+			ticker.Reset(im.getFastPollInterval())
 		case <-ticker.C:
 			im.refreshActiveDownloads(ctx)
 		}
