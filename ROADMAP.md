@@ -5,9 +5,8 @@ complete; Phase 4 is where additional debrid providers get added as they
 become worth the maintenance cost. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
-**Start here:** [Critical — do next](#critical--do-next) is the current work
-queue — five Sonarr/Radarr integration findings, two of which can lose a
-download or a file.
+**Start here:** [Critical — do next](#critical--do-next) — all five
+Sonarr/Radarr integration findings are now fixed, tested and live-verified.
 
 **Legend:** ✅ complete · 🔴 critical, not started · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
@@ -45,7 +44,17 @@ recalled). Requested directly ("review code and find ways to make this work with
 sonarr and radarr better", then "add all to the roadmap to do next critical").
 Ordered by what actually costs downloads.
 
-- 🔴 **Both shims expose Manual downloads to \*arr apps, and \*arr never filters
+**All five are done**, each with a test written first and watched fail, and all
+five verified live against a real TorBox account. What the live run showed, on
+real data: the account held **29 Manual rows** (10 torrent, 19 usenet), every one
+of which used to be reported to \*arr and none of which is now; a real `.torrent`
+upload produced the infohash an independent implementation computes for the same
+file; a queued download reported `eta: 8640000` rather than 0; `complete_dir`
+came back rooted from both endpoints; and deleting a download added with an
+explicit `savepath` removed only its own directory, leaving the shared parent and
+everything else in it intact — which before this would have been deleted outright.
+
+- ✅ **Both shims expose Manual downloads to \*arr apps, and \*arr never filters
   them out.** `handleInfo` (`internal/qbittorrent/torrents.go`), `handleQueue`
   and `handleHistory` (`internal/sabnzbd`) all call `ListDownloads(ctx, kind)`,
   which has no `added_via` filter. The assumption that category scoping saves us
@@ -70,7 +79,7 @@ Ordered by what actually costs downloads.
   treatment. Fix is a Managed-only read path for both shims, with the native
   API/UI left unfiltered. Needs one decision: hard filter, or a setting.
 
-- 🔴 **`resolveDestDir` can `os.RemoveAll` a directory shared with other
+- ✅ **`resolveDestDir` can `os.RemoveAll` a directory shared with other
   downloads.** `internal/importer`'s first branch returns `d.SavePath` bare,
   while the function's own doc comment promises the result is "always namespaced
   by the download's own name so sibling downloads in the same category never
@@ -93,7 +102,7 @@ Ordered by what actually costs downloads.
   download's name onto it and report `save_path` as the requested path itself
   rather than synthesizing a parent from it.
 
-- 🔴 **Unknown ETA is reported as `0`, not qBittorrent's `8640000` sentinel.**
+- ✅ **Unknown ETA is reported as `0`, not qBittorrent's `8640000` sentinel.**
   `toTorrentInfo` sends `live.ETASeconds`, which is `0` whenever nothing has been
   cached for that row yet. Sonarr's `GetRemainingTime` is explicit about the
   convention — `if (torrent.Eta == 8640000) return null;`, commented "qBittorrent
@@ -101,7 +110,7 @@ Ordered by what actually costs downloads.
   remaining* rather than unknown, and every queued download claims to be finishing
   immediately.
 
-- 🔴 **`complete_dir` is never reported, so \*arr cannot resolve the client's
+- ✅ **`complete_dir` is never reported, so \*arr cannot resolve the client's
   output root.** `internal/sabnzbd`'s `mode=get_config` sends
   `misc.complete_dir: ""` and `mode=fullstatus` omits the field entirely. Sonarr's
   `GetCategories` falls back to `fullstatus`'s `CompleteDir` precisely when
@@ -110,7 +119,7 @@ Ordered by what actually costs downloads.
   health check reads — is empty with it. Report the real download directory in
   both places.
 
-- 🔴 **A `.torrent` file add records no infohash.** `addTorrentFile` passes an
+- ✅ **A `.torrent` file add records no infohash.** `addTorrentFile` passes an
   empty hash to `recordPendingAdd`, so a lost add reply can only ever be
   reconciled by name. Sonarr and Radarr compute the infohash from the `.torrent`
   themselves and use it as `DownloadId`, so parsing the info dict at add time
