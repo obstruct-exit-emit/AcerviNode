@@ -177,6 +177,14 @@ the day of it. Requested directly: "add ... to road map to fix".
   takes effect when a batch drains (see `docs/configuration.md`). The burn-in
   should say how much this actually costs before it is built.
 
+  **Measured on the first production burn-in.** With a 9.9 GB file transferring
+  (~101 s at ~98 MB/s), a movie and an episode that finished at TorBox during it
+  waited **84 s and 79 s** before their transfers began — with 2 of 3 fetch
+  slots free the whole time — and `last_tick_at` froze for 103 s. The cost is
+  the big download's transfer time, so it scales with size and inversely with
+  link speed: on a 20 MB/s link the same file would hold every other finished
+  download back for about eight minutes.
+
 - 🟡 **Two simultaneous `import_interval_seconds` saves can hang one of
   them.** Minor, and very unlikely. `SetConfig` tells `Run` about a new
   interval through a one-slot channel: a non-blocking send, and if the slot is

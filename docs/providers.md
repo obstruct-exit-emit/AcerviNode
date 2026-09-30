@@ -231,6 +231,16 @@ sizes were checked live against its CDN and matched to the byte for torrents and
 web downloads, but usenet could not be checked, and failing every download of a
 kind over a provider's estimate would be worse than the gap being closed.
 
+A file whose download request the server *refuses* — any non-200 status, before
+a byte of body — is retried on its own (`openFile`), twice, after 2s and 5s, each
+time with a freshly resolved link. On the first production burn-in TorBox's CDN
+refused a different file of a 26-file pack on each attempt, transiently, and
+before this one refusal abandoned the whole download attempt and backed it off
+exponentially. Only refusals are retried there: a link-resolution failure is a
+provider API error (a 429 among them) and still goes to the download-level
+backoff, and a server that accepts and then says nothing is still the idle
+timeout's job. The wait is interruptible, so a delete stops it at once.
+
 An \*arr app's explicit `save_path` is the destination only after it has been
 namespaced by the download's own name at add time (`qbittorrent.namespaceSavePath`)
 — see [Local file deletion](#local-file-deletion) for what an un-namespaced one

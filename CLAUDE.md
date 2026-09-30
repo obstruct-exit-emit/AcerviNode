@@ -160,6 +160,13 @@ cause `errFetchCancelled`, and only that cause skips `handleFailure`. Do not
 fetch the same way, and stalls would silently stop retrying. Do not replace it
 with "is the row still there?" either — that races the delete.
 
+**Only a *refused* file request is retried per file.** `openFile` retries a
+non-200 status with a fresh link; it deliberately does not retry link-resolution
+failures (provider API errors, 429 included, which must reach the
+download-level backoff) or transport errors (a silent server is the idle
+timeout's job — retrying it multiplies the stall wait). Widening it looks like
+an improvement and is not.
+
 **A fetched file's size is checked against the server first, the provider
 second.** `expectedTransferSize` trusts the response's own `Content-Length` and
 falls back to the provider's reported size only when there is none. TorBox's

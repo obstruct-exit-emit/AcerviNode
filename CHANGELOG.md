@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **One refused file failed a whole download.** Found on the first production
+  burn-in: TorBox's CDN intermittently answered a file's request with 400 while
+  fetching a 26-file, 10 GB season pack — E07, then E15, then another — while
+  a probe of every file's link minutes later came back clean. Each refusal
+  abandoned the rest of that attempt and backed the download off exponentially;
+  the pack finished on attempt 4 of 5. A refused request is now retried per
+  file, twice (2s, 5s), each with a freshly resolved link. Link-resolution
+  errors and transport errors are deliberately not retried there — they belong
+  to the download-level backoff and the idle timeout respectively. The error
+  also now carries a bounded snippet of what the server said, not just the
+  status code.
+
+- **A retrying download's reason disappeared within 30 seconds.** The routine
+  provider refresh saw "complete, no error" and wrote an empty message over the
+  importer's reason for the last failed attempt; production showed
+  `retry_count` 3 and a blank `error_message`. It is now kept while the importer
+  is still retrying; a failure the provider itself reports still wins.
+
 - **Sonarr and Radarr usenet grabs had no name, which disabled a safety net.**
   Neither app sends `nzbname` on `mode=addfile` (confirmed in both apps'
   `SabnzbdProxy.DownloadNzb`), and the SABnzbd shim named jobs from it, so every
