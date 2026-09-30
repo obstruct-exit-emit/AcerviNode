@@ -525,7 +525,7 @@ func toTorrentInfo(d *database.Download, live database.LiveStatus, fetchProgress
 		// frozen at 100% for however long the actual local copy takes.
 		Progress:     database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
 		State:        qbtState(d.State),
-		Eta:          live.ETASeconds,
+		Eta:          qbtETA(live.ETASeconds),
 		AddedOn:      d.AddedAt.Unix(),
 		CompletionOn: completionOn,
 		NumSeeds:     live.Seeders,
@@ -534,6 +534,32 @@ func toTorrentInfo(d *database.Download, live database.LiveStatus, fetchProgress
 		Ratio:        0,
 		RatioLimit:   0,
 	}
+}
+
+// qbtUnknownETA is qBittorrent's own value for "no idea how long this will
+// take" -- 8640000 seconds, i.e. 100 days. Sonarr and Radarr special-case it by
+// name (GetRemainingTime: `if (torrent.Eta == 8640000) return null;`, commented
+// "qBittorrent sends eta=8640000 if unknown such as queued"), so it is the only
+// way to say "unknown" in this protocol.
+const qbtUnknownETA int64 = 8640000
+
+// qbtETA maps a provider's reported seconds-remaining onto that vocabulary.
+//
+// A provider that has not reported an ETA -- or a row nothing has been polled
+// for yet, which is the common case right after an add and exactly when an *arr
+// app is most likely to be watching -- leaves this at 0. Sent as 0 it does not
+// read as "unknown" at the far end: it parses as zero seconds remaining, so
+// every queued download claimed to be finishing immediately.
+//
+// Values beyond a year are normalised to the sentinel as well. *arr already
+// treats those as unknown (`if (torrent.Eta < 0 || torrent.Eta > 365 * 24 *
+// 3600) return null;`), so this only makes the one value we emit for "unknown"
+// consistent rather than relying on two code paths there agreeing.
+func qbtETA(seconds int64) int64 {
+	if seconds <= 0 || seconds > 365*24*3600 {
+		return qbtUnknownETA
+	}
+	return seconds
 }
 
 // qbtState translates AcerviNode's local state machine to the qBittorrent
