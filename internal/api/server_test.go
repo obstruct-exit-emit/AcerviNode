@@ -172,10 +172,10 @@ func (f *fakeProvider) TorrentInfo(_ context.Context, hash string) (debrid.Torre
 }
 
 type fakeSettings struct {
-	deletedBackup   string
-	restoredBackup  string
-	restoreBackupErr error
-	deleteBackupErr error
+	deletedBackup      string
+	restoredBackup     string
+	restoreBackupErr   error
+	deleteBackupErr    error
 	base32Infohashes   bool
 	managedAddDefaults ManagedAddOptions
 	resetProviders     []string

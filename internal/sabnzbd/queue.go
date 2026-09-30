@@ -8,10 +8,6 @@ import (
 	"github.com/acervinode/acervinode/internal/database"
 )
 
-
-
-
-
 type queueSlot struct {
 	NzoID      string `json:"nzo_id"`
 	Filename   string `json:"filename"`

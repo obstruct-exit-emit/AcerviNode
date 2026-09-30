@@ -405,7 +405,7 @@ func TestNormalizeMagnet(t *testing.T) {
 			// is the shape of every API key and session token going, and
 			// treating those as torrents is worse than missing a hash.
 			"bcw2lj5gda5k4hqj3ay56z2i2vtaswqq",
-			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQ",  // 31, one short
+			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQ",   // 31, one short
 			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASWQQA", // 33, one long
 			"BCW2LJ5GDA5K4HQJ3AY56Z2I2VTASW01",  // 0 and 1 are not base32
 		} {

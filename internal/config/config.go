@@ -364,8 +364,8 @@ func defaults() *Config {
 		ManagedAddKeepFiles:        true,
 		// Off: the shape collides with ordinary base32 strings, and being
 		// wrong here means treating someone's secret as a download.
-		Base32Infohashes:           false,
-		DecodeBase64Links:          true,
+		Base32Infohashes:  false,
+		DecodeBase64Links: true,
 	}
 }
 

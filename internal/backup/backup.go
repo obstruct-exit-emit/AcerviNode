@@ -43,14 +43,14 @@ type Runner struct {
 	db  snapshotter
 	dir string
 
-	mu       sync.Mutex
+	mu sync.Mutex
 	// configPath is the config file copied alongside each snapshot. It, not
 	// the database, holds the provider keys, the API key and every login
 	// account, so a snapshot without it restores the download history and
 	// leaves you locked out. Empty disables the copy.
 	configPath string
 	interval   time.Duration
-	keep     int
+	keep       int
 
 	// changed carries a new interval to Run, so a settings change retunes
 	// the ticker instead of waiting out the old one. Buffered 1 and drained
@@ -65,9 +65,9 @@ func New(db snapshotter, dir, configPath string, interval time.Duration, keep in
 		db:         db,
 		dir:        dir,
 		configPath: configPath,
-		interval: interval,
-		keep:     keep,
-		changed:  make(chan time.Duration, 1),
+		interval:   interval,
+		keep:       keep,
+		changed:    make(chan time.Duration, 1),
 	}
 }
 
