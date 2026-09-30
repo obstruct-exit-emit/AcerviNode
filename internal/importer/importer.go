@@ -1735,10 +1735,45 @@ func (im *Importer) cleanupErroredDownloads(ctx context.Context) {
 // guard: resolveDestDir would otherwise collapse to the bare category
 // directory shared with every other download in it.
 func (im *Importer) RemoveLocalFiles(d *database.Download) error {
-	if strings.TrimSpace(d.Name) == "" {
-		return fmt.Errorf("refusing to remove local files: download has no name")
+	dest, err := im.removableDestDir(d)
+	if err != nil {
+		return err
 	}
-	return os.RemoveAll(im.resolveDestDir(d))
+	return os.RemoveAll(dest)
+}
+
+// removableDestDir returns d's destination directory only when deleting it is
+// actually safe, and an error naming the reason when it is not.
+//
+// resolveDestDir's contract -- stated in its own doc comment and relied on by
+// three others -- is that the destination always ends with the download's own
+// name. That is the whole reason removing it recursively is safe, so it is
+// worth enforcing at the dangerous operation rather than trusting every caller
+// and every historical row to have got it right.
+//
+// The empty-Name case was already guarded. The one that was not: an *arr app
+// supplying an explicit save_path used to have it stored verbatim, so the
+// destination was a directory shared with every other download sent the same
+// one -- a row with a perfectly good Name whose path simply was not namespaced
+// by it, which the old guard could not see. The add path no longer stores such
+// a value (see qbittorrent.namespaceSavePath), but rows written before that
+// still exist and no amount of care at insert time reaches them. Skipping the
+// removal orphans one download's files; the alternative destroys everyone
+// else's.
+func (im *Importer) removableDestDir(d *database.Download) (string, error) {
+	name := strings.TrimSpace(d.Name)
+	if name == "" {
+		return "", fmt.Errorf("refusing to remove local files: download has no name")
+	}
+	dest := filepath.Clean(im.resolveDestDir(d))
+	// Suffix rather than filepath.Base equality: a provider-reported name can
+	// itself contain a separator, and such a download is still namespaced
+	// correctly -- the destination just ends in more than one segment.
+	cleanName := filepath.Clean(name)
+	if dest != cleanName && !strings.HasSuffix(dest, string(filepath.Separator)+cleanName) {
+		return "", fmt.Errorf("refusing to remove local files: %q is not namespaced by the download's own name (%q), so it may be shared with other downloads", dest, name)
+	}
+	return dest, nil
 }
 
 // deleteProviderCopyAfterFetch removes the provider-side copy of a download
@@ -1782,10 +1817,12 @@ func (im *Importer) deleteProviderCopyAfterFetch(ctx context.Context, d *databas
 // endpoints, and this runs on the same independent tick as discovery.
 func (im *Importer) cleanupDownload(ctx context.Context, d *database.Download) {
 	destDir := im.resolveDestDir(d)
-	if strings.TrimSpace(d.Name) == "" {
-		slog.Warn("importer: cleanup skipping local file removal, download has no name", "id", d.ID, "dest", destDir)
-	} else if err := os.RemoveAll(destDir); err != nil {
-		slog.Warn("importer: cleanup failed to remove local files, continuing anyway", "id", d.ID, "dest", destDir, "error", err)
+	// Same guard as a user-initiated delete, and for the same reason -- see
+	// removableDestDir. Skipped with a warning rather than silently.
+	if dest, err := im.removableDestDir(d); err != nil {
+		slog.Warn("importer: cleanup skipping local file removal", "id", d.ID, "dest", destDir, "reason", err)
+	} else if err := os.RemoveAll(dest); err != nil {
+		slog.Warn("importer: cleanup failed to remove local files, continuing anyway", "id", d.ID, "dest", dest, "error", err)
 	}
 
 	// Whether the provider actually removed its own copy decides the

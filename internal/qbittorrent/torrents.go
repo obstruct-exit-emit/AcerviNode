@@ -100,7 +100,10 @@ func (s *Server) recordPendingAdd(ctx context.Context, kind database.Kind, hash,
 		Hash:     hash,
 		Name:     name,
 		Category: category,
-		SavePath: savePath,
+		// Namespaced here too: discovery stamps the recovered row with
+		// this exact value, so recording the bare directory would bring
+		// the shared-destination collision back by a different route.
+		SavePath: namespaceSavePath(savePath, name),
 	}); err != nil {
 		slog.Error("qbittorrent: could not record a failed add for later reconciliation", "error", err)
 	}
@@ -117,6 +120,53 @@ func infohashFromMagnet(magnet string) string {
 }
 
 var magnetInfohash = regexp.MustCompile(`(?i)xt=urn:btih:([0-9a-z]+)`)
+
+// namespaceSavePath puts a download into its own directory beneath the
+// save_path an *arr app asked for, instead of directly into it.
+//
+// internal/importer's resolveDestDir treats a non-empty save_path as the final
+// destination verbatim, while every other branch appends the download's own
+// name -- and its doc comment promises the result is "always namespaced by the
+// download's own name so sibling downloads in the same category never collide."
+// An explicit save_path broke that promise: every download sent with the same
+// one landed directly in it, siblings overwriting each other's files, and
+// cleanupDownload/RemoveLocalFiles then os.RemoveAll'd that shared directory,
+// taking every other download in it.
+//
+// Doing it here rather than in resolveDestDir is deliberate. After a fetch,
+// database.UpdateDownloadSavePath writes the resolved destination back into
+// save_path, so resolveDestDir's verbatim branch is load-bearing for every
+// already-fetched row -- appending the name there would turn
+// <dir>/<category>/<name> into <dir>/<category>/<name>/<name> and break cleanup
+// for existing downloads. Fixing it at the point the value is stored needs no
+// migration and leaves those rows alone.
+//
+// It also makes the two fields this shim reports mean what real qBittorrent
+// means by them: the directory the *arr app asked for stays save_path, and
+// content_path becomes the per-download directory beneath it (see
+// toTorrentInfo, which derives the pair by splitting this value).
+//
+// An empty save_path stays empty -- that is the common case, and the signal
+// internal/importer uses to resolve and persist a destination itself. A name
+// that is not a single path segment is ignored rather than joined: it cannot be
+// built into a directory safely, and refusing keeps a "../.." out of the path.
+func namespaceSavePath(supplied, name string) string {
+	dir := strings.TrimSpace(supplied)
+	if dir == "" {
+		return ""
+	}
+	dir = filepath.Clean(dir)
+	n := strings.TrimSpace(name)
+	if n == "" || n != filepath.Base(n) || n == "." || n == ".." {
+		return dir
+	}
+	// Already namespaced -- a re-add of a row whose save_path was recorded by
+	// an earlier pass through here must not gain a second copy of the name.
+	if filepath.Base(dir) == n {
+		return dir
+	}
+	return filepath.Join(dir, n)
+}
 
 func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath string) error {
 	p := s.defaultTorrent()
@@ -179,7 +229,6 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		Hash:               strings.ToLower(status.Hash),
 		Name:               status.Name,
 		Category:           category,
-		SavePath:           savePath,
 		SizeBytes:          status.SizeBytes,
 		State:              database.LocalStateFromProvider(status.State),
 		// A provider can report a failure the instant it accepts an add,
@@ -199,6 +248,8 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 	if d.Name == "" {
 		d.Name = d.Hash
 	}
+	// Set after the name is settled, since that is what it is namespaced by.
+	d.SavePath = namespaceSavePath(savePath, d.Name)
 	// Not a plain InsertDownload: a row for this provider id may already
 	// exist (TorBox dedupes by content, and the importer's discovery pass
 	// can adopt a just-added item first), in which case that row is claimed
