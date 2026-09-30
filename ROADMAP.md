@@ -8,7 +8,7 @@ fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 **Start here:** [Critical — do next](#critical--do-next) — all five
 Sonarr/Radarr integration findings are now fixed, tested and live-verified.
 
-**Legend:** ✅ complete · 🔴 critical, not started · 🔄 in progress · 💡 under consideration · ⏳ blocked
+**Legend:** ✅ complete · 🔴 critical, not started · 🟡 queued fix · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
 ## At a glance
 
@@ -138,6 +138,61 @@ everything else in it intact — which before this would have been deleted outri
   `SabnzbdDownloadStatus` enum members, so none risks a deserialization failure.
   `config.Sorters` cannot throw on a missing key — `SabnzbdConfig`'s constructor
   initializes it. And the `content_path != save_path` requirement is satisfied.
+
+### Queued fixes
+
+Two findings from the second code review (the fetch path, the TorBox client and
+the delete paths), deliberately left for after the burn-in rather than changed
+the day of it. Requested directly: "add ... to road map to fix".
+
+- 🟡 **One big download holds up everything behind it.** `Importer.Tick`
+  fetches its batch of `provider_completed` downloads concurrently, up to
+  `max_concurrent_downloads`, but then `wg.Wait()`s for the *whole batch* before
+  returning — and `Tick` runs synchronously inside `Run`'s select loop, so the
+  next tick cannot begin until the slowest fetch in the batch finishes. Its own
+  doc comment says so ("Tick itself still blocks until every one of this batch
+  has finished"), so this is a documented trade-off rather than an oversight,
+  but two of its consequences are worth fixing:
+
+  - **Head-of-line blocking.** Downloads due for a fetch are only selected at
+    the start of a tick. With a 50 GB season pack fetching and two of three
+    slots free, a download that becomes `provider_completed` meanwhile — the
+    fast poll does notice it promptly, on its own goroutine — still waits for
+    the pack to finish before its fetch can start. Every episode grab queues
+    behind the biggest thing in flight.
+  - **`last_tick_at` freezes.** Everything else the tick does stalls with it:
+    the bulk provider refresh, discovery, missing-detection, cleanup and the
+    stuck-download watchdog. `GET /api/v1/status` exists so an external monitor
+    can tell the tick loop is alive, and during every long fetch it reports
+    that it is not.
+
+  The likely shape of a fix is a persistent, `Importer`-level fetch pool that a
+  tick *feeds* rather than waits on, keeping `max_concurrent_downloads` as a
+  limit across ticks. `tryStartFetch` already refuses to start a second fetch
+  for a download mid-fetch, which is most of the safety a non-blocking tick
+  needs. The hard part is the test suite: many importer tests call `Tick` and
+  then assert a row reached `ready_for_import`, which depends on `Tick` being
+  synchronous — so they need a way to wait for the pool to drain, not a
+  rewrite. Also resize the pool live on `SetMaxConcurrent`, which today only
+  takes effect when a batch drains (see `docs/configuration.md`). The burn-in
+  should say how much this actually costs before it is built.
+
+- 🟡 **Two simultaneous `import_interval_seconds` saves can hang one of
+  them.** Minor, and very unlikely. `SetConfig` tells `Run` about a new
+  interval through a one-slot channel: a non-blocking send, and if the slot is
+  already full, drain it and send again. That second send *blocks*. With two
+  saves racing, the first can drain, the second can refill the slot, and the
+  first's blocking send then waits for `Run` to read — which it cannot do while
+  it is stuck in a long `Tick` (see above). That settings request hangs until
+  the fetch batch drains.
+
+  Only `import_interval_seconds` is affected. `SetFastPollInterval` uses the
+  same pattern, but its reader, `runFastPoll`, is a separate goroutine that a
+  long fetch never blocks. The fix is to treat the channel as a wake-up signal
+  only: make the final send non-blocking as well, and have `Run` read the
+  current value from `getConfig` when woken rather than trusting the value it
+  received — so a dropped duplicate can never leave the ticker on a stale
+  interval. Fixing the item above removes the long wait, but not the race.
 
 **Do next** — scoped, self-contained, verifiable without a second provider:
 
