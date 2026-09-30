@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1675,6 +1676,14 @@ func (im *Importer) processReserved(fetchCtx context.Context, doneFetch func(), 
 	if len(allFiles) == 0 {
 		return fmt.Errorf("provider reported no files for download %s yet", d.ID)
 	}
+	// A usenet download the provider marked complete but never unpacked --
+	// see packedOnly. Checked on the full list, before any filter, and before
+	// a byte is fetched: nothing any *arr app can import is in it.
+	if d.Kind == database.KindUsenet {
+		if summary, packed := packedOnly(allFiles); packed {
+			return fmt.Errorf("usenet download was not unpacked by the provider: only archive and recovery files were delivered (%s), no content", summary)
+		}
+	}
 	files := im.filterFiles(allFiles)
 	if skipped := len(allFiles) - len(files); skipped > 0 {
 		slog.Info("importer: skipped files not matching configured filters", "id", d.ID, "name", d.Name, "skipped", skipped, "kept", len(files))
@@ -2267,6 +2276,65 @@ func bodySnippet(r io.Reader) string {
 	}
 	return ": " + text
 }
+
+// packedOnly reports whether a download's files are nothing but archives and
+// their recovery and metadata files, with at least one archive -- a download
+// that still needs unpacking -- and summarises them by extension.
+//
+// It exists for usenet. TorBox's usenet service repairs and extracts
+// server-side, and its default is documented to leave only the wanted files.
+// On the first production burn-in it did not for one job: Amphibia.S01E37 was
+// marked completed with only the raw post in its file list -- RAR parts, par2
+// volumes, the .nzb, an .srr, no video. AcerviNode fetched all of it, about
+// 1.2 GB, and Sonarr sat on "Found archive file, might need to be extracted"
+// with nothing that would ever import. Re-submitting the same NZB came back
+// unpacked, so this is a transient failure on the provider's side, and the
+// job here is only to notice it.
+//
+// Not applied to torrents, deliberately: a torrent of nothing but RARs is a
+// common, legitimate release that people extract with unpackerr, and TorBox
+// never unpacks torrents, so nothing failed.
+//
+// Conservative by design, because the outcome is costly -- once retries run
+// out the download is an error, the SABnzbd shim reports it Failed, and Sonarr
+// blocklists the release. So only plainly packed lists qualify: any file that
+// is not an archive or a recovery/metadata file, images included, counts as
+// content. A list with no archive in it is not "packed" either.
+func packedOnly(files []debrid.DownloadFile) (summary string, packed bool) {
+	counts := map[string]int{}
+	archives := 0
+	for _, f := range files {
+		ext := strings.ToLower(filepath.Ext(f.Path))
+		switch {
+		case packedArchiveExt.MatchString(ext):
+			archives++
+		case packedSupportExt.MatchString(ext):
+		default:
+			return "", false
+		}
+		counts[ext]++
+	}
+	if archives == 0 {
+		return "", false
+	}
+	exts := make([]string, 0, len(counts))
+	for ext := range counts {
+		exts = append(exts, ext)
+	}
+	sort.Strings(exts)
+	parts := make([]string, len(exts))
+	for i, ext := range exts {
+		parts[i] = fmt.Sprintf("%d %s", counts[ext], ext)
+	}
+	return strings.Join(parts, ", "), true
+}
+
+var (
+	// .rar (including .partNN.rar), old-style .rNN, split .NNN, 7z, zip.
+	packedArchiveExt = regexp.MustCompile(`^\.(rar|r\d{2,3}|\d{3}|7z|zip)$`)
+	// Recovery and metadata that travel with a post but are never the content.
+	packedSupportExt = regexp.MustCompile(`^\.(par2|nzb|srr|sfv|nfo|md5|sha1|txt)$`)
+)
 
 // expectedTransferSize is how many bytes a completed fetch must have written,
 // and whether that is known at all.
