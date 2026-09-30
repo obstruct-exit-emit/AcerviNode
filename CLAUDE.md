@@ -170,6 +170,18 @@ that takes the row out of the due set — refilling after a failure could pick t
 same row straight back up and spin. `Tick` still waits, because fifty tests call
 it and then inspect the result.
 
+**The packed-usenet check is usenet-only and conservative, on purpose.**
+`packedOnly` keeps a usenet download TorBox never unpacked from being fetched,
+and it ends Failed so Sonarr blocklists it. Do not extend it to torrents — a
+RAR-only torrent is a legitimate release — and do not loosen what counts as
+content: any file that is not plainly an archive or a recovery/metadata file,
+images included, means "fetch it", because the alternative blocklists a release.
+
+**The interval channels are wake-up signals and carry no value.** That is what
+lets every send be non-blocking without losing a change: the reader takes the
+current interval from config. Giving them a value again brings back the
+drain-and-resend that could hang a settings save.
+
 **Only a *refused* file request is retried per file.** `openFile` retries a
 non-200 status with a fresh link; it deliberately does not retry link-resolution
 failures (provider API errors, 429 included, which must reach the

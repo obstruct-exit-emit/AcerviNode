@@ -73,7 +73,11 @@ at the HTTP boundary in `internal/sabnzbd/queue.go` and `history.go`. `queued`,
 `Failed` — either because the provider itself reported a failure (e.g.
 TorBox's own "Error" state, or a stalled/no-seeds download — see
 [Providers](providers.md#state-mapping)) or because Completed Download Handling
-gave up after exhausting its own fetch retries.
+gave up after exhausting its own fetch retries. That includes a usenet download
+TorBox marked complete but never unpacked: nothing is fetched, and it ends as
+`Failed` with a `fail_message` listing what was delivered, so Sonarr blocklists
+it and searches again — see
+[Providers](providers.md#when-torbox-does-not-unpack).
 
 `/queue`'s `status` field reports real SABnzbd's actual sub-phase strings, not
 just a flat `Downloading` for everything still in progress — TorBox's usenet

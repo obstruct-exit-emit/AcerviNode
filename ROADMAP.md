@@ -194,7 +194,7 @@ the day of it. Requested directly: "add ... to road map to fix".
   symptoms before the fix; every safeguard was mutation-checked and caught; the
   race detector is clean.
 
-- 🟡 **Two simultaneous `import_interval_seconds` saves can hang one of
+- ✅ **Two simultaneous `import_interval_seconds` saves can hang one of
   them.** Minor, and very unlikely. `SetConfig` tells `Run` about a new
   interval through a one-slot channel: a non-blocking send, and if the slot is
   already full, drain it and send again. That second send *blocks*. With two
@@ -212,7 +212,14 @@ the day of it. Requested directly: "add ... to road map to fix".
   received — so a dropped duplicate can never leave the ticker on a stale
   interval. The fix above removed the long wait; this race is what remains.
 
-- 🟡 **Notice when TorBox fails to unpack a usenet download.** Found on the first
+  **Fixed**, as described: both interval channels are now wake-up signals, every
+  send is non-blocking, and the reader takes the current value from config. The
+  listing-cache lifetime is applied from the current interval under its own
+  lock too, which closes a smaller race beside it. The test storms the setter
+  400 rounds deep with nothing reading — a single storm caught the hang only one
+  run in five — and failed 8 runs out of 8 against the old code.
+
+- ✅ **Notice when TorBox fails to unpack a usenet download.** Found on the first
   production burn-in. TorBox marked `Amphibia.S01E37` completed, but its file list
   was the raw post — 25 `.rar` parts, par2 volumes, an `.nzb`, an `.srr` — with no
   media file. AcerviNode fetched all of it (about 1.2 GB, ~750 MB of it par2 for
@@ -237,6 +244,14 @@ the day of it. Requested directly: "add ... to road map to fix".
   wording; and a release that is legitimately an archive (a comic, an ebook
   bundle) is not something any \*arr app can import either, so the rule is
   safe for all of them.
+
+  **Fixed**, the first way: a usenet download whose files are only archives and
+  their recovery/metadata files is not fetched, the attempt fails with a reason
+  counting the files by extension, and after the usual retries it ends Failed
+  for Sonarr to blocklist and re-search. Checked against the real TorBox file
+  list for the Amphibia job: packed, "1 .nfo, 1 .nzb, 9 .par2, 25 .rar, 1 .srr".
+  Re-submitting the NZB first is left undone — a possible follow-up; see
+  [Providers](docs/providers.md#when-torbox-does-not-unpack).
 
 **Do next** — scoped, self-contained, verifiable without a second provider:
 

@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A usenet download TorBox left packed was fetched, then stuck forever.**
+  Found on the first production burn-in: TorBox marked a job completed whose
+  file list was the raw post — 25 RAR parts, 9 par2 volumes, an `.nzb`, no
+  video — and AcerviNode fetched all ~1.2 GB of it while Sonarr sat on "Found
+  archive file". A usenet download whose files are only archives and their
+  recovery/metadata files is now not fetched; the attempt fails with a reason
+  that counts the files by extension. After the usual retries it ends as an
+  error, which the SABnzbd shim reports as Failed, so Sonarr blocklists it and
+  searches again, as it would for a real SABnzbd unpack failure. Usenet only —
+  RAR-only torrents are legitimate and still fetched — and conservative: any
+  other file, images included, counts as content.
+
+- **Two simultaneous `import_interval_seconds` saves could hang one of them.**
+  The interval reached `Run` through a one-slot channel carrying the value, so a
+  newer value could not be dropped and the sender drained and re-sent,
+  blocking. Both interval channels are now wake-up signals: sends never block,
+  and the reader takes the current value from config. The listing-cache
+  lifetime is also applied from the current interval under its own lock, so
+  racing saves cannot leave it on a different value from the ticker.
+
 - **One big download held up every other download.** Measured on the first
   production burn-in: with a 9.9 GB file transferring, a movie and an episode
   that finished at TorBox meanwhile waited 84s and 79s before starting, with two

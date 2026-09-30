@@ -1575,6 +1575,40 @@ TorBox-side equivalent to surface — TorBox just serves whatever it
 extracted, as-is, via its own file listing. There's no separate
 "organizing" phase for AcerviNode to pass through.
 
+#### When TorBox does not unpack
+
+Usually it does. Its `post_processing` default (`-1`) is documented to repair,
+extract and delete the sources, leaving only the wanted files. On the first
+production burn-in one job came back completed with only the raw post in its
+file list — 25 `.rar` parts, 9 `.par2` volumes, the `.nzb`, an `.srr`, an
+`.nfo`, and no video. Re-submitting the same NZB with the same settings came
+back unpacked, so this is a transient failure on TorBox's side, not a setting
+AcerviNode fails to send.
+
+`processReserved` now checks a usenet download's file list before fetching
+anything (`packedOnly`). If every file is an archive (`.rar`, `.rNN`, `.NNN`,
+`.7z`, `.zip`) or a recovery/metadata file (`.par2`, `.nzb`, `.srr`, `.sfv`,
+`.nfo`, `.md5`, `.sha1`, `.txt`), with at least one archive, nothing is fetched
+and the attempt fails with a reason naming what was delivered — for that job,
+"1 .nfo, 1 .nzb, 9 .par2, 25 .rar, 1 .srr". It goes through the ordinary retry
+and backoff, because TorBox can report a job complete slightly before its
+unpacked file appears in the list (see `mapUsenetState`), and a later attempt
+then just fetches it. If it is still packed when retries run out it becomes an
+error, which the SABnzbd shim reports as `Failed` with the reason as
+`fail_message`, so Sonarr blocklists the release and searches again — what it
+would do for a real SABnzbd unpack failure. The wording avoids "Unpacking failed,
+write error or disk is full?", the one `fail_message` Sonarr downgrades to a
+warning.
+
+Two limits are deliberate. It applies to **usenet only**: a torrent of nothing
+but RARs is a legitimate release that people extract with unpackerr, and TorBox
+never unpacks torrents. And it is **conservative**, because the outcome
+blocklists a release: any file that is not plainly an archive or a
+recovery/metadata file — images included — counts as content, and a list with
+no archive in it is not "packed". Re-submitting the NZB once before failing,
+which worked when tried by hand, is not done; AcerviNode does not keep the NZB
+for a Sonarr/Radarr add, though TorBox lists it among the job's files.
+
 ### Web Downloads
 
 TorBox's third service, alongside torrents and usenet: debrids direct links from
