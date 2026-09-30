@@ -21,7 +21,12 @@ const testAPIKey = "test-api-key"
 // changeable key.
 type staticAPIKey string
 
+// testDownloadDir is what the fakes report as the configured download
+// directory, i.e. SABnzbd's complete_dir -- see handleGetConfig.
+const testDownloadDir = "/downloads"
+
 func (k staticAPIKey) APIKey() string                            { return string(k) }
+func (k staticAPIKey) DownloadDir() string                       { return testDownloadDir }
 func (k staticAPIKey) DeleteLocalFiles(*database.Download) error { return nil }
 
 // fakeSettings is settingsSource with an inspectable DeleteLocalFiles — for
@@ -32,7 +37,8 @@ type fakeSettings struct {
 	deleteLocalFilesErr   error
 }
 
-func (f *fakeSettings) APIKey() string { return testAPIKey }
+func (f *fakeSettings) APIKey() string      { return testAPIKey }
+func (f *fakeSettings) DownloadDir() string { return testDownloadDir }
 func (f *fakeSettings) DeleteLocalFiles(d *database.Download) error {
 	f.deleteLocalFilesCalls = append(f.deleteLocalFilesCalls, d.ID)
 	return f.deleteLocalFilesErr

@@ -22,6 +22,12 @@ import (
 // handleDelete's DeleteLocalFiles).
 type settingsSource interface {
 	APIKey() string
+	// DownloadDir is reported as SABnzbd's own complete_dir -- the directory
+	// finished downloads land in. Sonarr's GetCategories reads that to work out
+	// the client's output root, falling back to mode=fullstatus when it is not
+	// a rooted path; reporting neither left status.OutputRootFolders empty,
+	// which is what its remote-path-mapping health check reads.
+	DownloadDir() string
 	// DeleteLocalFiles removes a download's local files from disk, if any —
 	// see handleDelete. Delegates to internal/importer, the only place that
 	// knows how to resolve a download's actual destination directory live.

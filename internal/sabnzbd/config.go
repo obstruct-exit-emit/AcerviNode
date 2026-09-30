@@ -121,7 +121,14 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"config": map[string]any{
 			"categories": cats,
 			"misc": map[string]any{
-				"complete_dir": "",
+				// The real download directory, and rooted, which matters: Sonarr's
+				// GetCategories only falls back to mode=fullstatus when this is not
+				// rooted, so answering properly here settles it in one call. Left
+				// empty before, which combined with fullstatus omitting the field
+				// entirely meant every category's FullPath -- and so
+				// status.OutputRootFolders, what *arr's remote-path-mapping health
+				// check reads -- came out empty.
+				"complete_dir": s.settings.DownloadDir(),
 			},
 		},
 	})
@@ -132,6 +139,10 @@ func (s *Server) handleFullStatus(w http.ResponseWriter, r *http.Request) {
 		"status": map[string]any{
 			"version": fakeVersion,
 			"paused":  false,
+			// Sonarr reads this as SabnzbdFullStatus.CompleteDir when
+			// get_config's own complete_dir is not rooted. That no longer
+			// happens, but a client asking this way round gets a real answer.
+			"complete_dir": s.settings.DownloadDir(),
 		},
 	})
 }
