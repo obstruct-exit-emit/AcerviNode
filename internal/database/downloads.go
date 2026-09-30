@@ -1366,6 +1366,16 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		// updated failure reason (e.g. "stalled (no seeds)" -> "Error")
 		// isn't silently skipped just because progress/size didn't move.
 		errorMessage := ProviderErrorMessage(st.State, st.RawState)
+		// A download internal/importer is still retrying keeps the importer's
+		// reason for its last failed fetch. It sits in provider_completed, the
+		// provider keeps reporting it complete, and a completed status carries no
+		// error -- so without this every refresh wrote an empty message over that
+		// reason, which then lived for at most one poll interval. Seen on the first
+		// production burn-in: retry_count 3, error_message empty. A failure the
+		// provider itself reports still wins, since newState is then StateError.
+		if newState == StateProviderCompleted && d.State == StateProviderCompleted && d.RetryCount > 0 {
+			errorMessage = d.ErrorMessage
+		}
 		if newState == d.State && st.Progress == d.Progress && st.SizeBytes == d.SizeBytes && errorMessage == d.ErrorMessage {
 			continue
 		}
