@@ -202,6 +202,32 @@ the day of it. Requested directly: "add ... to road map to fix".
   received — so a dropped duplicate can never leave the ticker on a stale
   interval. Fixing the item above removes the long wait, but not the race.
 
+- 🟡 **Notice when TorBox fails to unpack a usenet download.** Found on the first
+  production burn-in. TorBox marked `Amphibia.S01E37` completed, but its file list
+  was the raw post — 25 `.rar` parts, par2 volumes, an `.nzb`, an `.srr` — with no
+  media file. AcerviNode fetched all of it (about 1.2 GB, ~750 MB of it par2 for
+  ~490 MB of content), and Sonarr has sat on "Found archive file, might need to
+  be extracted" ever since: nothing will ever import it.
+
+  It is TorBox-side and transient, not a flag we fail to send. TorBox's default
+  `post_processing` (`-1`) is documented to repair, extract and delete the
+  sources, and re-submitting the very same NZB with our current settings came
+  back correct — one `.mkv`, no archives. So the job to do is *noticing*, not
+  configuring.
+
+  Real SABnzbd reports a failed unpack as `Failed`, which is what lets \*arr
+  blocklist the release and search again. Proposed: before fetching a usenet
+  download, look at its file list, and if it holds only archive and recovery
+  files (`.rar`/`.rNN`/`.partNN.rar`, `.par2`, `.nzb`, `.srr`, `.sfv`, `.nfo`)
+  with nothing else, do not fetch it. Either mark it failed with a SABnzbd-style
+  `fail_message`, or first resubmit its NZB to TorBox once — which worked when
+  tried by hand — and fail only if that comes back archive-only too. Two
+  details to respect: Sonarr downgrades exactly one message, "Unpacking failed,
+  write error or disk is full?", from Failed to Warning, so do not use that
+  wording; and a release that is legitimately an archive (a comic, an ebook
+  bundle) is not something any \*arr app can import either, so the rule is
+  safe for all of them.
+
 **Do next** — scoped, self-contained, verifiable without a second provider:
 
 - ✅ **Mass-vanish circuit breaker.** Done — requested directly ("complete
