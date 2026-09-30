@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A dead torrent looked healthy in Sonarr and Radarr.** Found on the first
+  production burn-in: a re-grab sat at 0 seeds and no progress while the
+  qBittorrent shim reported it as `downloading`. A torrent the provider is
+  still downloading, whose last poll saw no seeders and no speed, and that was
+  added more than 5 minutes ago, is now reported as `stalledDL` — what real
+  qBittorrent says — which Sonarr and Radarr show as a Warning, "stalled with
+  no connections". It does not trigger failed-download handling, so nothing is
+  blocklisted automatically. Read from the cached live status only; the shim
+  still never calls the provider.
+
 - **A usenet download TorBox left packed was fetched, then stuck forever.**
   Found on the first production burn-in: TorBox marked a job completed whose
   file list was the raw post — 25 RAR parts, 9 par2 volumes, an `.nzb`, no

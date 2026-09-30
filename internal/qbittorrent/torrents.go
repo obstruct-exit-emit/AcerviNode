@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -299,8 +300,12 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		// Read, never fetch. Whatever internal/importer's last poll wrote is
 		// what an *arr app sees, however often it asks — see the package
 		// comment on why this shim is deliberately a wall.
-		live, _ := s.db.LiveStatus(d.ID)
-		items = append(items, toTorrentInfo(d, live, fetchProgress, hasFetchProgress))
+		live, hasLive := s.db.LiveStatus(d.ID)
+		info := toTorrentInfo(d, live, fetchProgress, hasFetchProgress)
+		if qbtStalled(d, live, hasLive, time.Now()) {
+			info.State = "stalledDL"
+		}
+		items = append(items, info)
 	}
 
 	writeJSON(w, items)
@@ -620,6 +625,39 @@ func qbtState(local string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// qbtStallGrace is how long a new torrent gets to find peers before an empty
+// swarm is reported as stalled. TorBox reports no seeds for a moment on a
+// perfectly healthy fresh grab while it connects.
+const qbtStallGrace = 5 * time.Minute
+
+// qbtStalled reports whether a torrent should show as qBittorrent's
+// "stalledDL" rather than "downloading": the provider is still downloading it,
+// and its last poll saw no seeders and no transfer at all.
+//
+// Found on the first production burn-in: a dead LimeTorrents re-grab sat at 0
+// seeds and no progress while this shim told Sonarr "downloading", so Sonarr
+// showed it as healthy indefinitely. Real qBittorrent says "stalledDL" there,
+// and Sonarr and Radarr map that to a Warning, "stalled with no connections"
+// (confirmed against their source). A Warning is only a flag -- it does not
+// trigger failed-download handling -- so the operator decides what to do.
+//
+// It errs toward "downloading", because a false warning is noise in the
+// operator's queue:
+//   - only the cached live status is read, never the provider (the wall), and
+//     no cached status yet -- as after a restart -- is "unknown", not stalled;
+//   - seeders AND speed must both be zero: seeders with a momentary lull, or
+//     speed from peers that are not full seeds, is a working torrent;
+//   - only provider-side "downloading": in provider_completed the provider's
+//     speed is 0 because it is finished and our own fetch is running;
+//   - a torrent younger than qbtStallGrace is still connecting.
+func qbtStalled(d *database.Download, live database.LiveStatus, hasLive bool, now time.Time) bool {
+	return hasLive &&
+		d.State == database.StateDownloading &&
+		live.Seeders == 0 &&
+		live.DownloadSpeedBytes == 0 &&
+		now.Sub(d.AddedAt) >= qbtStallGrace
 }
 
 // magnetHash extracts the infohash from a magnet URI's xt=urn:btih:HASH

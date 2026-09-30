@@ -170,6 +170,13 @@ that takes the row out of the due set — refilling after a failure could pick t
 same row straight back up and spin. `Tick` still waits, because fifty tests call
 it and then inspect the result.
 
+**`stalledDL` is a Warning, and must stay one.** The qBittorrent shim reports
+a dead torrent (provider still downloading, no seeders, no speed, past a
+5-minute grace) as `stalledDL`, which Sonarr flags but does not fail. Do not
+map it to `error` — that is also only a Warning in Sonarr, and loses the
+"stalled" wording — and do not route it into failed-download handling: a torrent
+with no seeds can still find one, and blocklisting is the operator's call.
+
 **The packed-usenet check is usenet-only and conservative, on purpose.**
 `packedOnly` keeps a usenet download TorBox never unpacked from being fetched,
 and it ends Failed so Sonarr blocklists it. Do not extend it to torrents — a

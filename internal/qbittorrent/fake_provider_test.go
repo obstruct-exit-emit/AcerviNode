@@ -35,6 +35,9 @@ type fakeEntry struct {
 	eta     int64
 	calls   int
 	files   []debrid.DownloadFile
+	// seeders/speed are the swarm figures the provider reports.
+	seeders int64
+	speed   int64
 }
 
 func newFakeProvider() *fakeProvider {
@@ -93,6 +96,7 @@ func (f *fakeProvider) statusFor(id debrid.ProviderDownloadID, e *fakeEntry) deb
 	}
 	return debrid.DownloadStatus{
 		ID: id, Name: e.name, Hash: e.hash, SizeBytes: e.size, Progress: progress, State: state, ETASeconds: e.eta,
+		Seeders: e.seeders, DownloadSpeedBytes: e.speed,
 	}
 }
 

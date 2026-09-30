@@ -56,9 +56,34 @@ specific vocabulary:
 |---|---|---|
 | `queued` | `queuedDL` | Not yet accepted by the provider |
 | `downloading` | `downloading` | Provider is fetching it |
+| `downloading`, no seeders and no speed | `stalledDL` | See [Stalled torrents](#stalled-torrents) |
 | `provider_completed` | `downloading` | Provider is done, but [Completed Download Handling](providers.md#completed-download-handling-internalimporter) hasn't fetched the files to local disk yet — reporting `pausedUP` here would send Sonarr's import step looking for files that don't exist yet |
 | `ready_for_import` | `pausedUP` | Files are actually on disk. Not `uploading` — AcerviNode never actually seeds locally at all (TorBox handles that server-side), and `pausedUP`/`stoppedUP` are the only states that let Sonarr/Radarr's own `CanMoveFiles`/`CanBeRemoved` become true (confirmed against their real source), unlocking a real hardlink/move instead of always falling back to copy-only, and letting "Remove completed downloads" actually clean up afterward |
 | `error` | `error` | Either the provider itself reported a failure (e.g. TorBox's own "Error" state, or a stalled/no-seeds torrent — see [Providers](providers.md#state-mapping)) or Completed Download Handling gave up after exhausting its own fetch retries |
+
+### Stalled torrents
+
+A torrent the provider is still downloading, whose last poll saw **no seeders
+and no download speed**, is reported as `stalledDL` instead of `downloading`.
+Sonarr and Radarr map `stalledDL` to a Warning, "stalled with no connections"
+(confirmed against their source). A Warning is only a flag: it does not trigger
+failed-download handling, so nothing is blocklisted automatically — the
+operator decides whether to wait or remove it.
+
+Found on the first production burn-in: a dead torrent re-grab sat at 0 seeds and
+no progress while Sonarr showed it as healthy. TorBox only sometimes says so
+itself — its explicit `stalled (no seeds)` state is already an `error` (see
+[Providers](providers.md#state-mapping)) — and that one reported `checking`.
+
+The rule errs toward `downloading`, because a false warning is noise:
+
+- only the cached live status is read, never the provider, and a row with no
+  cached status yet (just after a restart) is not stalled;
+- seeders **and** speed must both be zero — seeders during a lull, or speed from
+  peers that are not full seeds, is a working torrent;
+- only `downloading`: in `provider_completed` the provider's speed is 0 because
+  it has finished and AcerviNode's own fetch is running;
+- a torrent added less than 5 minutes ago is still connecting.
 
 `GET /api/v2/torrents/info`'s `eta` field reports the provider's live ETA
 (seconds) for the download. It is fast-moving and purely informational, so it
