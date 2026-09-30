@@ -2032,11 +2032,6 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return err
 	}
 
-	link, err := p.RequestDownloadLink(ctx, id, f.ProviderFileID)
-	if err != nil {
-		return fmt.Errorf("resolve download link: %w", err)
-	}
-
 	// An idle/stall deadline, not a total-transfer one — see
 	// idleTimeoutReader's own doc comment for why: a per-request context
 	// (rather than the client's own Timeout field) since fetchTimeout can
@@ -2053,19 +2048,12 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 	timer := time.AfterFunc(idleTimeout, cancel)
 	defer timer.Stop()
 
-	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, link, nil)
+	resp, err := im.openFile(ctx, fetchCtx, p, id, f, timer, idleTimeout)
 	if err != nil {
-		return fmt.Errorf("build download request: %w", err)
-	}
-	resp, err := im.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 	timer.Reset(idleTimeout)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: unexpected status %d", resp.StatusCode)
-	}
 	body := &idleTimeoutReader{r: resp.Body, timer: timer, timeout: idleTimeout}
 
 	// Write to a .part sibling and rename into place, so a process crash or
@@ -2101,6 +2089,95 @@ func (im *Importer) fetchFile(ctx context.Context, p provider, id debrid.Provide
 		return fmt.Errorf("finalize file: %w", err)
 	}
 	return nil
+}
+
+// fileOpenRetryDelays is how long openFile waits before each retry of a file
+// whose download request the server refused. Its length is the number of
+// retries, so a refused file gets len+1 attempts in all.
+//
+// Short on purpose. What this absorbs is transient: on the first production
+// burn-in TorBox's CDN answered 400 to a different file of a 26-file season
+// pack on each attempt (E07, then E15), while a probe of every file's link
+// minutes later came back clean. Anything that outlasts these few seconds is
+// left to the download-level retry and its much longer backoff.
+var fileOpenRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// openFile resolves a download link for f and opens the transfer, returning a
+// 200 response ready to read.
+//
+// A refused request -- any status other than 200, before a single byte of body
+// -- is retried here, per file, with a freshly resolved link. Before this, one
+// refusal failed the whole download attempt: everything that attempt had not
+// yet reached was abandoned, handleFailure backed the download off
+// exponentially, and a pack with enough files could exhaust its attempts and
+// fail permanently over refusals that would each have succeeded a moment
+// later. The link is re-resolved every time because a stale or rejected link
+// is itself a plausible cause.
+//
+// Deliberately narrow in what it retries:
+//   - Link resolution failures are returned as they always were. They are
+//     provider API errors, a 429 among them, and belong to the download-level
+//     backoff, which is what keeps a rate limit from being made worse.
+//   - Transport errors are returned too. A server that accepts the connection
+//     and then says nothing is the idle timeout's job; retrying it here would
+//     multiply the stall wait by the number of attempts.
+//
+// The wait between attempts is interruptible by ctx, the fetch's own context,
+// so CancelFetch stops it at once and the stop is still reported as a removal
+// (errFetchCancelled) rather than a failure. The idle timer is stopped for the
+// wait and re-armed for each request, so the wait itself can never trip it.
+func (im *Importer) openFile(ctx, reqCtx context.Context, p provider, id debrid.ProviderDownloadID, f debrid.DownloadFile, timer *time.Timer, idleTimeout time.Duration) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		// Link resolution is a provider API call, bounded by its own request
+		// timeout; the idle timer covers only the transfer, as it always has.
+		timer.Stop()
+		link, err := p.RequestDownloadLink(ctx, id, f.ProviderFileID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve download link: %w", err)
+		}
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, link, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build download request: %w", err)
+		}
+		timer.Reset(idleTimeout)
+		resp, err := im.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("download: %w", err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp, nil
+		}
+		refused := fmt.Errorf("download: unexpected status %d%s", resp.StatusCode, bodySnippet(resp.Body))
+		resp.Body.Close()
+		if attempt >= len(fileOpenRetryDelays) {
+			return nil, refused
+		}
+		slog.Warn("importer: server refused a file, retrying it with a fresh link",
+			"file", f.Path, "attempt", attempt+1, "of", len(fileOpenRetryDelays)+1, "error", refused)
+		timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, refused
+		case <-time.After(fileOpenRetryDelays[attempt]):
+		}
+	}
+}
+
+// bodySnippet reads a little of a refused response so the error says what the
+// server said, not only its status. The production error that prompted this
+// read just "unexpected status 400", with nothing to diagnose from. Bounded: it
+// is a diagnostic, not a download, and the text ends up in error_message, which
+// the SABnzbd shim shows to Sonarr.
+func bodySnippet(r io.Reader) string {
+	b, _ := io.ReadAll(io.LimitReader(r, 512))
+	text := strings.Join(strings.Fields(string(b)), " ")
+	if text == "" {
+		return ""
+	}
+	if runes := []rune(text); len(runes) > 200 {
+		text = string(runes[:200]) + "…"
+	}
+	return ": " + text
 }
 
 // expectedTransferSize is how many bytes a completed fetch must have written,
