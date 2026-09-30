@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -80,7 +81,8 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	category := r.FormValue("cat")
-	displayName := r.FormValue("nzbname")
+	// Sonarr and Radarr never send nzbname -- see nzbJobName.
+	displayName := nzbJobName(r.FormValue("nzbname"), header.Filename)
 
 	p := s.defaultUsenet()
 	if p == nil {
@@ -117,6 +119,41 @@ func (s *Server) handleAddFile(w http.ResponseWriter, r *http.Request) {
 // recordPendingAdd notes an *arr add that failed after the request went out,
 // so discovery can recognise the item as Managed if the provider took it
 // anyway. Best-effort by design -- see database.RecordPendingArrAdd.
+// nzbJobName is the name an addfile job goes by: the nzbname the client
+// supplied, or else the uploaded file's own name without its .nzb extension.
+//
+// The fallback is what real SABnzbd does, and it is not an edge case: Sonarr
+// and Radarr never send nzbname (confirmed in both apps' SabnzbdProxy
+// .DownloadNzb, which sends only the file, category and priority), so without
+// it every job they added through here had no name of ours at all. That was
+// harmless for display only because the provider picked a name on its own. It
+// was fatal to reconciliation: a failed add is recorded in pending_arr_adds so
+// discovery can reclaim the item as Managed if the provider took it anyway,
+// and usenet has no hash -- the name is the only thing that can match. It was
+// recorded empty, so for a Sonarr or Radarr usenet grab that reconciliation
+// could never fire.
+//
+// The name is also passed to the provider explicitly, so what we record and
+// what it later reports are the same string by construction rather than by
+// hoping its own derivation agrees with ours. (TorBox's does, observed live:
+// an uploaded "acervinode-test.nzb" came back as "acervinode-test".)
+//
+// Only the last path segment is used, split on either separator: the
+// uploading client's OS decides which one it sent, not ours.
+func nzbJobName(nzbName, filename string) string {
+	if n := strings.TrimSpace(nzbName); n != "" {
+		return n
+	}
+	base := strings.TrimSpace(filename)
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	if strings.HasSuffix(strings.ToLower(base), ".nzb") {
+		base = base[:len(base)-len(".nzb")]
+	}
+	return strings.TrimSpace(base)
+}
+
 func (s *Server) recordPendingAdd(ctx context.Context, name, category string) {
 	if err := s.db.RecordPendingArrAdd(ctx, &database.PendingArrAdd{
 		Provider: s.registry.DefaultNameFor(debrid.KindUsenet),

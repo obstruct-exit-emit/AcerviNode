@@ -16,6 +16,10 @@ type fakeProvider struct {
 	mu      sync.Mutex
 	entries map[debrid.ProviderDownloadID]*fakeEntry
 	nextID  int
+	// addErr, if set, makes AddNZBFile fail -- the path that records a pending
+	// *arr add. lastAddName is the name AddNZBFile was last asked to use.
+	addErr      error
+	lastAddName string
 }
 
 type fakeEntry struct {
@@ -40,6 +44,13 @@ func (f *fakeProvider) AddNZBURL(_ context.Context, _ string, opts debrid.AddOpt
 }
 
 func (f *fakeProvider) AddNZBFile(_ context.Context, filename string, _ []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.mu.Lock()
+	f.lastAddName = opts.Name
+	addErr := f.addErr
+	f.mu.Unlock()
+	if addErr != nil {
+		return "", addErr
+	}
 	name := opts.Name
 	if name == "" {
 		name = filename
