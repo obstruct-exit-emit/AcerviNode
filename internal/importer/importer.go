@@ -184,6 +184,10 @@ type Importer struct {
 	// of the same tracking, not a separate mechanism.
 	activeFetchesMu sync.Mutex
 	activeFetches   map[string]*activeFetch
+
+	// fetchWG counts every fetch goroutine dispatch starts. Tick waits on it;
+	// Run waits on it only at shutdown -- see dispatch.
+	fetchWG sync.WaitGroup
 }
 
 // activeFetch is one entry in Importer.activeFetches — see its own doc
@@ -664,6 +668,11 @@ func (im *Importer) Run(ctx context.Context) {
 	_, interval, _ := im.getConfig()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Fetches outlive the tick that started them, so wait for the ones still
+	// running -- already cancelled along with ctx -- before returning. The
+	// caller closes the database next, and a fetch still writing to it would
+	// log errors on every clean restart.
+	defer im.fetchWG.Wait()
 
 	go im.runFastPoll(ctx)
 
@@ -674,7 +683,7 @@ func (im *Importer) Run(ctx context.Context) {
 		case newInterval := <-im.intervalChanged:
 			ticker.Reset(newInterval)
 		case <-ticker.C:
-			if err := im.Tick(ctx); err != nil {
+			if err := im.tick(ctx, false); err != nil {
 				logTickError(ctx, "importer: tick failed", "error", err)
 			}
 		}
@@ -699,28 +708,6 @@ func (im *Importer) runFastPoll(ctx context.Context) {
 	}
 }
 
-// Tick first refreshes every tracked download's status from its provider
-// (see refreshStatuses), then processes every provider_completed download
-// whose next_retry_at has passed (or was never set), once each — including
-// any row refreshStatuses itself just moved into provider_completed this
-// same tick, so a download that finishes between polls is fetched within one
-// tick instead of waiting for the next one. Up to getMaxConcurrent downloads
-// are fetched in parallel (a semaphore-bounded goroutine per download); Tick
-// itself still blocks until every one of this batch has finished, whether it
-// succeeded or not. A failure is handled by handleFailure — backed off and
-// retried, or given up on — rather than left to retry on every single tick
-// forever. Each download's own db writes are independent (keyed by its own
-// ID), and database.DB's connection pool is capped to one connection, so
-// concurrent goroutines here can't corrupt anything — they just serialize on
-// that one connection for the brief moment any of them touches it. Finally,
-// checkStuckDownloads runs right after (a no-op unless
-// stuck_download_timeout_minutes is configured), reflecting the freshest
-// possible updated_at for every row before deciding anything looks stuck.
-// cleanupOldDownloads/cleanupErroredDownloads run the retention policies
-// (each a no-op unless its own days setting is configured) — last, so a
-// download that just reached ready_for_import or StateError this same tick
-// isn't somehow considered for cleanup before its own timestamp has even had
-// a chance to age past the cutoff.
 // logTickError reports a failure from inside a tick, unless the tick's
 // context has been cancelled — in which case the failure is only the process
 // shutting down mid-work, and calling it an error is actively misleading.
@@ -746,7 +733,37 @@ func logTickError(ctx context.Context, msg string, args ...any) {
 	slog.Error(msg, args...)
 }
 
+// Tick runs one pass of the importer loop and waits for every fetch it
+// started to finish -- the synchronous form, which is what a caller asking for
+// "one tick" and then inspecting the result needs. Run uses tick(ctx, false),
+// which does not wait. See tick for what a pass does.
 func (im *Importer) Tick(ctx context.Context) error {
+	return im.tick(ctx, true)
+}
+
+// tick is one pass of the importer loop: refresh every tracked download's
+// status from its provider (refreshStatuses), run the stuck-download watchdog
+// against those fresh timestamps, start fetches for whatever is due
+// (dispatch), then run the two retention policies.
+//
+// It used to fetch its batch itself and wait for all of it before returning,
+// and since Run calls it inside its own loop, nothing else could happen until
+// the slowest fetch in the batch was done. Measured on the first production
+// burn-in: with a 9.9 GB file transferring, a movie and an episode that
+// finished at the provider meanwhile waited 84s and 79s before their own
+// transfers began, with two of three fetch slots free the whole time, and
+// last_tick_at -- which GET /api/v1/status exposes so a monitor can tell the
+// loop is alive -- froze for 103s. The provider refresh, discovery, cleanup and
+// the watchdog all stalled with it.
+//
+// Fetches now run in a pool that outlives the tick: dispatch hands them off
+// and returns, so the next tick comes round on time and fills any free slot.
+// With wait set it blocks until the pool is idle again, which is Tick.
+//
+// The retention policies still run last. They only touch rows that have sat
+// in ready_for_import or error for days, never a row being fetched, so
+// running them alongside in-flight fetches changes nothing.
+func (im *Importer) tick(ctx context.Context, wait bool) error {
 	im.statsMu.Lock()
 	im.tickAt = time.Now()
 	im.statsMu.Unlock()
@@ -754,33 +771,78 @@ func (im *Importer) Tick(ctx context.Context) error {
 	im.refreshStatuses(ctx)
 	im.checkStuckDownloads(ctx)
 
-	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
-	if err != nil {
-		return fmt.Errorf("list downloads due for retry: %w", err)
+	if err := im.dispatch(ctx); err != nil {
+		return err
 	}
-
-	sem := make(chan struct{}, im.getMaxConcurrent())
-	var wg sync.WaitGroup
-	for _, d := range rows {
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(d *database.Download) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := im.processDownload(ctx, d); err != nil {
-				if errors.Is(err, errFetchCancelled) {
-					slog.Info("importer: fetch stopped because the download was removed", "id", d.ID, "name", d.Name)
-					return
-				}
-				im.handleFailure(ctx, d, err)
-			}
-		}(d)
+	if wait {
+		im.fetchWG.Wait()
 	}
-	wg.Wait()
 
 	im.cleanupOldDownloads(ctx)
 	im.cleanupErroredDownloads(ctx)
 	return nil
+}
+
+// dispatch starts a fetch for every due download it can, up to
+// max_concurrent_downloads in flight in total, and returns without waiting.
+//
+// The limit is enforced across ticks, not per tick: a fetch now outlives the
+// tick that started it, so a per-tick semaphore would let each tick start its
+// own max on top of the last. startFetch checks the count and registers the
+// fetch under one lock, so concurrent dispatches -- a tick and a refill, say --
+// cannot overshoot it either. Anything left over waits for a freed slot. A
+// download already in flight is skipped, as before.
+//
+// A live change to max_concurrent_downloads now takes effect at the next
+// dispatch rather than when the whole batch drains: raising it fills the new
+// slots, and lowering it lets fetches already running finish.
+func (im *Importer) dispatch(ctx context.Context) error {
+	rows, err := im.db.ListDownloadsDueForRetry(ctx, database.StateProviderCompleted, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("list downloads due for retry: %w", err)
+	}
+	limit := im.getMaxConcurrent()
+	for _, d := range rows {
+		fetchCtx, doneFetch, ok, full := im.startFetch(ctx, d.ID, limit)
+		if full {
+			break
+		}
+		if !ok {
+			continue // already in flight
+		}
+		im.fetchWG.Add(1)
+		go im.runFetch(ctx, fetchCtx, doneFetch, d)
+	}
+	return nil
+}
+
+// runFetch is one fetch dispatch started, from reserved slot to outcome.
+//
+// On success the freed slot is refilled at once rather than at the next tick.
+// The old per-tick semaphore did exactly that within a tick, and without it a
+// Sonarr burst of twenty single episodes would crawl through at
+// max_concurrent_downloads per tick interval. Only success refills: it is the
+// one outcome guaranteed to move the row out of the due set (to
+// ready_for_import), so a refill can never pick the same download straight
+// back up and spin. A failure or a removal leaves its slot for the next tick.
+//
+// The refill's fetchWG.Add happens before this goroutine's own Done, which is
+// what keeps Tick's wait -- and Run's at shutdown -- covering the whole chain.
+func (im *Importer) runFetch(ctx, fetchCtx context.Context, doneFetch func(), d *database.Download) {
+	defer im.fetchWG.Done()
+	err := im.processReserved(fetchCtx, doneFetch, d)
+	switch {
+	case err == nil:
+		if ctx.Err() == nil {
+			if err := im.dispatch(ctx); err != nil {
+				logTickError(ctx, "importer: refilling a freed fetch slot failed", "error", err)
+			}
+		}
+	case errors.Is(err, errFetchCancelled):
+		slog.Info("importer: fetch stopped because the download was removed", "id", d.ID, "name", d.Name)
+	default:
+		im.handleFailure(ctx, d, err)
+	}
 }
 
 // refreshStatuses proactively syncs every queued/downloading row's local
@@ -1448,10 +1510,23 @@ func (im *Importer) resolveDestDir(d *database.Download) string {
 // same download; the caller should treat that as "nothing to do this tick",
 // not a failure.
 func (im *Importer) tryStartFetch(ctx context.Context, id string) (fetchCtx context.Context, doneFn func(), ok bool) {
+	fetchCtx, doneFn, ok, _ = im.startFetch(ctx, id, 0)
+	return fetchCtx, doneFn, ok
+}
+
+// startFetch registers id as fetching and returns its context and done func,
+// or ok false if it is already in flight. With limit above zero it also
+// refuses -- full true -- once that many fetches are in flight. The count and
+// the registration happen under one lock, which is what lets dispatch enforce
+// max_concurrent_downloads across concurrent callers without overshooting.
+func (im *Importer) startFetch(ctx context.Context, id string, limit int) (fetchCtx context.Context, doneFn func(), ok bool, full bool) {
 	im.activeFetchesMu.Lock()
 	defer im.activeFetchesMu.Unlock()
 	if _, exists := im.activeFetches[id]; exists {
-		return nil, nil, false
+		return nil, nil, false, false
+	}
+	if limit > 0 && len(im.activeFetches) >= limit {
+		return nil, nil, false, true
 	}
 	fetchCtx, cancel := context.WithCancelCause(ctx)
 	done := make(chan struct{})
@@ -1462,7 +1537,7 @@ func (im *Importer) tryStartFetch(ctx context.Context, id string) (fetchCtx cont
 		im.activeFetchesMu.Lock()
 		delete(im.activeFetches, id)
 		im.activeFetchesMu.Unlock()
-	}, true
+	}, true, false
 }
 
 // CancelFetch interrupts id's in-flight fetch, if one is currently running,
@@ -1527,11 +1602,18 @@ func (im *Importer) filterFiles(files []debrid.DownloadFile) []debrid.DownloadFi
 	return out
 }
 
-func (im *Importer) processDownload(ctx context.Context, d *database.Download) (err error) {
+func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
 	fetchCtx, doneFetch, ok := im.tryStartFetch(ctx, d.ID)
 	if !ok {
 		return nil // already being fetched by another goroutine this same window — not a failure, nothing to do
 	}
+	return im.processReserved(fetchCtx, doneFetch, d)
+}
+
+// processReserved fetches d once its fetch slot is already reserved -- by
+// processDownload, or by dispatch, which reserves under the concurrency limit.
+// It owns doneFetch and always calls it.
+func (im *Importer) processReserved(fetchCtx context.Context, doneFetch func(), d *database.Download) (err error) {
 	defer doneFetch()
 	// Registered after doneFetch so it runs first, while the cause CancelFetch
 	// set is still the one on record. However the fetch surfaced the
@@ -1541,7 +1623,7 @@ func (im *Importer) processDownload(ctx context.Context, d *database.Download) (
 			err = errFetchCancelled
 		}
 	}()
-	ctx = fetchCtx
+	ctx := fetchCtx
 
 	// Live fetch progress — see database.DB.SetFetchProgress's own doc
 	// comment for why this is a separate concern from d.Progress (already

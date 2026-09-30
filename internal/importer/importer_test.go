@@ -25,11 +25,15 @@ import (
 // fakeProvider is a minimal provider backed by an httptest.Server standing
 // in for a debrid CDN — real HTTP round trips, no network.
 type fakeProvider struct {
-	cdn       *httptest.Server
-	files     []debrid.DownloadFile
-	failLinks map[string]bool // fileID -> force RequestDownloadLink to fail
-	statuses  []debrid.DownloadStatus
-	listErr   error
+	cdn *httptest.Server
+	// filePerDownload makes Files return one file whose ID is the download's
+	// own provider ID, so a CDN handler can hold one download and not another
+	// (see fetch_pool_test.go). Off by default: files is used as-is.
+	filePerDownload bool
+	files           []debrid.DownloadFile
+	failLinks       map[string]bool // fileID -> force RequestDownloadLink to fail
+	statuses        []debrid.DownloadStatus
+	listErr         error
 	// listCalls is atomic because TestSetConfig_ResetsTickerInterval reads it
 	// from the test goroutine while Importer.Run's own goroutine calls List
 	// concurrently.
@@ -80,7 +84,10 @@ func (f *fakeProvider) Status(_ context.Context, id debrid.ProviderDownloadID) (
 	return debrid.DownloadStatus{}, fmt.Errorf("fakeProvider: status: %s not found", id)
 }
 
-func (f *fakeProvider) Files(_ context.Context, _ debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
+func (f *fakeProvider) Files(_ context.Context, id debrid.ProviderDownloadID) ([]debrid.DownloadFile, error) {
+	if f.filePerDownload {
+		return []debrid.DownloadFile{{ProviderFileID: string(id), Path: "file.mkv", SizeBytes: int64(len("bytes"))}}, nil
+	}
 	return f.files, nil
 }
 
