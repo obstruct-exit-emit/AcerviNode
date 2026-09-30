@@ -10,6 +10,15 @@ Every download added through this shim is `added_via: "arr"` — auto-fetched
 to local disk by Completed Download Handling and shown in the web UI's
 Managed tab — see [Providers](providers.md#managed-vs-manual).
 
+The reverse holds too: **this shim only ever reports, or acts on, Managed
+downloads.** A Manual one — added by hand, or discovered already sitting in the
+provider account — is invisible here and cannot be deleted, relabelled or
+inspected through it. That is not something \*arr category scoping would
+have taken care of: the `GetItems` loop in both Sonarr's and Radarr's client
+reads each item's category and never filters on it, so every row reported used
+to land in their queue, where a Manual copy of an episode makes Sonarr's
+`QueueSpecification` reject the real grab. See `database.ListManagedDownloads`.
+
 ## Why emulate qBittorrent specifically
 
 \*arr apps don't have an "AcerviNode" client type — they only know how to talk to
@@ -25,13 +34,13 @@ gives AcerviNode a drop-in integration path with zero changes required on the
 | `POST /api/v2/auth/login` / `logout` | Cookie-based session, matching qBt's own auth flow |
 | `GET /api/v2/app/version` / `webapiVersion` | Probed by \*arr apps when you click "Test" |
 | `GET /api/v2/app/preferences` | Reports `save_path` (AcerviNode's `download_dir`) plus fixed "disabled" values for every seeding/ratio/queueing field AcerviNode has no concept of. **Not optional** — confirmed against Sonarr's own source (`QBittorrentProxyV2.GetConfig`, called by `TestConnection`), this is the *first* request a real Sonarr/Radarr "Test" makes, before anything else. Missing entirely (a plain 404) until found live — every "Test" failed outright, regardless of how correctly everything else was configured |
-| `POST /api/v2/torrents/add` | Accepts a magnet URL or a multipart `.torrent` file upload, plus a `category` |
-| `GET /api/v2/torrents/info` | Lists tracked torrents, optionally filtered by hash(es) — polled repeatedly while a download is active |
-| `GET /api/v2/torrents/properties` | Per-torrent detail (save path, size, ...) |
-| `GET /api/v2/torrents/files` | Per-file listing, used by \*arr apps to map imports |
-| `POST /api/v2/torrents/delete` | Removes a torrent, optionally deleting its files (`deleteFiles=true` — see docs/providers.md#local-file-deletion). Also records a delete tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
+| `POST /api/v2/torrents/add` | Accepts a magnet URL or a multipart `.torrent` file upload, plus a `category` and an optional `savepath`. A supplied `savepath` is namespaced by the download's own name (`<savepath>/<name>`), the way real qBittorrent puts content *into* it — stored verbatim it became a directory shared by every download sent the same one, which cleanup could then remove wholesale. Sonarr and Radarr never send `savepath`; LibriNode can. For a `.torrent` upload the infohash is read from the file itself (SHA-1 of the raw `info` dictionary), which is the value Sonarr/Radarr track the grab by |
+| `GET /api/v2/torrents/info` | Lists tracked **Managed** torrents, optionally filtered by `hashes` and `category` — polled repeatedly while a download is active |
+| `GET /api/v2/torrents/properties` | Per-torrent detail (save path, size, ...). Managed only — a Manual download's hash is a `404` |
+| `GET /api/v2/torrents/files` | Per-file listing, used by \*arr apps to map imports. Managed only, like `properties` |
+| `POST /api/v2/torrents/delete` | Removes a torrent, optionally deleting its files (`deleteFiles=true` — see docs/providers.md#local-file-deletion). Also records a delete tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick. Stops any in-flight fetch for it first, and waits for that to happen, so the fetch cannot recreate what the delete removes — see [Providers](providers.md#canceling-an-in-flight-fetch-on-delete). A Manual download's hash is ignored |
 | `GET /api/v2/torrents/categories` / `POST createCategory` | Category bookkeeping — categories are stored on the AcerviNode side and echoed back, not interpreted |
-| `POST /api/v2/torrents/setCategory` | Changes an already-tracked torrent's category — called by Sonarr/Radarr's `MarkItemAsImported` when a separate "post-import category" setting differs from the add-time one (confirmed against their real source: an optional setting, not part of the default add flow). Auto-registers the category the same permissive way `createCategory` does, rather than replicating real qBittorrent's stricter "category must already exist" 409 |
+| `POST /api/v2/torrents/setCategory` | Changes an already-tracked torrent's category — called by Sonarr/Radarr's `MarkItemAsImported` when a separate "post-import category" setting differs from the add-time one (confirmed against their real source: an optional setting, not part of the default add flow). Auto-registers the category the same permissive way `createCategory` does, rather than replicating real qBittorrent's stricter "category must already exist" 409. `hashes=all` covers Managed downloads only, so a post-import step cannot relabel every Manual download in the account |
 | `POST /api/v2/torrents/setShareLimits` / `topPrio` / `setForceStart` | Accepted as no-ops — called by Sonarr/Radarr only when specific optional client settings are enabled (seed ratio/time limits, "First" queue priority, "Force Start" initial state; confirmed against their real source), and AcerviNode has no seeding, priority-queue, or paused-state concept to actually apply them to. Returning success (rather than 404) is what lets an add complete normally for a user who has one of these turned on |
 
 ## State mapping
@@ -58,6 +67,13 @@ cache `internal/importer`'s poll fills. **This shim makes no provider call of
 its own**: polling it cannot cause provider traffic, so `eta` is as fresh as
 the last poll and no fresher. See
 [Providers](providers.md#the-compat-shims-are-a-wall-they-read-they-never-fetch).
+
+When no ETA is known — nothing polled for the row yet, which is the common case
+right after an add, or a provider that reports none — `eta` is `8640000`
+(100 days), qBittorrent's own value for "unknown". Sonarr and Radarr special-case
+exactly that number in `GetRemainingTime` and read it as no estimate. It used to
+be sent as `0`, which they read as *zero seconds remaining*. Anything over a
+year is normalised to the same value, since they treat that as unknown anyway.
 
 `progress` while `state` is `downloading` *and* the local state is
 actually `provider_completed` reports internal/importer's own live local-
@@ -107,6 +123,11 @@ just decodes to `null`, which isn't equal to `save_path`, so `GetItems` used
 that `null` to resolve the import path anyway, meaning **no completed Managed
 torrent could ever actually be imported through this shim** until this was
 fixed (`toTorrentInfo`).
+
+With a `savepath` supplied at add time, that same split comes out exactly as
+real qBittorrent reports it: the stored path is `<savepath>/<name>`, so
+`content_path` is the per-download directory and the derived `save_path` is
+precisely the directory the client asked for.
 
 ## What's not emulated
 

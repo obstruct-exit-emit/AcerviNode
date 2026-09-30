@@ -12,7 +12,7 @@ A self-hosted download client for **debrid services** (TorBox, AllDebrid). It
 impersonates qBittorrent and SABnzbd so Sonarr/Radarr/Lidarr/Readarr can hand it
 grabs, sends them to a debrid provider, waits for the provider to finish, then
 fetches the resolved files to local disk over plain HTTP. One static Go binary
-with an embedded React dashboard and a pure-Go SQLite database. ~38k lines of
+with an embedded React dashboard and a pure-Go SQLite database. ~40k lines of
 Go, ~9k of TypeScript. Linux + systemd is the packaged deployment.
 
 **Managed vs Manual** is the central distinction. Managed downloads (added by an
@@ -134,6 +134,39 @@ fails) stored no explanation at all. Nothing repairs that later, which is what
 makes it permanent rather than merely late: refresh only updates rows still
 present in a listing, and missing-detection skips a row already in `error`.
 
+**The compat shims are Managed-only, for reads *and* actions.** They list
+Managed downloads only, and delete, `setCategory`, `properties` and `files` all
+refuse a Manual row. Do not rely on \*arr category scoping to hide Manual
+downloads: the `GetItems` loop in both Sonarr's and Radarr's clients reads each
+item's category and never filters on it, so everything a shim reports lands in
+their queue — where a Manual copy of an episode makes `QueueSpecification`
+reject the real grab, silently. Checked against their source, not assumed.
+
+**`resolveDestDir`'s verbatim `save_path` branch is load-bearing — do not
+"namespace" it there.** After a fetch, `UpdateDownloadSavePath` writes the
+resolved destination back into `save_path`, so returning it as-is is what every
+already-downloaded row depends on; appending the name would turn
+`<dir>/<cat>/<name>` into `<dir>/<cat>/<name>/<name>` and break cleanup for all
+of them. An \*arr-supplied `save_path` is namespaced *at add time* instead
+(`qbittorrent.namespaceSavePath`), and `removableDestDir` refuses to
+`os.RemoveAll` any destination that does not end in the download's own name,
+which is what protects rows written before that existed.
+
+**Every delete cancels the fetch first, and a deliberate cancel is not a
+failure.** All three delete paths call `CancelFetch` before touching anything,
+or the fetch recreates what the delete removed. `CancelFetch` cancels with the
+cause `errFetchCancelled`, and only that cause skips `handleFailure`. Do not
+"simplify" it to "ignore `context.Canceled`": the idle-stall timeout ends a
+fetch the same way, and stalls would silently stop retrying. Do not replace it
+with "is the row still there?" either — that races the delete.
+
+**A fetched file's size is checked against the server first, the provider
+second.** `expectedTransferSize` trusts the response's own `Content-Length` and
+falls back to the provider's reported size only when there is none. TorBox's
+sizes were verified exact for torrents and web downloads, but not for usenet;
+checking the provider's size first would fail every download of a kind whose
+provider reports an estimate. Tighten it only after verifying that kind live.
+
 ---
 
 ## How to work here
@@ -251,6 +284,13 @@ a file with the Write tool, or build the backslash with `chr(92)`.
 **Rate-limit backoff blanks polling for a whole kind**, which presents as the UI
 freezing rather than as an error. Check `GET /api/v1/status` before diagnosing a
 "stuck" download.
+
+**SQLite cannot parse the timestamps this app stores.** They are written in Go's
+`time.Time` format (`2026-09-30 11:28:11.156803248 +0000 UTC`), which `datetime()`
+returns NULL for — so a `sqlite3` query comparing them fails silently rather
+than loudly. A `CASE` built on one reported a provider delete as failed when the
+tombstone plainly showed it confirmed (a `1h` expiry means confirmed, `30d`
+failed). Compare the raw strings by eye, or query through the app.
 
 **Provider-side state outlives local rows.** Deleting a download locally does not
 always remove it at the provider, and the poller will re-discover it. After any

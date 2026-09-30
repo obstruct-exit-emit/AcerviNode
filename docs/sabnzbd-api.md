@@ -9,6 +9,16 @@ Every download added through this shim is `added_via: "arr"` — auto-fetched
 to local disk by Completed Download Handling and shown in the web UI's
 Managed tab — see [Providers](providers.md#managed-vs-manual).
 
+The reverse holds too: **this shim only ever reports, or acts on, Managed
+downloads.** A Manual one — added by hand, or discovered already sitting in the
+provider account — is invisible here and cannot be deleted, relabelled or
+inspected through it. That is not something \*arr category scoping would
+have taken care of: SABnzbd's `GetQueue`/`GetHistory` in both Sonarr and
+Radarr read each item's category and never filter on it, so every row reported used
+to land in their queue, where a Manual copy of an episode makes Sonarr's
+`QueueSpecification` reject the real grab, and a Manual row in history
+reporting `Failed` triggers failed-download handling. See `database.ListManagedDownloads`.
+
 ## Why offer this alongside the qBittorrent shim
 
 Some \*arr setups are already standardized on a SABnzbd-shaped client, or use
@@ -28,13 +38,13 @@ login step required.
 | `mode=` | Purpose |
 |---|---|
 | `version` | Probed by \*arr apps when you click "Test" |
-| `get_config` | Category listing |
-| `addfile` | Multipart NZB file upload, plus a `cat` (category) |
+| `get_config` | Category listing, plus `misc.complete_dir` — the configured download directory, always a rooted path. Sonarr's `GetCategories` only falls back to `fullstatus` when it is not rooted, and combines it with each category into `status.OutputRootFolders`, which its remote-path-mapping health check reads; this used to be sent empty |
+| `addfile` | Multipart NZB file upload, plus a `cat` (category) and an optional `nzbname`. Without `nzbname` the job is named after the uploaded file minus `.nzb`, as real SABnzbd does — and that is the normal case: Sonarr and Radarr never send it. The name is also handed to the provider explicitly, so what is recorded and what the provider later reports match, which is what lets a lost add reply be reconciled by name (usenet has no hash) |
 | `addurl` | Add by NZB URL |
 | `queue` | Active/pending downloads — polled repeatedly while a download is active |
 | `history` | Completed/failed downloads |
-| `fullstatus` | Basic server status |
-| `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download and, since it was found not to previously (see docs/providers.md#local-file-deletion), the local files too. Every delete also records a tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick |
+| `fullstatus` | Basic server status, including `complete_dir` (see `get_config`) |
+| `queue`/`history` with `name=delete` | Removes one or more downloads by `nzo_id` (comma-separated in `value`) — layered onto the same mode as the list it removes from, matching SABnzbd's real API shape rather than a separate delete mode. `del_files=1` also deletes the provider-side download and, since it was found not to previously (see docs/providers.md#local-file-deletion), the local files too. Every delete also records a tombstone (see docs/providers.md#managed-vs-manual) so a download an *arr app just removed isn't rediscovered as a fresh Manual download on the very next tick. Stops any in-flight fetch first, and waits for it, so the fetch cannot recreate what the delete removes — see [Providers](providers.md#canceling-an-in-flight-fetch-on-delete). A Manual download's `nzo_id` is ignored |
 
 ## How NZB-shaped adds map onto a provider
 

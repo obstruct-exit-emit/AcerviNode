@@ -8,6 +8,91 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Sonarr and Radarr usenet grabs had no name, which disabled a safety net.**
+  Neither app sends `nzbname` on `mode=addfile` (confirmed in both apps'
+  `SabnzbdProxy.DownloadNzb`), and the SABnzbd shim named jobs from it, so every
+  usenet grab from either was unnamed. A lost add reply is recorded in
+  `pending_arr_adds` so discovery can reclaim the item as Managed; usenet has no
+  hash, so the name is the only thing that can match — and it was recorded
+  empty. That reconciliation could never fire for them. Jobs are now named after
+  the uploaded file minus `.nzb`, as real SABnzbd does, and the name is passed to
+  the provider explicitly so both sides agree. Verified live: an upload exactly
+  as Sonarr sends it came back from TorBox under the same name we recorded.
+
+- **Removing a download mid-fetch logged a false failure.** Once the compat
+  shims began cancelling fetches before a delete (below), each removal recorded
+  a retry and logged "process download failed, will retry" at WARN for a
+  download that was about to stop existing. `CancelFetch` now cancels with the
+  cause `errFetchCancelled`, and only that cause skips failure handling — an
+  idle-stall timeout, which also ends in `context.Canceled`, still retries. One
+  existing assertion that a cancel counts as a failed attempt was changed; the
+  test's actual subject, that cancelling really stops a fetch, is unchanged.
+
+- **An \*arr delete during a fetch left an orphaned file on disk.** The native
+  API's delete stopped the in-flight fetch first; the qBittorrent and SABnzbd
+  shims did not, and they are where mid-fetch deletes come from. The fetch kept
+  writing, recreated what was removed, and left a file no row tracked. All three
+  delete paths now cancel first. Verified live: a delete at 9% through the
+  qBittorrent shim, then 20 seconds for an uncancelled fetch to finish — zero
+  files left.
+
+- **A TorBox outage page became every retrying download's error message.** On a
+  non-2xx with no JSON `detail`, the client used the whole raw body, which during
+  an outage is a multi-KB HTML page — stored as `error_message` and shown to
+  Sonarr as `fail_message`. HTML is now reduced to its `<title>`, and other text
+  is whitespace-collapsed and bounded at 300 runes. JSON errors are untouched.
+
+- **A download cut short could be handed to \*arr as complete.** A chunked
+  response that ended early made `io.Copy` return nil, and the `.part` file was
+  renamed into place. Bytes written are now checked before the rename: against
+  the server's `Content-Length` when it sent one, the provider's size otherwise.
+  TorBox's reported sizes matched its CDN to the byte for torrents and web
+  downloads; usenet could not be checked, hence the server-first ordering.
+
+- **Fetch progress went backwards between files, and could not reach 100%.**
+  The end-of-file update reported the file's *start*, so progress jumped back
+  after each file in a season pack; and it divided by every file the provider
+  has rather than the ones being fetched, so a filtered-out sample capped it
+  below 100%.
+
+- **A permanent "TorBox is restricting this account" warning.** Settings showed
+  it whenever `cooldown_until` was in the future. Sampled twice against the real
+  API, that value advanced 26 minutes in 8 and read as exactly `updated_at` +
+  24h — a rolling horizon that is never in the past. The warning is gone; the
+  field is still returned by the API. Nothing was actually rate limited: every
+  per-kind `error_count` was 0 and 24 hours of logs held no 429.
+
+- **A `.torrent` upload recorded no infohash.** It is now read from the file
+  (SHA-1 of the raw `info` dictionary), so a lost add reply is reconciled by hash
+  rather than name, and a row the provider has not indexed yet still carries the
+  hash Sonarr and Radarr track the grab by (the provider's own hash still wins
+  once it reports one). Verified against a real torrent with an independent
+  implementation.
+
+- **SABnzbd reported no `complete_dir`**, so Sonarr's `OutputRootFolders` — what
+  its remote-path-mapping health check reads — came out empty. `get_config`
+  and `fullstatus` now report the download directory, rooted.
+
+- **Unknown ETA was reported to \*arr as zero seconds remaining.** The
+  qBittorrent shim sent `eta: 0`; qBittorrent's own "unknown" is `8640000`, which
+  Sonarr and Radarr special-case. Every queued download claimed to be finishing
+  immediately.
+
+- **An \*arr-supplied `save_path` became a directory shared by every download
+  sent it, and deleting one could empty it.** It was stored verbatim, so
+  downloads landed directly in it, and `os.RemoveAll` on one download's
+  destination removed everyone's. It is now namespaced by the download's name at
+  add time, and removal refuses any destination not ending in the download's own
+  name. Not reachable from Sonarr or Radarr, which never send `savepath`.
+
+- **The compat shims showed Manual downloads to \*arr.** Both listed every
+  row of a kind, and \*arr does not filter by category — so an account's whole
+  discovered library went into Sonarr's and Radarr's queues, where a Manual copy
+  of an episode blocks the real grab via `QueueSpecification`. On the real
+  account that was 29 rows. The shims now list only Managed downloads, and
+  delete, `setCategory` (including `hashes=all`), `properties` and `files` refuse
+  a Manual one.
+
 - **An errored download could carry no explanation.** A row that *entered*
   `error` through a status refresh always recorded the provider's own reason,
   but a row *born* in `error` recorded nothing — and there are two ways that

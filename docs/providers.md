@@ -220,6 +220,22 @@ on disk; both compat shims report `provider_completed` as still "downloading" to
 \*arr apps for exactly this reason — see [qBittorrent API](qbittorrent-api.md) and
 [SABnzbd API](sabnzbd-api.md).
 
+A file is only moved into place once it is known to be whole. It is written to a
+`.part` sibling and renamed at the end, and before the rename the bytes written
+are checked against the expected size (`expectedTransferSize`): the server's own
+`Content-Length` whenever it sent one, and the provider's reported file size only
+when it did not. A clean end of stream is not proof on its own — a chunked
+response that stops early used to be renamed into place and handed to \*arr as a
+finished release. The ordering is deliberately conservative: TorBox's reported
+sizes were checked live against its CDN and matched to the byte for torrents and
+web downloads, but usenet could not be checked, and failing every download of a
+kind over a provider's estimate would be worse than the gap being closed.
+
+An \*arr app's explicit `save_path` is the destination only after it has been
+namespaced by the download's own name at add time (`qbittorrent.namespaceSavePath`)
+— see [Local file deletion](#local-file-deletion) for what an un-namespaced one
+could do.
+
 This works identically for any future provider, torrent or usenet, with zero
 changes — it only depends on `List`/`Files`/`RequestDownloadLink`, which every
 provider already has to implement.
@@ -311,6 +327,19 @@ Activity view reflects real fetch progress too — while every other state
 keeps reporting the persisted `Progress` unchanged. Cleared unconditionally
 once a fetch attempt ends, success or failure, so a stale percentage never
 lingers into a retry attempt or past `ready_for_import`.
+
+The fraction is measured against the files actually being fetched, not
+`d.SizeBytes` — that counts every file the provider has, so with a sample or an
+extras folder filtered out progress could never reach 100%. (`d.SizeBytes`
+remains the fallback when the provider reports no per-file sizes.) After each
+file the running total is set to that file's end; it used to be set to its
+*start*, so progress jumped backwards after every file in a season pack.
+
+One backwards step remains, by design of `EffectiveProgress` rather than by
+accident: while a download sits in `provider_completed` waiting for its fetch
+to start it reports the provider's own `1.0`, then local progress from `0` once
+fetching begins. Showing both stages on a single scale is an open design
+question, not yet decided.
 
 ### Proactive status refresh
 
@@ -624,9 +653,11 @@ AcerviNode) has no such requirement; the point of adding it that way is
 usually to browse/grab files on demand, the way TorBox's own web UI works,
 not to have it silently land on disk.
 
-`database.Download.AddedVia` is the permanent, immutable record of which of
-the two a given download is — set once at insert time, never changed
-afterward:
+`database.Download.AddedVia` records which of the two a given download is. It
+is set at insert time and changes in exactly one way afterwards, one-way: an
+\*arr add claiming a row discovery had already adopted as Manual promotes it to
+Managed (`database.InsertOrClaimForArr`). Nothing ever demotes a Managed row, so
+the two cannot oscillate.
 
 - **`arr`**: added through the qBittorrent or SABnzbd compat shim — i.e. by
   an *arr app — or, added directly via the native API's own add endpoints
@@ -640,7 +671,8 @@ afterward:
   Managed access — see [Auth: login accounts and roles](#auth-login-accounts-and-roles)).
 - **`manual`**: added directly via the native API's add endpoints (the web
   UI's own "+ Add" form — an *arr app has no way to reach that endpoint, it
-  only knows the compat shims), or *discovered* — see below. Never
+  only knows the compat shims, and those neither report nor act on a Manual
+  download), or *discovered* — see below. Never
   auto-fetched; `ListDownloadsDueForRetry` filters to `arr` only, so a manual
   download sitting in `provider_completed` just stays there, and the user
   grabs files on demand via the per-file/zip-link endpoints (see
@@ -792,9 +824,14 @@ a download's destination directory on their own. Wired through the `Settings`
 interface (`DeleteLocalFiles`), the same indirection every other live-config
 value already goes through — `cmd/acervinode`'s `liveSettings` is the only
 thing holding a reference to the actual `*importer.Importer`. Same guard as
-`cleanupDownload`: refuses to touch anything for a row with no `Name`, since
-`resolveDestDir` would otherwise collapse to the bare category directory
-shared with every other download in it. Best-effort everywhere it's called —
+`cleanupDownload` (`removableDestDir`): it refuses to touch anything unless the
+destination ends with the download's own name. That covers a row with no `Name`,
+where `resolveDestDir` would collapse to the bare category directory, and also a
+row whose `save_path` an \*arr app supplied and which was stored verbatim before
+add-time namespacing existed — a perfectly good name, but a directory shared by
+every download sent the same path, which `os.RemoveAll` would otherwise empty. A
+skipped removal orphans one download's files; the alternative destroys everyone
+else's. Best-effort everywhere it's called —
 a failure here logs a warning but never blocks the row itself from being
 deleted, matching how the provider-side delete call is already handled.
 
@@ -802,9 +839,12 @@ deleted, matching how the provider-side delete call is already handled.
 
 `Importer.CancelFetch(id string)` interrupts whatever fetch `processDownload`
 is doing for `id` right now, if anything, and blocks until it has genuinely
-stopped — not just been asked to — before returning. `handleDeleteDownload`
-calls it unconditionally, as the very first thing it does, before touching the
-provider, local files, or the database row. Without this, deleting a download
+stopped — not just been asked to — before returning. Every delete path calls it
+unconditionally, first, before touching the provider, local files, or the
+database row: `internal/api`'s `handleDeleteDownload`, and both compat shims'
+deletes. The shims were added later, and they matter most — they are where
+\*arr apps' deletes come from, and those are the ones that land mid-fetch
+(replacing a grab, failed-download handling, a removal from the Activity view). Without this, deleting a download
 that `internal/importer` was still mid-write for had no way to interrupt that
 goroutine: it kept writing (potentially recreating whatever
 [local file deletion](#local-file-deletion) above had just removed) and only
@@ -814,8 +854,17 @@ multi-gigabyte Managed torrent partway through its fetch, with
 `deleteFiles=true`, now leaves nothing behind on disk and the row disappears
 from the API immediately, instead of racing an in-flight write.
 
+A fetch stopped this way is not a failure, and is not recorded as one:
+`CancelFetch` cancels with the cause `errFetchCancelled`, `processDownload`
+reports that cause when it is why it stopped, and `Tick` logs it at INFO and
+skips `handleFailure`. Without that, every removal recorded a retry and logged
+"process download failed, will retry" at WARN for a download about to stop
+existing. The cause is what decides, deliberately: checking whether the row
+still exists would race the delete, and treating any `context.Canceled` as a
+removal would swallow the idle-stall timeout, which ends a fetch the same way.
+
 Tracked via `Importer.activeFetches`, a map of download id to a
-`context.CancelFunc` + a `done` channel, registered by `processDownload` itself
+`context.CancelCauseFunc` + a `done` channel, registered by `processDownload` itself
 right before it starts fetching and cleared via `defer` when it returns. This
 doubles as a guard against a second hazard: a fetch that outlives one
 `import_interval_seconds` tick (a large multi-file torrent, same shape as the

@@ -11,7 +11,7 @@ units without a mounted config file.
 | `data_dir` | `ACERVINODE_DATA_DIR` | `./data` | Where the SQLite database file lives. `PUT /api/v1/settings/general` still accepts it (persisted, **requires a restart** — the database connection isn't reopened live), but the web UI shows it read-only rather than offering an editable field — changing it doesn't move the existing `acervinode.db`, so editing it there would make a restart look like all local history vanished. Move the database file yourself first, then change this via `config.yaml`/the env var |
 | `api_key` | `ACERVINODE_API_KEY` | *(generated on first run)* | Key required by the native `/api/v1` endpoints, the qBittorrent shim's login password, and the SABnzbd shim's `apikey` param. Viewable and regeneratable live (no restart) via the web UI's Settings tab, or `GET`/`POST /api/v1/settings/general` and `/api/v1/settings/api-key/regenerate` — see [API](api.md) |
 | `log_level` | `ACERVINODE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. Editable live (no restart) via `PUT /api/v1/settings/general` or the web UI — applies immediately via a `slog.LevelVar` |
-| `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the *arr app didn't supply its own `save_path`. Editable live (no restart) — `internal/importer.SetConfig` |
+| `download_dir` | `ACERVINODE_DOWNLOAD_DIR` | `./downloads` | Fallback destination for Completed Download Handling when the adding client didn't supply its own `save_path` — which is always, for Sonarr and Radarr (see [Categories and save paths](#categories-and-save-paths)). Editable live (no restart) — `internal/importer.SetConfig` |
 | `import_interval_seconds` | `ACERVINODE_IMPORT_INTERVAL_SECONDS` | `30` | How often `internal/importer` ticks: proactively refreshes every tracked download's status from its provider — the only thing that ever does, since an *arr app polling a compat shim reads what this tick wrote rather than causing a provider call of its own (see [Providers](providers.md#proactive-status-refresh)) and checks for provider-completed downloads to fetch to local disk; also the base of its retry backoff (attempt *N* waits ~`import_interval_seconds`×2^*N*, capped at 1 hour). Editable live (no restart) — the running ticker resets to the new interval immediately rather than waiting out the old one |
 | `import_max_retries` | `ACERVINODE_IMPORT_MAX_RETRIES` | `5` | How many failed fetch attempts a download gets before `internal/importer` gives up and moves it to `error` instead of retrying again. Editable live (no restart) |
 | `max_concurrent_downloads` | `ACERVINODE_MAX_CONCURRENT_DOWNLOADS` | `3` | How many `provider_completed` downloads `internal/importer` fetches to local disk at once — previously always strictly one at a time, with no way to change it. Editable live (no restart), with one caveat worth knowing: a **batch already in flight keeps the limit it started with**. `internal/importer` sizes its semaphore once per tick, and the next tick cannot begin until the current one's fetches finish, so raising the limit while downloads are running takes effect when they drain rather than immediately — the same shape as `import_fetch_timeout_seconds` above. Measured, not assumed: with six downloads queued and three fetching, raising this to five left it at three until the batch completed. Must be at least 1 — `0` or negative is **rejected** (HTTP 400 from the settings API, refusing to start from `config.yaml`), not clamped |
@@ -129,12 +129,16 @@ the one that triggered the change; nothing else does.
 
 ## Categories and save paths
 
-*arr apps set a category on every add (`tv-sonarr`, `radarr`, ...) and, for the
-qBittorrent shim, generally rely on the category's own configured path rather than
-sending an explicit `save_path`. AcerviNode stores whatever category and save path
-the calling app does send, and Completed Download Handling
-([Providers](providers.md#completed-download-handling-internalimporter)) writes fetched files there
-when one was supplied — an explicit `save_path` from the *arr app always wins.
+*arr apps set a category on every add (`tv-sonarr`, `radarr`, ...). Sonarr and
+Radarr never send an explicit `save_path` — confirmed in their qBittorrent client,
+whose add sends only the link or file, category, start state, ordering and seeding
+options — and SABnzbd's API has no such parameter at all. Another client can send
+one (LibriNode does), and when it does, Completed Download Handling
+([Providers](providers.md#completed-download-handling-internalimporter)) writes the
+download to `<save_path>/<name>/`: the explicit path wins, but namespaced by the
+download's own name, the way real qBittorrent puts content *into* it. Stored
+verbatim, as it once was, it became a directory shared by every download sent the
+same path.
 
 When no `save_path` was supplied, AcerviNode falls back to `download_dir`, organized
 as `<download_dir>/<category>/<name>/` — unless that category has its own override
