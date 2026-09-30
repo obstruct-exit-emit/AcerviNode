@@ -5,7 +5,11 @@ complete; Phase 4 is where additional debrid providers get added as they
 become worth the maintenance cost. The
 fine-grained record of every change lives in the [CHANGELOG](CHANGELOG.md).
 
-**Legend:** ✅ complete · 🔄 in progress · 💡 under consideration · ⏳ blocked
+**Start here:** [Critical — do next](#critical--do-next) is the current work
+queue — five Sonarr/Radarr integration findings, two of which can lose a
+download or a file.
+
+**Legend:** ✅ complete · 🔴 critical, not started · 🔄 in progress · 💡 under consideration · ⏳ blocked
 
 ## At a glance
 
@@ -31,6 +35,100 @@ Requested directly: a prioritized, trackable punch list of what stands between
 "works great for me" and genuinely replacing rdt-client/decypharr as a daily
 driver — not just a feature diff, but ranked by what actually blocks trusting
 this unattended. Recommendations first.
+
+### Critical — do next
+
+Five findings from reviewing both compat shims against
+Sonarr's and Radarr's *actual* source (`QBittorrent.cs`, `QBittorrentProxyV2.cs`,
+`Sabnzbd.cs`, `SabnzbdConfig`, `SabnzbdDownloadStatus` — fetched and read, not
+recalled). Requested directly ("review code and find ways to make this work with
+sonarr and radarr better", then "add all to the roadmap to do next critical").
+Ordered by what actually costs downloads.
+
+- 🔴 **Both shims expose Manual downloads to \*arr apps, and \*arr never filters
+  them out.** `handleInfo` (`internal/qbittorrent/torrents.go`), `handleQueue`
+  and `handleHistory` (`internal/sabnzbd`) all call `ListDownloads(ctx, kind)`,
+  which has no `added_via` filter. The assumption that category scoping saves us
+  is **wrong, and was checked rather than assumed**: the `GetItems` loop in both
+  Sonarr's and Radarr's `QBittorrent.cs` reads `Category` into the item and never
+  filters on it, and SABnzbd's `GetQueue`/`GetHistory` do the same. Every row we
+  report enters \*arr's queue — on a real account that is every discovered
+  Manual download, i.e. the operator's whole personal library.
+
+  Worst consequence first: **a Manual download can silently block a legitimate
+  grab.** Sonarr's `QueueSpecification` rejects a release when a queued item
+  already matches that episode, so a Manual copy of a show sitting in the queue
+  forever stops Sonarr grabbing it — and presents as an indexer problem. Beyond
+  that, Manual rows never leave `provider_completed` (that is what Manual
+  *means*), which we report as `downloading`, so they sit in \*arr's queue as
+  perpetually-downloading items feeding its stuck-download warnings; errored ones
+  report `error` as permanent Warning noise; and \*arr's own "remove from queue"
+  can delete a Manual download along with its files.
+
+  The shims already *write* `AddedViaArr` on add, and their own comments say
+  "this shim only exists for \*arr apps" — only the reads never got the same
+  treatment. Fix is a Managed-only read path for both shims, with the native
+  API/UI left unfiltered. Needs one decision: hard filter, or a setting.
+
+- 🔴 **`resolveDestDir` can `os.RemoveAll` a directory shared with other
+  downloads.** `internal/importer`'s first branch returns `d.SavePath` bare,
+  while the function's own doc comment promises the result is "always namespaced
+  by the download's own name so sibling downloads in the same category never
+  collide" — and three further comments build on "resolveDestDir ends the
+  destination with the download's own name". Both `RemoveLocalFiles` and
+  `cleanupDownload` then `os.RemoveAll` that path, guarded only against an empty
+  `Name`, which does not help here: deleting or cleaning up one download **wipes
+  every sibling sharing that save path**. Separately it makes `content_path` the
+  shared directory and `save_path` an unrelated parent, so \*arr scans a folder
+  full of other releases' files.
+
+  Not reachable from Sonarr/Radarr — confirmed from `QBittorrentProxyV2`, whose
+  add sends only urls/torrents, category, stopped, sequentialDownload,
+  firstLastPiecePrio, contentLayout, ratioLimit and seedingTimeLimit, never
+  `savepath`. It *is* reachable from LibriNode and any other client that sends
+  one, and survives through `pending_arr_adds`. Why the suite misses it: every
+  `internal/importer` test sets `SavePath` to a unique `t.TempDir()`, which makes
+  the shared-directory case look correct. The fix is also the more faithful
+  emulation — real qBittorrent puts content *into* savepath — so join the
+  download's name onto it and report `save_path` as the requested path itself
+  rather than synthesizing a parent from it.
+
+- 🔴 **Unknown ETA is reported as `0`, not qBittorrent's `8640000` sentinel.**
+  `toTorrentInfo` sends `live.ETASeconds`, which is `0` whenever nothing has been
+  cached for that row yet. Sonarr's `GetRemainingTime` is explicit about the
+  convention — `if (torrent.Eta == 8640000) return null;`, commented "qBittorrent
+  sends eta=8640000 if unknown such as queued" — so `0` is read as *zero seconds
+  remaining* rather than unknown, and every queued download claims to be finishing
+  immediately.
+
+- 🔴 **`complete_dir` is never reported, so \*arr cannot resolve the client's
+  output root.** `internal/sabnzbd`'s `mode=get_config` sends
+  `misc.complete_dir: ""` and `mode=fullstatus` omits the field entirely. Sonarr's
+  `GetCategories` falls back to `fullstatus`'s `CompleteDir` precisely when
+  `complete_dir` is not rooted, so both paths come back empty, `category.FullPath`
+  is empty, and `status.OutputRootFolders` — what Sonarr's remote-path-mapping
+  health check reads — is empty with it. Report the real download directory in
+  both places.
+
+- 🔴 **A `.torrent` file add records no infohash.** `addTorrentFile` passes an
+  empty hash to `recordPendingAdd`, so a lost add reply can only ever be
+  reconciled by name. Sonarr and Radarr compute the infohash from the `.torrent`
+  themselves and use it as `DownloadId`, so parsing the info dict at add time
+  would make reconciliation exact instead of best-effort — the very limitation
+  [CLAUDE.md](CLAUDE.md)'s "a pending \*arr add is claimed exactly once" invariant
+  calls out — and guarantee the hash we report matches \*arr's `DownloadId`
+  immediately rather than waiting a poll for the backfill.
+
+  **Checked and deliberately *not* changed** — recorded so none of these gets
+  "fixed" later on a hunch. `Ratio: 0`/`RatioLimit: 0` genuinely does satisfy
+  `HasReachedSeedLimit` (verbatim: `if (RatioLimit >= 0) { if (RatioLimit - Ratio
+  <= 0.001f) return true; }`), so `pausedUP` really unlocks
+  `CanMoveFiles`/`CanBeRemoved`. All four qBittorrent states map as intended, and
+  `error` maps to Warning rather than Failed, so it does not trigger \*arr's failed
+  download handling. All eight SABnzbd status strings we emit are real
+  `SabnzbdDownloadStatus` enum members, so none risks a deserialization failure.
+  `config.Sorters` cannot throw on a missing key — `SabnzbdConfig`'s constructor
+  initializes it. And the `content_path != save_path` requirement is satisfied.
 
 **Do next** — scoped, self-contained, verifiable without a second provider:
 
