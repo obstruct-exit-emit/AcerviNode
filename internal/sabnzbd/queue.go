@@ -37,7 +37,9 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	rows, err := s.db.ListDownloads(ctx, database.KindUsenet)
+	// Managed only: a Manual download is never auto-fetched, so it would sit
+	// in *arr's queue forever — see database.ListManagedDownloads.
+	rows, err := s.db.ListManagedDownloads(ctx, database.KindUsenet)
 	if err != nil {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return

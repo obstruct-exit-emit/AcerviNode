@@ -207,14 +207,14 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 	return err
 }
 
-// handleInfo implements GET /api/v2/torrents/info. It refreshes every
-// tracked torrent from the provider in one bulk call, persists whatever
-// changed, then reports current state — this is what makes repeated polling
-// by an *arr app actually observe progress.
+// handleInfo implements GET /api/v2/torrents/info: whatever
+// internal/importer's last poll wrote, for Managed torrents only. It does not
+// reach the provider (see the package comment on why this shim is a wall) and
+// it does not report Manual downloads (see database.ListManagedDownloads).
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	rows, err := s.db.ListDownloads(ctx, database.KindTorrent)
+	rows, err := s.db.ListManagedDownloads(ctx, database.KindTorrent)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -319,7 +319,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		if hash == "" {
 			continue
 		}
-		d, err := s.db.GetDownloadByHash(ctx, hash)
+		// Managed-scoped: an *arr app naming a Manual download's hash must not
+		// be able to remove the operator's own download — see
+		// database.GetManagedDownloadByHash.
+		d, err := s.db.GetManagedDownloadByHash(ctx, hash)
 		if err != nil || d == nil {
 			continue
 		}
@@ -363,7 +366,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) downloadByHash(w http.ResponseWriter, r *http.Request) (*database.Download, bool) {
 	hash := r.URL.Query().Get("hash")
-	d, err := s.db.GetDownloadByHash(r.Context(), hash)
+	// Managed-scoped for the same reason as the listing: a row an *arr app
+	// cannot see should not be one it can interrogate either.
+	d, err := s.db.GetManagedDownloadByHash(r.Context(), hash)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return nil, false

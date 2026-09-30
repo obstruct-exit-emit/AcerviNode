@@ -35,7 +35,11 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	rows, err := s.db.ListDownloads(ctx, database.KindUsenet)
+	// Managed only, and this is the more important of the two listings: a
+	// Manual row here reports "Failed", the one status Sonarr maps to
+	// DownloadItemStatus.Failed — which blocklists a release and re-searches
+	// over someone's personal download. See database.ListManagedDownloads.
+	rows, err := s.db.ListManagedDownloads(ctx, database.KindUsenet)
 	if err != nil {
 		writeJSON(w, map[string]any{"status": false, "error": "internal error"})
 		return

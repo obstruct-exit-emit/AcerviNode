@@ -18,7 +18,10 @@ import (
 // simply not acting on a hash it doesn't recognize rather than erroring.
 func (s *Server) resolveHashes(ctx context.Context, raw string) []*database.Download {
 	if raw == "" || raw == "all" {
-		rows, err := s.db.ListDownloads(ctx, database.KindTorrent)
+		// Managed only. "all" is a legal hashes value on real qBittorrent, so
+		// without this a post-import setCategory step would relabel every
+		// Manual download in the account.
+		rows, err := s.db.ListManagedDownloads(ctx, database.KindTorrent)
 		if err != nil {
 			slog.Error("qbittorrent: list downloads failed", "error", err)
 			return nil
@@ -31,7 +34,7 @@ func (s *Server) resolveHashes(ctx context.Context, raw string) []*database.Down
 		if h == "" {
 			continue
 		}
-		d, err := s.db.GetDownloadByHash(ctx, h)
+		d, err := s.db.GetManagedDownloadByHash(ctx, h)
 		if err != nil {
 			slog.Error("qbittorrent: get download by hash failed", "hash", h, "error", err)
 			continue

@@ -26,7 +26,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		if nzoID == "" {
 			continue
 		}
-		d, err := s.db.GetDownloadByID(ctx, nzoID)
+		// Managed-scoped: an *arr app must not be able to remove the operator's
+		// own download — see database.GetManagedDownloadByID.
+		d, err := s.db.GetManagedDownloadByID(ctx, nzoID)
 		if err != nil || d == nil || d.Kind != database.KindUsenet {
 			continue
 		}
