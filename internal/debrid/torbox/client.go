@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -274,7 +275,7 @@ func (c *Client) do(req *http.Request, out any) error {
 		_ = json.Unmarshal(data, &errEnv)
 		detail := errEnv.Detail
 		if detail == "" {
-			detail = string(data)
+			detail = summarizeErrorBody(data)
 		}
 		return &APIError{StatusCode: resp.StatusCode, Detail: detail}
 	}
@@ -289,6 +290,60 @@ func (c *Client) do(req *http.Request, out any) error {
 }
 
 // checkSuccess turns a 200-OK-but-"success":false envelope into an error.
+// maxErrorDetail bounds an error detail taken from a raw response body.
+const maxErrorDetail = 300
+
+var htmlTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// summarizeErrorBody turns a non-JSON error body into something fit to show a
+// person.
+//
+// This used to be the entire body, verbatim. During an outage that is a
+// multi-KB HTML page from whatever edge sits in front of the API, and it does
+// not stay in a log line: importer.handleFailure stores the error as the
+// download's error_message, and the SABnzbd shim sends that to Sonarr as
+// fail_message. Every download retrying through an outage showed a wall of
+// markup in the *arr Activity view.
+//
+// An HTML page is reduced to its <title>, which on an edge error page is
+// exactly the useful part ("api.torbox.app | 502: Bad gateway"). Anything else
+// has its whitespace collapsed and is bounded -- but otherwise kept verbatim,
+// since a short plain-text reason is precisely what this fallback exists to
+// surface, and isUnsupportedHostDetail matches on that prose. JSON errors never
+// reach here: their detail field is used as-is.
+func summarizeErrorBody(data []byte) string {
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return ""
+	}
+	if looksLikeHTML(s) {
+		if m := htmlTitle.FindStringSubmatch(s); m != nil {
+			if title := strings.Join(strings.Fields(m[1]), " "); title != "" {
+				return truncateRunes(title, maxErrorDetail)
+			}
+		}
+		return "non-JSON HTML error page"
+	}
+	return truncateRunes(strings.Join(strings.Fields(s), " "), maxErrorDetail)
+}
+
+// looksLikeHTML checks only the head of the body: a real HTML page declares
+// itself early, and a plain-text message that merely mentions "<html" deep
+// inside should not be reduced to a title it does not have.
+func looksLikeHTML(s string) bool {
+	head := strings.ToLower(s[:min(len(s), 512)])
+	return strings.HasPrefix(head, "<!doctype html") || strings.Contains(head, "<html")
+}
+
+// truncateRunes cuts s to at most n runes, never inside a multi-byte one.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 func checkSuccess(success bool, detail string) error {
 	if success {
 		return nil
