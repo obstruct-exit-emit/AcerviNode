@@ -241,6 +241,22 @@ provider API error (a 429 among them) and still goes to the download-level
 backoff, and a server that accepts and then says nothing is still the idle
 timeout's job. The wait is interruptible, so a delete stops it at once.
 
+Fetches run in a pool that outlives the tick that starts them. A tick
+(`Importer.tick`) refreshes statuses, runs the watchdog, hands every due
+download it has room for to the pool (`dispatch`), and returns without waiting;
+a download that finishes while another fetch is still running starts at the next
+tick, in a free slot. It used to be a per-tick batch the tick waited on, inside
+`Run`'s loop, and on the first production burn-in that made a movie and an
+episode wait 84s and 79s behind a 9.9 GB transfer with two of three slots free,
+while `last_tick_at` froze for 103s. Three properties of the old batch are kept
+deliberately: the limit holds across ticks (`startFetch` checks the in-flight
+count and registers under one lock); a freed slot is refilled the moment a fetch
+succeeds, rather than at the next tick, so a burst of single episodes does not
+crawl through at the limit per interval — success only, since it is the one
+outcome that takes the row out of the due set; and `Run` waits for in-flight
+fetches at shutdown. `Tick` itself still waits, for callers that want one whole
+pass and its result.
+
 An \*arr app's explicit `save_path` is the destination only after it has been
 namespaced by the download's own name at add time (`qbittorrent.namespaceSavePath`)
 — see [Local file deletion](#local-file-deletion) for what an un-namespaced one
@@ -372,8 +388,9 @@ anything, they read what this pass wrote.
 Because this runs on `import_interval_seconds` regardless of external polling, a
 download that finishes between polls — or with nothing polling at all — is
 picked up within one tick, and if that same tick moves it into
-`provider_completed`, its files get fetched immediately after, in the same
-`Tick` call. `List` errors are logged, except `debrid.ErrNoProvider` (no key
+`provider_completed`, its fetch is started in that same tick — handed to the
+fetch pool, subject to `max_concurrent_downloads`, without the tick waiting for
+it. `List` errors are logged, except `debrid.ErrNoProvider` (no key
 configured yet), which is expected and would otherwise spam the log every tick.
 
 This does **not** shrink whatever delay exists on the provider's own side — TorBox's

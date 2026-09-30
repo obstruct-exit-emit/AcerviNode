@@ -160,6 +160,16 @@ cause `errFetchCancelled`, and only that cause skips `handleFailure`. Do not
 fetch the same way, and stalls would silently stop retrying. Do not replace it
 with "is the row still there?" either — that races the delete.
 
+**Fetches run in a pool; `Tick` waits for it and `Run` does not.** A tick hands
+due downloads to the pool (`dispatch`) and returns, which is what stops one large
+download holding up every other. Do not make `Run` wait for its fetches again,
+and do not turn the limit back into a per-tick semaphore: a fetch outlives its
+tick, so the limit has to be checked under the same lock as registration
+(`startFetch`). A freed slot is refilled only after a *success*, the one outcome
+that takes the row out of the due set — refilling after a failure could pick the
+same row straight back up and spin. `Tick` still waits, because fifty tests call
+it and then inspect the result.
+
 **Only a *refused* file request is retried per file.** `openFile` retries a
 non-200 status with a fresh link; it deliberately does not retry link-resolution
 failures (provider API errors, 429 included, which must reach the
@@ -291,6 +301,13 @@ a file with the Write tool, or build the backslash with `chr(92)`.
 **Rate-limit backoff blanks polling for a whole kind**, which presents as the UI
 freezing rather than as an error. Check `GET /api/v1/status` before diagnosing a
 "stuck" download.
+
+**A mutation that does not compile looks like one that survived.** Checking for
+`--- FAIL` alone cannot tell the two apart: a build failure prints no failing
+test. Replacing a variable's use with a literal left it declared but unused — a
+Go compile error — and read as a gap in the tests until the mutation was redone
+so it compiled, at which point two tests caught it. Check that a mutant builds,
+or grep for `^FAIL` and `build failed` too.
 
 **SQLite cannot parse the timestamps this app stores.** They are written in Go's
 `time.Time` format (`2026-09-30 11:28:11.156803248 +0000 UTC`), which `datetime()`

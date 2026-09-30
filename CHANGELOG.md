@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **One big download held up every other download.** Measured on the first
+  production burn-in: with a 9.9 GB file transferring, a movie and an episode
+  that finished at TorBox meanwhile waited 84s and 79s before starting, with two
+  of three fetch slots free, and `last_tick_at` froze for 103s — the tick
+  fetched its batch and waited for all of it, inside `Run`'s loop. Fetches now
+  run in a pool that outlives the tick; the next tick comes round on time and
+  fills any free slot. The concurrency limit holds across ticks, a freed slot is
+  refilled as soon as a fetch succeeds, and shutdown still waits for in-flight
+  fetches. `max_concurrent_downloads` now takes effect at the next dispatch
+  rather than when a batch drains.
+
 - **One refused file failed a whole download.** Found on the first production
   burn-in: TorBox's CDN intermittently answered a file's request with 400 while
   fetching a 26-file, 10 GB season pack — E07, then E15, then another — while

@@ -145,7 +145,7 @@ Two findings from the second code review (the fetch path, the TorBox client and
 the delete paths), deliberately left for after the burn-in rather than changed
 the day of it. Requested directly: "add ... to road map to fix".
 
-- 🟡 **One big download holds up everything behind it.** `Importer.Tick`
+- ✅ **One big download holds up everything behind it.** `Importer.Tick`
   fetches its batch of `provider_completed` downloads concurrently, up to
   `max_concurrent_downloads`, but then `wg.Wait()`s for the *whole batch* before
   returning — and `Tick` runs synchronously inside `Run`'s select loop, so the
@@ -185,14 +185,24 @@ the day of it. Requested directly: "add ... to road map to fix".
   link speed: on a 20 MB/s link the same file would hold every other finished
   download back for about eight minutes.
 
+  **Fixed.** Fetches now run in a pool that outlives the tick: a tick hands due
+  downloads to it and returns, so the next tick comes round on time and fills
+  any free slot, and `last_tick_at` keeps moving. The limit holds across ticks,
+  a freed slot is refilled the moment a fetch succeeds, and `Run` waits for
+  in-flight fetches at shutdown; `Tick` still waits, which is what the fifty
+  tests calling it rely on. Two tests through `Run` reproduced the production
+  symptoms before the fix; every safeguard was mutation-checked and caught; the
+  race detector is clean.
+
 - 🟡 **Two simultaneous `import_interval_seconds` saves can hang one of
   them.** Minor, and very unlikely. `SetConfig` tells `Run` about a new
   interval through a one-slot channel: a non-blocking send, and if the slot is
   already full, drain it and send again. That second send *blocks*. With two
   saves racing, the first can drain, the second can refill the slot, and the
   first's blocking send then waits for `Run` to read — which it cannot do while
-  it is stuck in a long `Tick` (see above). That settings request hangs until
-  the fetch batch drains.
+  it is busy with a tick. That used to mean until a whole fetch batch drained;
+  since the fix above, a tick no longer waits on fetches, so the hang is bounded
+  by one tick's own work (the provider refresh, a few seconds).
 
   Only `import_interval_seconds` is affected. `SetFastPollInterval` uses the
   same pattern, but its reader, `runFastPoll`, is a separate goroutine that a
@@ -200,7 +210,7 @@ the day of it. Requested directly: "add ... to road map to fix".
   only: make the final send non-blocking as well, and have `Run` read the
   current value from `getConfig` when woken rather than trusting the value it
   received — so a dropped duplicate can never leave the ticker on a stale
-  interval. Fixing the item above removes the long wait, but not the race.
+  interval. The fix above removed the long wait; this race is what remains.
 
 - 🟡 **Notice when TorBox fails to unpack a usenet download.** Found on the first
   production burn-in. TorBox marked `Amphibia.S01E37` completed, but its file list
