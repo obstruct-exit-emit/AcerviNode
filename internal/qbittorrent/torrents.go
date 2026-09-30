@@ -182,7 +182,7 @@ func (s *Server) addMagnet(ctx context.Context, magnet, category, savePath strin
 		s.recordPendingAdd(ctx, database.KindTorrent, infohashFromMagnet(magnet), magnetDisplayName(magnet), category, savePath)
 		return err
 	}
-	return s.storeNewDownload(ctx, id, magnet, category, savePath)
+	return s.storeNewDownload(ctx, id, magnet, magnetHash(magnet), category, savePath)
 }
 
 func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byte, category, savePath string) error {
@@ -190,14 +190,20 @@ func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byt
 	if p == nil {
 		return debrid.ErrNoProvider
 	}
+	// Read straight out of the file. Sonarr and Radarr compute the same value
+	// and use it as the DownloadId they track this grab by, so having it up
+	// front is what lets a lost add reply be reconciled exactly rather than by
+	// name -- the best-effort half of the "a pending *arr add is claimed
+	// exactly once" invariant. Empty for anything unparseable, which is the
+	// old behaviour: a wrong hash would attach a grab to the wrong download.
+	fileHash := infohashFromTorrentFile(data)
+
 	id, err := p.AddTorrentFile(ctx, filename, data, debrid.AddOptions{Name: filename})
 	if err != nil {
-		// No infohash without parsing the torrent, so this one matches on
-		// name alone -- see database.ClaimPendingArrAdd.
-		s.recordPendingAdd(ctx, database.KindTorrent, "", filename, category, savePath)
+		s.recordPendingAdd(ctx, database.KindTorrent, fileHash, filename, category, savePath)
 		return err
 	}
-	return s.storeNewDownload(ctx, id, "", category, savePath)
+	return s.storeNewDownload(ctx, id, "", fileHash, category, savePath)
 }
 
 // storeNewDownload fetches the provider's own view of a just-added download
@@ -205,7 +211,7 @@ func (s *Server) addTorrentFile(ctx context.Context, filename string, data []byt
 // reflected the add yet, a magnet-derived fallback keeps the add from
 // failing outright — *arr apps will see the row on their next /info poll
 // either way.
-func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, magnet, category, savePath string) error {
+func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloadID, magnet, fallbackHash, category, savePath string) error {
 	p := s.defaultTorrent()
 	if p == nil {
 		return debrid.ErrNoProvider
@@ -216,7 +222,7 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 		status = debrid.DownloadStatus{
 			ID:    id,
 			Name:  magnetDisplayName(magnet),
-			Hash:  magnetHash(magnet),
+			Hash:  fallbackHash,
 			State: debrid.StateQueued,
 		}
 	}
@@ -247,6 +253,13 @@ func (s *Server) storeNewDownload(ctx context.Context, id debrid.ProviderDownloa
 	}
 	if d.Name == "" {
 		d.Name = d.Hash
+	}
+	// A provider that has not indexed the add yet reports no hash. For a
+	// .torrent upload we already know it from the file itself, and an *arr app
+	// is keyed on exactly that value -- without it the row is invisible to the
+	// grab until a later poll backfills one.
+	if d.Hash == "" {
+		d.Hash = strings.ToLower(fallbackHash)
 	}
 	// Set after the name is settled, since that is what it is namespaced by.
 	d.SavePath = namespaceSavePath(savePath, d.Name)
