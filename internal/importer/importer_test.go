@@ -2443,11 +2443,24 @@ func TestCancelFetch_StopsInFlightFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDownloadByID() error = %v", err)
 	}
+	// A deliberate cancel is not a failed attempt. This used to assert the
+	// opposite -- RetryCount 1, "scheduled for retry like any other fetch
+	// failure" -- which described the cancel flowing through the generic
+	// failure path rather than arguing it should. CancelFetch's only callers
+	// are deletes, so in production the row is gone a moment later and that
+	// retry was never observable; its one real effect was a WARN claiming a
+	// retry that would never happen, on every *arr mid-fetch removal once the
+	// shims began cancelling. See errFetchCancelled. This test cannot see
+	// the difference in production terms because it does not delete the row,
+	// which is exactly why it could observe the stray retry at all.
+	//
+	// Left untouched, the row is simply picked up again on a later tick, which
+	// is also the right outcome if a delete were ever to fail after cancelling.
 	if got.State != database.StateProviderCompleted {
-		t.Errorf("state = %q, want still provider_completed (cancelled, scheduled for retry like any other fetch failure)", got.State)
+		t.Errorf("state = %q, want still provider_completed (cancelled, not failed)", got.State)
 	}
-	if got.RetryCount != 1 {
-		t.Errorf("RetryCount = %d, want 1 (the cancellation counted as one failed attempt)", got.RetryCount)
+	if got.RetryCount != 0 {
+		t.Errorf("RetryCount = %d, want 0 (a deliberate cancel is not a failed attempt)", got.RetryCount)
 	}
 }
 

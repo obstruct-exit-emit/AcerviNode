@@ -192,9 +192,29 @@ type Importer struct {
 // after calling cancel so a caller can be sure the fetch has genuinely
 // stopped, not just been asked to.
 type activeFetch struct {
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	done   chan struct{}
 }
+
+// errFetchCancelled is the cause CancelFetch cancels a fetch with, and what
+// processDownload reports when that is why it stopped.
+//
+// CancelFetch is only ever called because a download is being removed, so a
+// fetch ending this way is not a failure and must not go through
+// handleFailure. Once both compat shims began cancelling before an *arr delete
+// -- which is where mid-fetch removals actually come from -- every such
+// removal recorded a retry and logged "process download failed, will retry"
+// at WARN, for a download about to stop existing. Seen live.
+//
+// Carried as a context cause rather than inferred. "Is the row still there?"
+// would be racy: CancelFetch unblocks the deleting caller before
+// handleFailure runs, which is exactly how the live run logged "will retry"
+// against a row a moment from being deleted. And "was it context.Canceled?"
+// would be wrong: the idle-stall timeout ends a fetch with context.Canceled
+// too, by cancelling a context of its own inside fetchFile, so treating that
+// as a removal would quietly stop stalls from ever retrying. Only this cause,
+// on this context, means "removed on purpose".
+var errFetchCancelled = errors.New("fetch cancelled: the download was removed")
 
 // kindBackoff tracks one kind's (torrent/usenet/webdl) rate-limit backoff —
 // see refreshKind.
@@ -748,6 +768,10 @@ func (im *Importer) Tick(ctx context.Context) error {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := im.processDownload(ctx, d); err != nil {
+				if errors.Is(err, errFetchCancelled) {
+					slog.Info("importer: fetch stopped because the download was removed", "id", d.ID, "name", d.Name)
+					return
+				}
 				im.handleFailure(ctx, d, err)
 			}
 		}(d)
@@ -1429,11 +1453,11 @@ func (im *Importer) tryStartFetch(ctx context.Context, id string) (fetchCtx cont
 	if _, exists := im.activeFetches[id]; exists {
 		return nil, nil, false
 	}
-	fetchCtx, cancel := context.WithCancel(ctx)
+	fetchCtx, cancel := context.WithCancelCause(ctx)
 	done := make(chan struct{})
 	im.activeFetches[id] = &activeFetch{cancel: cancel, done: done}
 	return fetchCtx, func() {
-		cancel()
+		cancel(nil)
 		close(done)
 		im.activeFetchesMu.Lock()
 		delete(im.activeFetches, id)
@@ -1457,7 +1481,7 @@ func (im *Importer) CancelFetch(id string) {
 	if !ok {
 		return
 	}
-	fetch.cancel()
+	fetch.cancel(errFetchCancelled)
 	select {
 	case <-fetch.done:
 	case <-time.After(10 * time.Second):
@@ -1503,12 +1527,20 @@ func (im *Importer) filterFiles(files []debrid.DownloadFile) []debrid.DownloadFi
 	return out
 }
 
-func (im *Importer) processDownload(ctx context.Context, d *database.Download) error {
+func (im *Importer) processDownload(ctx context.Context, d *database.Download) (err error) {
 	fetchCtx, doneFetch, ok := im.tryStartFetch(ctx, d.ID)
 	if !ok {
 		return nil // already being fetched by another goroutine this same window — not a failure, nothing to do
 	}
 	defer doneFetch()
+	// Registered after doneFetch so it runs first, while the cause CancelFetch
+	// set is still the one on record. However the fetch surfaced the
+	// cancellation, report it as what it was -- see errFetchCancelled.
+	defer func() {
+		if err != nil && errors.Is(context.Cause(fetchCtx), errFetchCancelled) {
+			err = errFetchCancelled
+		}
+	}()
 	ctx = fetchCtx
 
 	// Live fetch progress — see database.DB.SetFetchProgress's own doc
