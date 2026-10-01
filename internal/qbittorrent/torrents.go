@@ -537,20 +537,13 @@ func toTorrentInfo(d *database.Download, live database.LiveStatus, fetchProgress
 		savePath = filepath.Dir(d.SavePath)
 	}
 	return torrentInfo{
-		Hash:        d.Hash,
-		Name:        d.Name,
-		Category:    d.Category,
-		SavePath:    savePath,
-		ContentPath: d.SavePath,
-		Size:        d.SizeBytes,
-		// EffectiveProgress substitutes internal/importer's own live local-
-		// transfer progress in for d.Progress (already 1.0 by this point)
-		// while the download is provider_completed — see its own doc
-		// comment. Without this, an *arr app polling this field during
-		// "downloading" (this shim's own reported state for
-		// provider_completed — see qbtState below) would see progress
-		// frozen at 100% for however long the actual local copy takes.
-		Progress:     database.EffectiveProgress(d, fetchProgress, hasFetchProgress),
+		Hash:         d.Hash,
+		Name:         d.Name,
+		Category:     d.Category,
+		SavePath:     savePath,
+		ContentPath:  d.SavePath,
+		Size:         d.SizeBytes,
+		Progress:     qbtProgress(d, fetchProgress, hasFetchProgress),
 		State:        qbtState(d.State),
 		Eta:          qbtETA(live.ETASeconds),
 		AddedOn:      d.AddedAt.Unix(),
@@ -561,6 +554,31 @@ func toTorrentInfo(d *database.Download, live database.LiveStatus, fetchProgress
 		Ratio:        0,
 		RatioLimit:   0,
 	}
+}
+
+// qbtProgress is the progress this shim reports: the local copy's progress
+// while a download is provider_completed, and the provider's otherwise.
+//
+// provider_completed is reported as "downloading" (see qbtState), because the
+// files are not on local disk yet. The provider's own progress is already 1.0
+// by then, so passing it through would claim every piece is local while the
+// state says otherwise -- a combination real qBittorrent never reports.
+// database.EffectiveProgress substitutes the live fetch progress while a fetch
+// is running; this also covers the time when none is: before the first
+// attempt starts, and through the backoff after a failed one. Nothing is on
+// disk then, so it is 0.
+//
+// Sonarr and Radarr go by the state alone, so this changes nothing for them.
+// It matters to clients that read progress: found live, CantiNode took 1.0 as
+// finished in the 21 seconds between TorBox completing an album and the fetch
+// starting, went to import it, and found no content_path. The dashboard keeps
+// using EffectiveProgress as it is -- there 1.0 reads as "the provider is
+// done", which is true.
+func qbtProgress(d *database.Download, fetchProgress float64, hasFetchProgress bool) float64 {
+	if d.State == database.StateProviderCompleted && !hasFetchProgress {
+		return 0
+	}
+	return database.EffectiveProgress(d, fetchProgress, hasFetchProgress)
 }
 
 // qbtUnknownETA is qBittorrent's own value for "no idea how long this will

@@ -584,10 +584,31 @@ func TestToTorrentInfo_SubstitutesFetchProgressWhileProviderCompleted(t *testing
 		t.Errorf("Progress = %v, want 0.42 (live fetch progress substituted in)", info.Progress)
 	}
 
-	// No fetch progress currently tracked — falls back to d.Progress unchanged.
+	// No fetch in flight -- before the first attempt starts, or waiting out
+	// the backoff after a failed one. Nothing is on disk, so 0, not the
+	// provider's 1.0: real qBittorrent never reports "downloading" at 1.0
+	// (1.0 means every piece is local), and clients that read progress
+	// rather than state take 1.0 as finished. Found live: CantiNode did
+	// exactly that in the 21s between TorBox finishing and the fetch
+	// starting, went to import, and found no content_path.
 	info = toTorrentInfo(d, database.LiveStatus{}, 0, false)
-	if info.Progress != 1.0 {
-		t.Errorf("Progress = %v, want 1.0 (d.Progress, no fetch progress tracked yet)", info.Progress)
+	if info.Progress != 0 {
+		t.Errorf("Progress = %v, want 0 (no fetch in flight, nothing on disk yet)", info.Progress)
+	}
+	if info.State != "downloading" {
+		t.Errorf("State = %q, want downloading", info.State)
+	}
+
+	// Only provider_completed: every other state reports d.Progress when no
+	// fetch is in flight -- the normal case for them -- above all a finished
+	// download, which must stay at 1.0.
+	for _, other := range []*database.Download{
+		{State: database.StateDownloading, Progress: 0.6},
+		{State: database.StateReadyForImport, Progress: 1.0},
+	} {
+		if got := toTorrentInfo(other, database.LiveStatus{}, 0, false).Progress; got != other.Progress {
+			t.Errorf("%s: Progress = %v, want its own %v", other.State, got, other.Progress)
+		}
 	}
 
 	// A different state never substitutes, even with a fetch progress value in hand.

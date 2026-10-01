@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The qBittorrent shim reported 100% before the files were on disk.** Once
+  the provider finished, a download read as `downloading` at progress `1.0`
+  until AcerviNode's own fetch started, and again through the backoff after a
+  failed attempt — a combination real qBittorrent never reports. Sonarr and
+  Radarr read the state and were unaffected, but a client that reads progress
+  takes `1.0` as finished: found live when CantiNode tried to import an album
+  in the 21 seconds between TorBox completing it and the fetch starting, and
+  found no `content_path`. Progress is now the local copy's while one runs and
+  `0` while none does. The dashboard is unchanged, and so is the SABnzbd shim,
+  which reports this stage as `Moving` — at 100%, as real SABnzbd does.
+
 - **A dead torrent looked healthy in Sonarr and Radarr.** Found on the first
   production burn-in: a re-grab sat at 0 seeds and no progress while the
   qBittorrent shim reported it as `downloading`. A torrent the provider is

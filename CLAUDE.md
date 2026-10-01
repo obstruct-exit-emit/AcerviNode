@@ -170,6 +170,13 @@ that takes the row out of the due set — refilling after a failure could pick t
 same row straight back up and spin. `Tick` still waits, because fifty tests call
 it and then inspect the result.
 
+**The qBittorrent shim never reports `1.0` before the files are local.**
+`qbtProgress` reports `0` for a `provider_completed` row with no fetch in
+flight, not the provider's `1.0`: the state there is `downloading`, and a client
+that reads progress takes `1.0` as finished. It is shim-only on purpose — the
+dashboard's `1.0` means "the provider is done", which is true, and the SABnzbd
+shim's `Moving` at 100% is what real SABnzbd reports.
+
 **`stalledDL` is a Warning, and must stay one.** The qBittorrent shim reports
 a dead torrent (provider still downloading, no seeders, no speed, past a
 5-minute grace) as `stalledDL`, which Sonarr flags but does not fail. Do not
