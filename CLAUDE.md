@@ -170,6 +170,13 @@ that takes the row out of the due set — refilling after a failure could pick t
 same row straight back up and spin. `Tick` still waits, because fifty tests call
 it and then inspect the result.
 
+**`addurl` fetches the NZB here first, and never logs the link.** Handing the
+link straight to the provider fails for any LAN link (Prowlarr's proxy, a local
+indexer), since a debrid service's servers cannot reach it. The fallback to
+the link stays: it keeps working whatever worked before. The link carries the
+indexer's API key — `fetchNZB` strips `*url.Error` and reports the host only.
+Its tests are offline by construction: `TestMain` allows loopback only.
+
 **The qBittorrent shim never reports `1.0` before the files are local.**
 `qbtProgress` reports `0` for a `provider_completed` row with no fetch in
 flight, not the provider's `1.0`: the state there is `downloading`, and a client

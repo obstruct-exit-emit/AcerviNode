@@ -1,11 +1,18 @@
 package sabnzbd
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -31,7 +38,17 @@ func (s *Server) handleAddURL(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": false, "error": "no usenet-capable provider configured"})
 		return
 	}
-	id, err := p.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: displayName})
+	// Fetch it here, as real SABnzbd does -- see fetchNZB -- and upload it like
+	// an addfile. Only if that fails does the link itself go to the provider.
+	var id debrid.ProviderDownloadID
+	var err error
+	if data, filename, fetchErr := s.fetchNZB(ctx, nzbURL); fetchErr == nil {
+		displayName = nzbJobName(displayName, filename)
+		id, err = p.AddNZBFile(ctx, filename, data, debrid.AddOptions{Name: displayName})
+	} else {
+		slog.Warn("sabnzbd: could not fetch the NZB here, handing the provider the link instead", "error", fetchErr)
+		id, err = p.AddNZBURL(ctx, nzbURL, debrid.AddOptions{Name: displayName})
+	}
 	if err != nil {
 		slog.Error("sabnzbd: add nzb url failed", "error", err)
 		// The provider may have taken it even though the reply did not
@@ -51,6 +68,104 @@ func (s *Server) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	}
 	s.categories.add(category)
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{nzoID}})
+}
+
+// nzbFetchTimeout bounds fetching an addurl link here. The clients that send
+// addurl give the whole request 30 seconds (CantiNode's and LibriNode's
+// SABnzbd clients), and the provider add still has to fit after it.
+const nzbFetchTimeout = 15 * time.Second
+
+// maxNZBBytes caps what an addurl fetch will read. NZBs for the largest
+// releases run to tens of megabytes; this is well past that and still bounded.
+const maxNZBBytes = 100 << 20
+
+// nzbHTTPClient fetches addurl links. No client-level timeout: fetchNZB puts
+// its own deadline on the context.
+var nzbHTTPClient = &http.Client{}
+
+// fetchNZB downloads an addurl link from this machine and returns the NZB and
+// the file name it goes by.
+//
+// Real SABnzbd fetches an addurl link itself. Handing it to the provider
+// instead asks a debrid service's cloud servers to fetch it, and the link a
+// self-hosted app sends is usually a LAN one -- typically Prowlarr's download
+// proxy -- which they can never reach. Found live: CantiNode fell back to
+// addurl with a 192.168.1.x Prowlarr link and AcerviNode did not answer within
+// its 30-second timeout. Sonarr and Radarr never hit it because they upload the
+// file themselves (addfile).
+//
+// Anything that is not plainly an NZB is an error, so the caller falls back to
+// the link rather than uploading an indexer's HTML error page. The link carries
+// the indexer's API key, so no error here includes it.
+func (s *Server) fetchNZB(ctx context.Context, rawURL string) (data []byte, filename string, err error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, "", errors.New("not an http(s) link")
+	}
+	ctx, cancel := context.WithTimeout(ctx, nzbFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", errors.New("could not build the request")
+	}
+	resp, err := nzbHTTPClient.Do(req)
+	if err != nil {
+		// *url.Error repeats the link, key and all; keep only its cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, "", fmt.Errorf("fetching from %s: %w", u.Host, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("fetching from %s: HTTP %d", u.Host, resp.StatusCode)
+	}
+	data, err = io.ReadAll(io.LimitReader(resp.Body, maxNZBBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("reading from %s: %w", u.Host, err)
+	}
+	if len(data) > maxNZBBytes {
+		return nil, "", fmt.Errorf("response from %s is larger than any NZB", u.Host)
+	}
+	if !looksLikeNZB(data) {
+		return nil, "", fmt.Errorf("response from %s is not an NZB", u.Host)
+	}
+	return data, nzbFileName(resp.Header.Get("Content-Disposition"), u), nil
+}
+
+// looksLikeNZB reports whether data opens with an NZB document: an <nzb
+// element within the first few KB, past any XML declaration and DOCTYPE.
+func looksLikeNZB(data []byte) bool {
+	head := data
+	if len(head) > 4096 {
+		head = head[:4096]
+	}
+	return bytes.Contains(bytes.ToLower(head), []byte("<nzb"))
+}
+
+// nzbFileName is the name a fetched NZB goes by: the Content-Disposition
+// filename when the server gives one, as indexers and Prowlarr do, or else
+// the link's last path segment. Always ending in .nzb, so nzbJobName and the
+// provider both treat it as the upload it now is.
+func nzbFileName(contentDisposition string, u *url.URL) string {
+	name := ""
+	if _, params, err := mime.ParseMediaType(contentDisposition); err == nil {
+		name = strings.TrimSpace(params["filename"])
+	}
+	if name == "" {
+		name = path.Base(u.Path)
+	}
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	if name == "" || name == "." || name == "/" {
+		name = "download"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".nzb") {
+		name += ".nzb"
+	}
+	return name
 }
 
 // handleAddFile implements mode=addfile: a multipart upload where "name" is

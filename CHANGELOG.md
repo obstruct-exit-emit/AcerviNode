@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **SABnzbd `addurl` handed the provider links it could never reach.** The NZB
+  link went straight to TorBox, so its cloud servers were asked to fetch it —
+  and the link a self-hosted app sends is usually a LAN one, typically
+  Prowlarr's download proxy. Found live: CantiNode fell back to `addurl` with
+  a `192.168.1.x` Prowlarr link and AcerviNode did not answer within its
+  30-second timeout. AcerviNode now fetches the NZB itself, as real SABnzbd
+  does, and adds it like an upload; the link goes to the provider only if that
+  fetch fails. Sonarr and Radarr upload the file themselves and were never
+  affected.
+
 - **The qBittorrent shim reported 100% before the files were on disk.** Once
   the provider finished, a download read as `downloading` at progress `1.0`
   until AcerviNode's own fetch started, and again through the backoff after a

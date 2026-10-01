@@ -20,6 +20,15 @@ type fakeProvider struct {
 	// *arr add. lastAddName is the name AddNZBFile was last asked to use.
 	addErr      error
 	lastAddName string
+	// urlAdds / fileAdds record what reached the provider by each route:
+	// the link handed over, or the bytes uploaded under their file name.
+	urlAdds  []string
+	fileAdds []fakeFileAdd
+}
+
+type fakeFileAdd struct {
+	filename string
+	data     []byte
 }
 
 type fakeEntry struct {
@@ -39,12 +48,17 @@ var _ debrid.UsenetProvider = (*fakeProvider)(nil)
 
 func (f *fakeProvider) Name() string { return "faketorbox" }
 
-func (f *fakeProvider) AddNZBURL(_ context.Context, _ string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+func (f *fakeProvider) AddNZBURL(_ context.Context, link string, opts debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+	f.mu.Lock()
+	f.urlAdds = append(f.urlAdds, link)
+	f.lastAddName = opts.Name
+	f.mu.Unlock()
 	return f.add(opts.Name), nil
 }
 
-func (f *fakeProvider) AddNZBFile(_ context.Context, filename string, _ []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error) {
+func (f *fakeProvider) AddNZBFile(_ context.Context, filename string, data []byte, opts debrid.AddOptions) (debrid.ProviderDownloadID, error) {
 	f.mu.Lock()
+	f.fileAdds = append(f.fileAdds, fakeFileAdd{filename: filename, data: data})
 	f.lastAddName = opts.Name
 	addErr := f.addErr
 	f.mu.Unlock()
