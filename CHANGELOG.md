@@ -6,7 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Sample files are skipped by default** (`skip_sample_files`). A release's
+  sample clip — a video named "sample" as a whole word, or in a `Sample`
+  folder — is left out of the fetch when the same download has a larger video
+  that is not one. The main file is never skipped, not even a film called
+  *Sample*, and only videos count, so music and books are untouched. On for
+  existing installs too; switch it off under Settings → Filtering.
+
 ### Fixed
+
+- **A packed usenet download with a sample clip was fetched instead of
+  failed.** The check for a usenet job TorBox never unpacked counted every
+  file that was not an archive or a recovery file as content, so a sample
+  clip alone made RARs-plus-`Sample/x.sample.mkv` look unpacked. Found on
+  German episodes that were fetched and never imported. A sample clip no
+  longer counts as content there; a "sample" at least as big as the archives
+  together still does.
 
 - **SABnzbd `addurl` handed the provider links it could never reach.** The NZB
   link went straight to TorBox, so its cloud servers were asked to fetch it —

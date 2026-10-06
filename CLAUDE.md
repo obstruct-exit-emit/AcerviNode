@@ -197,6 +197,14 @@ and it ends Failed so Sonarr blocklists it. Do not extend it to torrents — a
 RAR-only torrent is a legitimate release — and do not loosen what counts as
 content: any file that is not plainly an archive or a recovery/metadata file,
 images included, means "fetch it", because the alternative blocklists a release.
+The one exception is a release's sample clip (`isVideoFile && namedLikeSample`),
+and only while it is smaller than the archives together: it travels with the
+post, and counting it as content let packed jobs through.
+
+**Sample skipping never drops a download's main file.** `dropSamples` needs all
+three of: a video, "sample" as a whole word or a sample folder, and a larger
+non-sample video in the same download. That last condition is what makes it
+safe on by default; do not relax it to name alone.
 
 **The interval channels are wake-up signals and carry no value.** That is what
 lets every send be non-blocking without losing a change: the reader takes the

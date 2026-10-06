@@ -258,6 +258,8 @@ type GeneralInfo struct {
 	MaxFetchFileSizeBytes int64  `json:"max_fetch_file_size_bytes"`
 	IncludeFileRegex      string `json:"include_file_regex"`
 	ExcludeFileRegex      string `json:"exclude_file_regex"`
+	// SkipSampleFiles mirrors config.Config's own field.
+	SkipSampleFiles bool `json:"skip_sample_files"`
 	// StuckDownloadTimeoutMinutes/CleanupErrorAfterDays mirror
 	// config.Config's own watchdog/error-cleanup fields exactly — see
 	// config.Config.StuckDownloadTimeoutMinutes's own doc comment.
@@ -302,6 +304,7 @@ type GeneralUpdate struct {
 	MaxFetchFileSizeBytes         int64  `json:"max_fetch_file_size_bytes"`
 	IncludeFileRegex              string `json:"include_file_regex"`
 	ExcludeFileRegex              string `json:"exclude_file_regex"`
+	SkipSampleFiles               bool   `json:"skip_sample_files"`
 	StuckDownloadTimeoutMinutes   int    `json:"stuck_download_timeout_minutes"`
 	CleanupErrorAfterDays         int    `json:"cleanup_error_after_days"`
 	ManagedAddDeleteAfterFetch    bool   `json:"managed_add_delete_after_fetch"`

@@ -39,6 +39,33 @@ func TestPackedOnly(t *testing.T) {
 		{"empty", filesNamed(), false},
 		{"an mp3 is not a three-digit split part", filesNamed("track.mp3"), false},
 	}
+	// A release's sample clip travels with the post and is not the content.
+	// Found live: German episodes TorBox left packed came back as RARs plus
+	// Sample/x.sample.mkv, and the clip alone made them look unpacked, so
+	// they were fetched instead of failed.
+	sampleCases := []struct {
+		name  string
+		files []debrid.DownloadFile
+		want  bool
+	}{
+		{"rars, par2 and a sample clip are still packed",
+			[]debrid.DownloadFile{sized("x/x.part01.rar", 500), sized("x/x.part02.rar", 500), sized("x/x.par2", 1), sized("x/Sample/x.sample.mkv", 40)}, true},
+		{"a sample beside the real, unpacked video is not packed",
+			[]debrid.DownloadFile{sized("x/x.mkv", 1000), sized("x/x.rar", 900), sized("x/Sample/x.sample.mkv", 40)}, false},
+		{"a 'sample' at least as big as the archives is content, conservatively",
+			[]debrid.DownloadFile{sized("x/x.rar", 100), sized("x/x.sample.mkv", 150)}, false},
+		{"a sample and recovery files without an archive are not packed",
+			[]debrid.DownloadFile{sized("x/x.par2", 1), sized("x/Sample/x.sample.mkv", 40)}, false},
+		{"a song called Sample is still content",
+			[]debrid.DownloadFile{sized("x/x.rar", 500), sized("x/Sample.flac", 40)}, false},
+	}
+	for _, tc := range sampleCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := packedOnly(tc.files); got != tc.want {
+				t.Errorf("packedOnly(%v) = %v, want %v", paths(tc.files), got, tc.want)
+			}
+		})
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, got := packedOnly(tc.files); got != tc.want {

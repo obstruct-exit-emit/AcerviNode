@@ -121,6 +121,7 @@ export default function SetupWizard({ onDone, onAlreadySetUp }: { onDone: () => 
           max_fetch_file_size_bytes: g.max_fetch_file_size_bytes,
           include_file_regex: g.include_file_regex,
           exclude_file_regex: g.exclude_file_regex,
+          skip_sample_files: g.skip_sample_files,
           stuck_download_timeout_minutes: g.stuck_download_timeout_minutes,
           cleanup_error_after_days: g.cleanup_error_after_days,
         managed_add_delete_after_fetch: g.managed_add_delete_after_fetch,

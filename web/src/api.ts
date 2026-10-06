@@ -413,6 +413,9 @@ export interface GeneralSettings {
   max_fetch_file_size_bytes: number
   include_file_regex: string
   exclude_file_regex: string
+  // skip_sample_files leaves a release's sample clips out of the fetch --
+  // on by default; it never drops a download's main file.
+  skip_sample_files: boolean
   // stuck_download_timeout_minutes auto-errors a download that's sat
   // queued/downloading with no genuine change reported for this long — 0
   // (the default) disables the watchdog entirely.
@@ -465,6 +468,7 @@ export interface GeneralUpdateInput {
   max_fetch_file_size_bytes: number
   include_file_regex: string
   exclude_file_regex: string
+  skip_sample_files: boolean
   stuck_download_timeout_minutes: number
   cleanup_error_after_days: number
   // Defaults for a hand-added Managed download's lifecycle. Never applied

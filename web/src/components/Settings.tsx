@@ -286,6 +286,7 @@ export function Settings({ apiKey }: Props) {
         max_fetch_file_size_bytes: generalSettings.max_fetch_file_size_bytes,
         include_file_regex: generalSettings.include_file_regex,
         exclude_file_regex: generalSettings.exclude_file_regex,
+        skip_sample_files: generalSettings.skip_sample_files,
         stuck_download_timeout_minutes: generalSettings.stuck_download_timeout_minutes,
         cleanup_error_after_days: generalSettings.cleanup_error_after_days,
         managed_add_delete_after_fetch: generalSettings.managed_add_delete_after_fetch,
@@ -1486,6 +1487,21 @@ export function Settings({ apiKey }: Props) {
                     onChange={(e) => setForm({ ...form, exclude_file_regex: e.target.value })}
                   />
                 </label>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={form.skip_sample_files}
+                    onChange={(e) => setForm({ ...form, skip_sample_files: e.target.checked })}
+                  />
+                  Skip sample files
+                </label>
+                <p className="settings-help">
+                  Leaves out a release&rsquo;s sample clip: a video named &ldquo;sample&rdquo; as a whole
+                  word, or in a Sample folder, when the same download has a larger video that isn&rsquo;t
+                  one. The main file is never skipped &mdash; not even a film actually called
+                  &ldquo;Sample&rdquo; &mdash; and only videos count, so music and books are untouched.
+                  Sonarr and Radarr ignore samples on import anyway; this just saves fetching them.
+                </p>
                 <button type="submit" disabled={generalStatus.kind === 'saving'}>
                   {generalStatus.kind === 'saving' ? 'Saving…' : 'Save'}
                 </button>

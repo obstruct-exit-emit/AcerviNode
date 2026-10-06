@@ -198,6 +198,12 @@ type Config struct {
 	// path matches it when fetching a download's files to local disk — e.g.
 	// unwanted subtitle languages. See IncludeFileRegex.
 	ExcludeFileRegex string `yaml:"exclude_file_regex"`
+	// SkipSampleFiles has internal/importer leave a release's sample clips
+	// out when fetching a download's files to local disk -- see
+	// importer.dropSamples for what counts as one. On by default: it never
+	// drops a download's main file, and Sonarr and Radarr ignore samples on
+	// import anyway, so fetching them only costs bandwidth and disk.
+	SkipSampleFiles bool `yaml:"skip_sample_files"`
 
 	// StuckDownloadTimeoutMinutes, if > 0, has internal/importer mark a
 	// download StateError once it's sat in StateQueued/StateDownloading
@@ -366,6 +372,7 @@ func defaults() *Config {
 		// wrong here means treating someone's secret as a download.
 		Base32Infohashes:  false,
 		DecodeBase64Links: true,
+		SkipSampleFiles:   true,
 	}
 }
 
@@ -484,6 +491,11 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("ACERVINODE_EXCLUDE_FILE_REGEX"); v != "" {
 		cfg.ExcludeFileRegex = v
+	}
+	if v := os.Getenv("ACERVINODE_SKIP_SAMPLE_FILES"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.SkipSampleFiles = b
+		}
 	}
 	if v := os.Getenv("ACERVINODE_STUCK_DOWNLOAD_TIMEOUT_MINUTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

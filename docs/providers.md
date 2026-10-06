@@ -1605,9 +1605,36 @@ but RARs is a legitimate release that people extract with unpackerr, and TorBox
 never unpacks torrents. And it is **conservative**, because the outcome
 blocklists a release: any file that is not plainly an archive or a
 recovery/metadata file — images included — counts as content, and a list with
-no archive in it is not "packed". Re-submitting the NZB once before failing,
+no archive in it is not "packed". The one exception is a release's sample clip
+(see [Sample files](#sample-files)), which travels with the post and is not its
+content: German episodes TorBox left packed came back as RARs plus
+`Sample/x.sample.mkv`, and the clip alone made them look unpacked, so they were
+fetched instead of failed. A "sample" at least as big as every archive together
+still counts as content. Re-submitting the NZB once before failing,
 which worked when tried by hand, is not done; AcerviNode does not keep the NZB
 for a Sonarr/Radarr add, though TorBox lists it among the job's files.
+
+### Sample files
+
+`skip_sample_files` (on by default) has `Importer.filterFiles` drop a release's
+sample clips before anything is fetched, judged against the whole download
+before the operator's own filters run. `dropSamples` treats a file as a sample
+only when all three hold:
+
+- it is a video (`.mkv`, `.mp4`, `.avi`, `.m4v`, `.ts` and the like);
+- "sample" is a whole word in its name (`Movie.sample.mkv`, `sample-movie.mp4`),
+  or it sits in a folder named `Sample` or `samples`;
+- the same download has a larger video that is not itself one.
+
+The last is what makes it safe to have on by default. Skipping a real file is far
+worse than fetching a sample, and it guarantees the main file is never dropped:
+a film actually called *Sample*, a download that is nothing but a sample, and a
+"sample" larger than everything beside it are all kept. Whole words only, so
+*Sampler* and *Resample* are not samples; and only videos, so an album track or
+audiobook chapter called "Sample" is untouched.
+
+The same recognition feeds the packed-usenet check — see
+[When TorBox does not unpack](#when-torbox-does-not-unpack).
 
 ### Web Downloads
 

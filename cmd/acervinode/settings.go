@@ -101,6 +101,7 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	maxFetchFileSizeBytes := s.cfg.MaxFetchFileSizeBytes
 	includeFileRegex := compileOptionalRegex(s.cfg.IncludeFileRegex)
 	excludeFileRegex := compileOptionalRegex(s.cfg.ExcludeFileRegex)
+	skipSamples := s.cfg.SkipSampleFiles
 	stuckDownloadTimeout := time.Duration(s.cfg.StuckDownloadTimeoutMinutes) * time.Minute
 	cleanupErrorAfterDays := s.cfg.CleanupErrorAfterDays
 	s.mu.Unlock()
@@ -111,6 +112,7 @@ func (s *liveSettings) SetImporter(imp *importer.Importer) {
 	imp.SetDirMode(dirMode)
 	imp.SetFastPollInterval(fastPollInterval)
 	imp.SetFileFilters(minFetchFileSizeBytes, maxFetchFileSizeBytes, includeFileRegex, excludeFileRegex)
+	imp.SetSkipSamples(skipSamples)
 	imp.SetStuckDownloadTimeout(stuckDownloadTimeout)
 	imp.SetCleanupErrorAfterDays(cleanupErrorAfterDays)
 }
@@ -411,6 +413,7 @@ func (s *liveSettings) General() api.GeneralInfo {
 		MaxFetchFileSizeBytes:         s.cfg.MaxFetchFileSizeBytes,
 		IncludeFileRegex:              s.cfg.IncludeFileRegex,
 		ExcludeFileRegex:              s.cfg.ExcludeFileRegex,
+		SkipSampleFiles:               s.cfg.SkipSampleFiles,
 		StuckDownloadTimeoutMinutes:   s.cfg.StuckDownloadTimeoutMinutes,
 		CleanupErrorAfterDays:         s.cfg.CleanupErrorAfterDays,
 		ManagedAddDeleteAfterFetch:    s.cfg.ManagedAddDeleteAfterFetch,
@@ -477,6 +480,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 	candidate.MaxFetchFileSizeBytes = update.MaxFetchFileSizeBytes
 	candidate.IncludeFileRegex = update.IncludeFileRegex
 	candidate.ExcludeFileRegex = update.ExcludeFileRegex
+	candidate.SkipSampleFiles = update.SkipSampleFiles
 	candidate.StuckDownloadTimeoutMinutes = update.StuckDownloadTimeoutMinutes
 	candidate.CleanupErrorAfterDays = update.CleanupErrorAfterDays
 	candidate.ManagedAddDeleteAfterFetch = update.ManagedAddDeleteAfterFetch
@@ -516,6 +520,7 @@ func (s *liveSettings) UpdateGeneral(_ context.Context, update api.GeneralUpdate
 		}
 		s.imp.SetFastPollInterval(time.Duration(candidate.FastPollIntervalSeconds) * time.Second)
 		s.imp.SetFileFilters(candidate.MinFetchFileSizeBytes, candidate.MaxFetchFileSizeBytes, compileOptionalRegex(candidate.IncludeFileRegex), compileOptionalRegex(candidate.ExcludeFileRegex))
+		s.imp.SetSkipSamples(candidate.SkipSampleFiles)
 		s.imp.SetStuckDownloadTimeout(time.Duration(candidate.StuckDownloadTimeoutMinutes) * time.Minute)
 		s.imp.SetCleanupErrorAfterDays(candidate.CleanupErrorAfterDays)
 	}

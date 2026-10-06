@@ -121,6 +121,9 @@ type Importer struct {
 	maxFetchFileSizeBytes int64
 	includeFileRegex      *regexp.Regexp
 	excludeFileRegex      *regexp.Regexp
+	// skipSamples drops a release's sample clips before fetching -- see
+	// dropSamples. On by default through config; off here until set.
+	skipSamples bool
 	// stuckDownloadTimeout backs the stuck-download watchdog — see
 	// checkStuckDownloads. 0 (the default) disables it.
 	stuckDownloadTimeout time.Duration
@@ -598,6 +601,23 @@ func (im *Importer) SetFileFilters(minBytes, maxBytes int64, includeRegex, exclu
 	im.includeFileRegex = includeRegex
 	im.excludeFileRegex = excludeRegex
 	im.mu.Unlock()
+}
+
+// SetSkipSamples switches sample skipping (see dropSamples) live -- the next
+// download processed uses it.
+func (im *Importer) SetSkipSamples(skip bool) {
+	im.mu.Lock()
+	im.skipSamples = skip
+	im.mu.Unlock()
+}
+
+// SkipSamples reports whether sample skipping is on, for callers outside this
+// package confirming a SetSkipSamples call took (see cmd/acervinode's
+// settings tests).
+func (im *Importer) SkipSamples() bool {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.skipSamples
 }
 
 func (im *Importer) getFileFilters() (minBytes, maxBytes int64, includeRegex, excludeRegex *regexp.Regexp) {
@@ -1586,6 +1606,11 @@ func (im *Importer) CancelFetch(id string) {
 // Returns files unchanged (not a copy) when nothing is configured, the
 // common case, so this costs nothing when unused.
 func (im *Importer) filterFiles(files []debrid.DownloadFile) []debrid.DownloadFile {
+	// Samples first, judged against the whole download: whether a file is one
+	// depends on the videos beside it, which the filters below may remove.
+	if im.SkipSamples() {
+		files = dropSamples(files)
+	}
 	minBytes, maxBytes, include, exclude := im.getFileFilters()
 	if minBytes <= 0 && maxBytes <= 0 && include == nil && exclude == nil {
 		return files
@@ -2303,18 +2328,33 @@ func bodySnippet(r io.Reader) string {
 func packedOnly(files []debrid.DownloadFile) (summary string, packed bool) {
 	counts := map[string]int{}
 	archives := 0
+	var archiveBytes, largestSample int64
 	for _, f := range files {
 		ext := strings.ToLower(filepath.Ext(f.Path))
 		switch {
 		case packedArchiveExt.MatchString(ext):
 			archives++
+			archiveBytes += f.SizeBytes
 		case packedSupportExt.MatchString(ext):
+		case isVideoFile(f.Path) && namedLikeSample(f.Path):
+			// A release's sample clip travels with the post and is not the
+			// content -- see dropSamples for what counts as one. Found live:
+			// German episodes TorBox left packed came back as RARs plus
+			// Sample/x.sample.mkv, and the clip alone made them look unpacked.
+			largestSample = max(largestSample, f.SizeBytes)
+			counts["sample"]++
+			continue
 		default:
 			return "", false
 		}
 		counts[ext]++
 	}
 	if archives == 0 {
+		return "", false
+	}
+	// Conservative: a "sample" at least as big as every archive together is
+	// not a clip beside the content, so it counts as the content.
+	if largestSample > 0 && largestSample >= archiveBytes {
 		return "", false
 	}
 	exts := make([]string, 0, len(counts))
