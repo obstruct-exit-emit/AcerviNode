@@ -139,6 +139,159 @@ everything else in it intact — which before this would have been deleted outri
   `config.Sorters` cannot throw on a missing key — `SabnzbdConfig`'s constructor
   initializes it. And the `content_path != save_path` requirement is satisfied.
 
+### Faster fetching — plan first, not started
+
+Requested directly ("can we increase our managed fetch speed?"), then
+deliberately parked as a plan: "I want us to think and plan on this one as we
+can easily break downloading instead of speed it up". Every Managed download
+goes through this path, so the plan below is ordered around **not breaking it**
+before making it faster.
+
+**The full design — how fetching works today, the Stage 1–3 designs, the risk
+register, the test plan and the Stage 0 measurement protocol — is in
+[docs/design/faster-fetching.md](docs/design/faster-fetching.md).** The summary
+below is kept short on purpose.
+
+#### What we know (measured, not assumed)
+
+Fetch speed on the production instance, from real downloads during the burn-in:
+
+| Download | Files | Size | Fetch time | Speed |
+|---|---|---|---|---|
+| Night of the Living Dead (usenet) | 1 | 19.3 GB | 244 s | ~79 MB/s |
+| Amphibia S01E37 (usenet) | 1 | 321 MB | ~5 s | ~64 MB/s |
+| Pink Floyd, The Wall (torrent, FLAC) | 26 | 434 MB | ~56 s | ~7.7 MB/s |
+| Avantasia 2CD (torrent, MP3) | ~24 | 261 MB | ~40 s | ~6.5 MB/s |
+
+**Many-file downloads run about 10× slower than single files.** The cause is in
+the code, not the line: `processReserved` fetches a download's files strictly one
+after another, and each costs a TorBox `requestdl` call plus a new connection
+starting from TCP slow-start. For a 17 MB FLAC track that fixed cost is most of
+the file's time.
+
+A probe against a real TorBox CDN link (a 5.5 GB file, 12 s per run, from the
+dev PC on the same line while production was busy fetching — so the absolute
+numbers are depressed; the comparison is what counts):
+
+| Run | 1 connection (today) | 4 range requests |
+|---|---|---|
+| 1 | 45.3 MB/s | 53.5 MB/s |
+| 2 | **1.4 MB/s** | 29.2 MB/s |
+| 3 | 15.2 MB/s | 31.9 MB/s |
+
+- The CDN serves **HTTP/1.1 only** and answers ranges with `206`. So the Go
+  HTTP/2 stream-window cap (4 MB ÷ RTT ≈ 80 MB/s at the ~40–100 ms measured RTT)
+  that looked like it explained the 79 MB/s ceiling **does not apply** — ruled
+  out by measurement. Forcing HTTP/1.1 or enlarging the HTTP/2 window changed
+  nothing (30.0 and 29.2 MB/s).
+- A single connection is **erratic** (1.4–45 MB/s); four were steady (29–54).
+  Splitting a big file mostly buys consistency — one slow CDN connection can no
+  longer stall the whole file — and possibly some peak.
+- The 32 KB `io.Copy` buffer is not the limit at these rates (reasoning, not
+  measured — the CPU is not the bottleneck). Not worth changing on its own.
+
+#### The two changes
+
+1. **Several files of one download at once.** The big, certain win for albums,
+   season packs and audiobooks: overlap the per-file link request and connection
+   ramp-up. Expected roughly 3–4× on many-file downloads (estimate, to be measured).
+2. **One big file over several range requests.** Steadier single-file speed,
+   maybe more peak. Only for files large enough to matter, and only when the
+   server proves it honours ranges.
+
+#### What can break, and the guard for each
+
+- **Wrong bytes on disk.** A server that ignores `Range` answers `200` with the
+  whole file, so N segments would each write the whole file at their offset.
+  Guard: accept a segment only on `206` with a `Content-Range` that matches what
+  was asked; anything else falls back to one plain stream. Segments are written
+  with `WriteAt` into one preallocated `.part`, and the total is checked
+  against `expectedTransferSize` before the rename, as today.
+- **The `.part` + rename guarantee.** A file must still only appear at its real
+  path once whole. Same rule per file, unchanged; with several files in flight,
+  each keeps its own `.part`.
+- **"Already fetched" on retry.** `fetchFile` skips a file whose size already
+  matches. A preallocated `.part` must never be mistaken for a finished file —
+  it is never at the real path, so this holds, but it needs a test that a
+  retried download with leftover segment `.part`s refetches correctly.
+- **Cancel and delete.** Every delete calls `CancelFetch`, which must now stop
+  every goroutine of the download — all files, all segments — and still report
+  `errFetchCancelled`, not a failure. The deadlocked-cancel and orphan-file
+  tests already exist for one stream; they need a many-stream version.
+- **One failure, one `handleFailure`.** Today a failed file fails the attempt
+  once. With N goroutines, the first error must cancel its siblings and the
+  attempt must fail exactly once with that first error — not N times, not with a
+  sibling's "context canceled".
+- **Idle/stall timeout.** Per connection, as now. A stalled segment must not be
+  masked by its busy siblings, and must not cancel a download whose other
+  connections are fine for longer than one idle window.
+- **Per-file retry stays narrow.** `openFile` retries only refused requests;
+  that rule applies per segment. Link-resolution errors — a 429 included — still
+  go to the download-level backoff.
+- **TorBox rate limit — the biggest unknown.** N files at once is N `requestdl`
+  calls in a burst. A 429 maps to `ErrRateLimited`, and the backoff **blanks
+  polling for the whole kind**, which presents as everything freezing. Faster
+  fetching that trips that is a regression. Must be measured before choosing a
+  default (see Stage 0).
+- **The connection budget.** `max_concurrent_downloads` (3 on production)
+  counts downloads. With files × segments per download, the real connection
+  count multiplies — 3 × 4 × 4 = 48. There must be one global cap on
+  connections, not two independent multipliers.
+- **Progress.** Must stay monotonic and reach exactly 100% with bytes arriving
+  out of order from several places. `SetFetchProgress` gets an atomic sum;
+  `fetch_integrity_test` already pins the boundary cases for one stream.
+- **The disk.** Many concurrent writers on a spinning disk can be slower than
+  one sequential writer. Measure on `/storage_1`/`/storage_2` before defaulting
+  up.
+- **The shared line.** More connections take more of the line from everything
+  else. Answered by the speed limit in Stage 3, not by holding defaults down.
+- **AllDebrid.** Never measured for any of this. Stays at today's behaviour
+  until it is.
+
+#### Staged plan — each stage ships dark and is flipped only after live proof
+
+0. **Measure on the Proxmox host itself, while idle**, with the throwaway probe
+   (single vs N ranges, and N files at once on a real album):
+   - Does one TorBox link serve concurrent ranges, and is there a per-IP or
+     per-link connection cap?
+   - How many `requestdl` calls in a burst before a 429? Watched through
+     `GET /api/v1/status` error counts, not guessed.
+   - What do the two storage disks sustain with 1, 4 and 8 writers?
+   - What is the line actually capable of?
+
+   Defaults are chosen from this data, not from the dev PC.
+1. **Files in parallel.** New setting, `fetch_files_concurrently`, **default 1 =
+   exactly today's code path**, kept as the `n == 1` branch rather than rewritten.
+   Test-first, mutation-checked, race detector. Live: fetch the same cached
+   album at 1 and at the candidate value, compare speed and the bytes (hash
+   every file), check zero 429s and that Sonarr/CantiNode still import. Only
+   then raise the default.
+2. **Segmented big files.** `fetch_connections_per_file`, **default 1**, and
+   only for files above a size threshold (e.g. 256 MB) once the server has
+   proved `206` + `Content-Range`. Same verification, plus a deliberate test
+   against a server that ignores `Range`, one that drops a segment mid-way, and
+   one that returns the wrong range.
+3. **One global connection cap** across downloads × files × segments, and a
+   **speed limit** setting (`fetch_speed_limit_mbps`, 0 = unlimited, the
+   default). Tuned for the fastest the CDN, TorBox and the disk allow; the
+   operator caps it if the line is shared ("if we optimize to be as fast as we
+   can. we can make a throttle in settings"). A throttled connection is slow on
+   purpose, so time spent waiting on the limit must never count toward the
+   stall timeout.
+
+**Rollback at every stage is a setting**, not a revert: both new values at 1
+run today's code exactly.
+
+#### Done when
+
+- Many-file downloads measurably faster on production (target ≥3×), single files
+  no slower.
+- Every byte identical to the single-stream fetch on the verification downloads.
+- Zero new 429s and zero new failed imports over a few days of real traffic.
+- The new invariants written into `CLAUDE.md`: what the connection budget is,
+  that a segment is only accepted on a matching `206`, and that a download's
+  attempt fails exactly once.
+
 ### Queued fixes
 
 Two findings from the second code review (the fetch path, the TorBox client and
@@ -478,7 +631,9 @@ the day of it. Requested directly: "add ... to road map to fix".
 
   - **Parallel/chunked HTTP.** Range requests across several connections with
     resume. The natural evolution of what exists, and the one most likely to
-    make a visible difference on a fast line.
+    make a visible difference on a fast line. Now planned in detail, with
+    measurements, under
+    [Faster fetching](#faster-fetching--plan-first-not-started).
   - **Symlink.** No download at all — shares its entire design with the
     serving item above, and should be built with it rather than separately.
   - **aria2c handoff.** Hand the URL to an aria2c daemon over RPC. Small
