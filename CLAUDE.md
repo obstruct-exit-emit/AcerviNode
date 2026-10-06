@@ -177,6 +177,16 @@ the link stays: it keeps working whatever worked before. The link carries the
 indexer's API key — `fetchNZB` strips `*url.Error` and reports the host only.
 Its tests are offline by construction: `TestMain` allows loopback only.
 
+**A refresh is ordered by the provider's record time, not ours, and never
+moves `provider_completed` backwards.** TorBox's bulk listing can answer a
+later request with an older record, so `fetchedAt` alone let stale answers win
+and knocked rows mid-copy back to "downloading 0%". `refreshGuardAllows` orders
+by `ProviderUpdatedAt` when both sides have one (equal or missing falls back to
+`fetchedAt`), keeps the last record time across an undated update, and
+`RefreshFromProvider` never moves `provider_completed` to `downloading`/`queued`
+— the safety net for a provider with no record time. Do not "simplify" either
+back to fetch order: it is the bug.
+
 **The qBittorrent shim never reports `1.0` before the files are local.**
 `qbtProgress` reports `0` for a `provider_completed` row with no fetch in
 flight, not the provider's `1.0`: the state there is `downloading`, and a client

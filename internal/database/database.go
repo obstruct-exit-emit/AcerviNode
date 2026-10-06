@@ -85,7 +85,11 @@ type refreshCacheEntry struct {
 	// when it was written) — the ordering guard compares this, never live
 	// itself.
 	fetchedAt time.Time
-	live      LiveStatus
+	// providerUpdatedAt is the provider's own record time for the update
+	// that was applied (debrid.DownloadStatus.ProviderUpdatedAt), when it had
+	// one -- see refreshGuardAllows.
+	providerUpdatedAt *time.Time
+	live              LiveStatus
 }
 
 // LiveStatus is a snapshot of a download's fast-moving, provider-reported

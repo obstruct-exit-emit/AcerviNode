@@ -1267,7 +1267,7 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		// to write stale. Recording still happens even for a row that turns
 		// out to need no persisted write at all (e.g. state/progress
 		// genuinely unchanged) — see refreshGuardAllows's own doc comment.
-		if !db.refreshGuardAllows(d.ID, fetchedAt, LiveStatus{
+		if !db.refreshGuardAllows(d.ID, fetchedAt, st.ProviderUpdatedAt, LiveStatus{
 			ETASeconds:         st.ETASeconds,
 			Seeders:            st.Seeders,
 			Leechers:           st.Leechers,
@@ -1357,6 +1357,17 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 		}
 
 		newState := LocalStateFromProvider(st.State)
+		// Once the provider has said "done", nothing it says afterwards moves the
+		// row back to downloading or queued. The row is waiting for, or already
+		// in, its local copy, and the provider finishing a download a second time
+		// is not a thing; an answer saying otherwise is a stale one. Found on
+		// production: TorBox's bulk listing answered a later request with an older
+		// record and knocked a row being copied back to "downloading 0%". The
+		// ordering guard above catches that where the provider dates its records;
+		// this holds for one that does not. A real failure still lands.
+		if d.State == StateProviderCompleted && (newState == StateDownloading || newState == StateQueued) {
+			continue
+		}
 		// errorMessage carries the provider's own raw state string (e.g.
 		// TorBox's "stalled (no seeds)") whenever the provider itself is
 		// reporting a failure — distinct from an error internal/importer's
@@ -1404,16 +1415,40 @@ func (db *DB) RefreshFromProvider(ctx context.Context, rows []*Download, statuse
 // single-connection serialization (see Open's SetMaxOpenConns(1)) only
 // protects the SQL writes themselves from corrupting each other, not this
 // in-memory ordering decision.
-func (db *DB) refreshGuardAllows(id string, fetchedAt time.Time, live LiveStatus) bool {
+//
+// When both this update and the one already applied carry the provider's own
+// record time (providerUpdatedAt), that decides instead: the newer record wins
+// whichever request was made first. Asking later does not mean hearing newer.
+// Found on production, polling TorBox beside AcerviNode: its bulk listing
+// answered one request with a download completed (updated_at 02:52:19) and a
+// later one with the same download still at metaDL 0% (updated_at 02:48:19).
+// Ordered by fetchedAt alone, the later, older answer won and knocked a row
+// that was mid-copy back to "downloading". Equal record times say nothing
+// about which is newer, so they fall back to fetchedAt, as does any update
+// without one.
+func (db *DB) refreshGuardAllows(id string, fetchedAt time.Time, providerUpdatedAt *time.Time, live LiveStatus) bool {
 	db.refreshMu.Lock()
 	defer db.refreshMu.Unlock()
 	if db.refreshState == nil {
 		db.refreshState = map[string]refreshCacheEntry{}
 	}
-	if existing, ok := db.refreshState[id]; ok && fetchedAt.Before(existing.fetchedAt) {
-		return false
+	existing, ok := db.refreshState[id]
+	if ok {
+		switch {
+		case providerUpdatedAt != nil && existing.providerUpdatedAt != nil && !providerUpdatedAt.Equal(*existing.providerUpdatedAt):
+			if providerUpdatedAt.Before(*existing.providerUpdatedAt) {
+				return false
+			}
+		case fetchedAt.Before(existing.fetchedAt):
+			return false
+		}
 	}
-	db.refreshState[id] = refreshCacheEntry{fetchedAt: fetchedAt, live: live}
+	// An update without a record time keeps the last one known, so a later
+	// dated-but-stale answer is still caught.
+	if providerUpdatedAt == nil && ok {
+		providerUpdatedAt = existing.providerUpdatedAt
+	}
+	db.refreshState[id] = refreshCacheEntry{fetchedAt: fetchedAt, providerUpdatedAt: providerUpdatedAt, live: live}
 	return true
 }
 

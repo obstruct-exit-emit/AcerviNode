@@ -563,6 +563,43 @@ restart) recording the `fetchedAt` of the most recently *applied* update.
 A write whose `fetchedAt` is older than what's already recorded is silently
 skipped — the row keeps its fresher value instead of regressing.
 
+#### Asking later is not hearing newer: TorBox's own record time
+
+`fetchedAt` assumes the provider answers with its current state. TorBox does
+not always. Found on production (2026-10-06) by polling TorBox's API beside
+AcerviNode while CantiNode grabbed uncached albums:
+
+- **The bulk listing is inconsistent from call to call**, even with
+  `bypass_cache=true`. One call reported *Always Ascending* `completed`
+  (`updated_at` 02:52:19); calls made after it still reported it `metaDL` at 0%
+  with the old `updated_at` 02:48:19, for close to two minutes, and never showed
+  any progress in between.
+- **The per-download lookup (`mylist?id=`) returned 404** for both new
+  torrents while the bulk listing showed them, so the fast poll — which skips
+  a lookup miss silently — could not help. It worked for an older torrent.
+  Unexplained; noted, not worked around.
+
+Ordered by `fetchedAt` alone, a later-asked, older answer won: a row that was
+mid-copy went from `provider_completed` back to `downloading` at 0%, and a dead
+torrent from `error` back to `downloading`. Earlier the same night two albums
+sat at 0% for about four minutes after TorBox had them ready, then flipped in the
+same second — the poll that finally got a consistent answer.
+
+Two changes, each tested on its own:
+
+- **Records are ordered by TorBox's own `updated_at`** when both the incoming
+  update and the one already applied carry it
+  (`debrid.DownloadStatus.ProviderUpdatedAt`, mapped for torrents, usenet and
+  web downloads): the newer record wins whichever request was made first.
+  Equal record times say nothing about which is newer and fall back to
+  `fetchedAt`, as does any update without one (AllDebrid). An undated update
+  keeps the last record time known, so a stale dated answer after it is still
+  caught.
+- **`provider_completed` never moves back to `downloading` or `queued`** on a
+  refresh. Once the provider has said "done", the row is waiting for or in its
+  local copy, and an answer saying otherwise is a stale one. This holds for a
+  provider with no record time at all. A real failure (`error`) still lands.
+
 ### WAL mode, and why every write's speed matters here specifically
 
 `database.DB`'s single connection (`SetMaxOpenConns(1)`, see above) means

@@ -1419,6 +1419,15 @@ func TestRefreshFromProvider_MassVanish_FoundRowsStillUpdateNormally(t *testing.
 	// massVanishFraction, so this pass is still "suspicious" overall.
 	downloads := seedManualDownloads(t, db, 4)
 	found := downloads[0]
+	// Seeded provider_completed like the rest, and a refresh may no longer move
+	// a row back from there to downloading (see
+	// TestRefreshFromProvider_NeverRegressesProviderCompleted). Start the found
+	// row as downloading so the update this test needs is a forward one -- what
+	// it proves is the circuit breaker, not the state change.
+	if err := db.UpdateDownloadStatus(ctx, found.ID, StateDownloading, 0.25, found.SizeBytes, nil, ""); err != nil {
+		t.Fatalf("UpdateDownloadStatus() error = %v", err)
+	}
+	found.State, found.Progress = StateDownloading, 0.25
 	statuses := []debrid.DownloadStatus{
 		{ID: debrid.ProviderDownloadID(found.ProviderDownloadID), State: debrid.StateDownloading, Progress: 0.75},
 	}

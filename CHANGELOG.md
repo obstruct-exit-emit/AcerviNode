@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A finished download could be knocked back to "downloading 0%", and
+  sit there for minutes.** TorBox's bulk listing answers some requests with
+  an older record than an earlier request got — seen on production with
+  `updated_at` 02:48:19 (`metaDL`, 0%) arriving after 02:52:19 (`completed`).
+  The refresh guard ordered updates by when AcerviNode asked, so the later,
+  older answer won: a row mid-copy went from `provider_completed` back to
+  `downloading`, and two albums sat at 0% for about four minutes after TorBox
+  had them ready. Updates are now ordered by TorBox's own `updated_at` when both
+  sides carry it, and a refresh never moves `provider_completed` back to
+  `downloading`/`queued`. A real failure still lands.
+
 - **A packed usenet download with a sample clip was fetched instead of
   failed.** The check for a usenet job TorBox never unpacked counted every
   file that was not an archive or a recovery file as content, so a sample

@@ -137,6 +137,9 @@ type Torrent struct {
 	// long before the add: confirmed live against a torrent cached a month
 	// earlier by someone else's download. Null when not cached.
 	CachedAt *time.Time `json:"cached_at"`
+	// UpdatedAt is when TorBox last changed this record -- how fresh this
+	// answer is. See debrid.DownloadStatus.ProviderUpdatedAt.
+	UpdatedAt *time.Time `json:"updated_at"`
 	// Seeds/Peers/DownloadSpeed are real, documented fields on TorBox's own
 	// SDK response schema (torbox-sdk-js's GetTorrentListOkResponseData)
 	// that weren't modeled here until the qBittorrent shim needed something
@@ -390,7 +393,10 @@ type UsenetDownload struct {
 	// CachedAt mirrors Torrent.CachedAt — TorBox's own cache timestamp for
 	// this content, not a fact about your download. Confirmed present on
 	// this endpoint live.
-	CachedAt         *time.Time   `json:"cached_at"`
+	CachedAt *time.Time `json:"cached_at"`
+	// UpdatedAt is when TorBox last changed this record -- how fresh this
+	// answer is. See debrid.DownloadStatus.ProviderUpdatedAt.
+	UpdatedAt        *time.Time   `json:"updated_at"`
 	ID               float64      `json:"id"`
 	Hash             string       `json:"hash"`
 	Name             string       `json:"name"`
@@ -615,7 +621,10 @@ type WebDownload struct {
 	// CachedAt mirrors Torrent.CachedAt — TorBox's own cache timestamp for
 	// this content, not a fact about your download. Confirmed present on
 	// this endpoint live.
-	CachedAt         *time.Time        `json:"cached_at"`
+	CachedAt *time.Time `json:"cached_at"`
+	// UpdatedAt is when TorBox last changed this record -- how fresh this
+	// answer is. See debrid.DownloadStatus.ProviderUpdatedAt.
+	UpdatedAt        *time.Time        `json:"updated_at"`
 	ID               float64           `json:"id"`
 	Hash             string            `json:"hash"`
 	Name             string            `json:"name"`

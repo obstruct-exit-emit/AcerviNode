@@ -105,6 +105,13 @@ type DownloadStatus struct {
 	// when *this* row was first seen as provider-complete. Those answer
 	// different questions and were being shown under one label.
 	ProviderCachedAt *time.Time
+	// ProviderUpdatedAt is when the provider last changed its own record of
+	// this download -- TorBox's updated_at. It says how fresh *this answer*
+	// is, which is not the same as when it was asked for: TorBox's bulk
+	// listing can answer a later request with an older record. See
+	// database.refreshGuardAllows, which orders updates by it when both
+	// sides have one. Nil when the provider reports nothing like it.
+	ProviderUpdatedAt *time.Time
 }
 
 // DownloadFile is one file within a download.
